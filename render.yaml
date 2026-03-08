@@ -23,6 +23,8 @@ services:
         sync: false
       - key: LADA_API_KEY
         sync: false
+      - key: OLLAMA_CLOUD_KEY
+        sync: false
       - key: LADA_AI_AGENT_ENABLED
         value: "1"
       - key: ENABLE_VOICE_INPUT
