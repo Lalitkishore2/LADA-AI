@@ -7,6 +7,8 @@
 python-dotenv>=1.0.0
 requests>=2.31.0
 aiohttp>=3.9.0
+psutil>=5.9.6                    # System info (required by JarvisCore)
+beautifulsoup4>=4.12.2           # HTML parsing
 
 # ============ AI BACKENDS ============
 google-genai>=1.0.0              # Google Gemini API (new SDK)
