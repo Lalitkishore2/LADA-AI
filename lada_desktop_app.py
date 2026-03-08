@@ -726,7 +726,7 @@ ACCENT_LIGHT = "rgba(124,58,237,0.15)"  # Light accent for hover states
 BLUE = "#3b82f6"       # Blue accent
 PURPLE = "#9b59b6"     # Purple accent (legacy)
 RED = "#ef4444"        # Error red
-BORDER = "#1e1e1e"     # Border color - very subtle (matches web --border)
+BORDER = "#252525"     # Border color - subtle separator
 BORDER_FOCUS = "#7c3aed"  # Focus ring color - purple accent
 
 # Typography
@@ -1349,6 +1349,8 @@ class Sidebar(QFrame):
     load_voice_chat = pyqtSignal(str)
     open_settings = pyqtSignal()  # Settings signal
     export_chat = pyqtSignal()    # Export signal
+    open_session = pyqtSignal()   # Session picker signal
+    open_cost = pyqtSignal()      # Cost dialog signal
     collapse_toggled = pyqtSignal(bool)
 
     def __init__(self):
@@ -1501,11 +1503,39 @@ class Sidebar(QFrame):
         self._settings_btn.clicked.connect(lambda: self.open_settings.emit())
         lay.addWidget(self._settings_btn)
 
+        # Session picker button
+        self._session_btn = QPushButton("  Session")
+        self._session_btn.setCursor(Qt.PointingHandCursor)
+        self._session_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_DIM};
+                border: none; border-radius: 8px;
+                padding: 9px 10px; font-size: 13px; text-align: left;
+            }}
+            QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; }}
+        """)
+        self._session_btn.clicked.connect(lambda: self.open_session.emit())
+        lay.addWidget(self._session_btn)
+
+        # Cost monitor button
+        self._cost_btn = QPushButton("  $0.00")
+        self._cost_btn.setCursor(Qt.PointingHandCursor)
+        self._cost_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_DIM};
+                border: none; border-radius: 8px;
+                padding: 9px 10px; font-size: 13px; text-align: left;
+            }}
+            QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; }}
+        """)
+        self._cost_btn.clicked.connect(lambda: self.open_cost.emit())
+        lay.addWidget(self._cost_btn)
+
         # ── Collapsible widgets (hidden when sidebar is collapsed) ──
         self._collapsible_widgets = [
             self._title_label, self._new_chat_btn, self.search_input,
             self.lst, self._voice_label, self.voice_lst,
-            self._export_btn, self._settings_btn,
+            self._export_btn, self._settings_btn, self._session_btn, self._cost_btn,
         ]
     
     def _filter_chats(self):
@@ -2239,17 +2269,16 @@ class InputBar(QFrame):
         fr.addStretch()
         lay.addLayout(fr)
 
-        # Model selector row (Perplexity-style, above input)
+        # Model selector (defined here, added to input row below)
         self.model_selector = QComboBox()
         self.model_selector.setMinimumWidth(140)
         self.model_selector.setMaximumWidth(200)
-        self.model_selector.setFixedHeight(26)
+        self.model_selector.setFixedHeight(30)
         self.model_selector.setStyleSheet(f"""
             QComboBox {{
                 background: transparent; color: {TEXT_DIM};
-                border: 1px solid transparent; border-radius: 13px;
-                padding: 2px 20px 2px 8px; font-size: 11px; font-weight: 500;
-                font-family: '{FONT_FAMILY}';
+                border: 1px solid transparent; border-radius: 15px;
+                padding: 2px 20px 2px 10px; font-size: 11px; font-weight: 500;
             }}
             QComboBox:hover {{ background: {BG_HOVER}; border-color: {BORDER}; color: {TEXT}; }}
             QComboBox::drop-down {{
@@ -2265,23 +2294,9 @@ class InputBar(QFrame):
                 background: {BG_SURFACE}; color: {TEXT};
                 border: 1px solid {BORDER}; border-radius: 8px;
                 selection-background-color: {BG_HOVER};
-                padding: 4px;
-                font-size: 11px;
-                font-family: '{FONT_FAMILY}';
+                padding: 4px; font-size: 11px;
             }}
         """)
-        model_row = QHBoxLayout()
-        model_row.setContentsMargins(0, 0, 0, 0)
-        model_row.addWidget(self.model_selector)
-        model_row.addStretch()
-        mc = QWidget()
-        mc.setMaximumWidth(860)
-        mc.setLayout(model_row)
-        mr = QHBoxLayout()
-        mr.addStretch()
-        mr.addWidget(mc)
-        mr.addStretch()
-        lay.addLayout(mr)
 
         # Input row
         box = QFrame()
@@ -2308,6 +2323,9 @@ class InputBar(QFrame):
         """)
         att.clicked.connect(self._attach)
         row.addWidget(att)
+
+        # Model selector (inside input row, after attach button)
+        row.addWidget(self.model_selector)
 
         # Quick actions button (slash commands)
         self.qa_btn = QPushButton("/")
@@ -2375,13 +2393,25 @@ class InputBar(QFrame):
         opts_row = QHBoxLayout()
         opts_row.addStretch()
 
-        # Web search toggle
-        self.web_search_cb = QCheckBox("Search web")
-        self.web_search_cb.setStyleSheet(f"""
-            QCheckBox {{ color: {TEXT_DIM}; font-size: 11px; }}
+        # Web search toggle (pill button, matching web app style)
+        self.web_search_btn = QPushButton("Search web")
+        self.web_search_btn.setCheckable(True)
+        self.web_search_btn.setFixedHeight(26)
+        self.web_search_btn.setCursor(Qt.PointingHandCursor)
+        self.web_search_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_DIM};
+                border: 1px solid {BORDER}; border-radius: 13px;
+                font-size: 11px; padding: 2px 14px;
+            }}
+            QPushButton:hover {{ border-color: {ACCENT}; color: {TEXT}; }}
+            QPushButton:checked {{
+                background: rgba(124, 58, 237, 0.15); color: {ACCENT};
+                border-color: {ACCENT};
+            }}
         """)
-        self.web_search_cb.setToolTip("Enable web search for more up-to-date answers")
-        opts_row.addWidget(self.web_search_cb)
+        self.web_search_btn.setToolTip("Enable web search for real-time answers")
+        opts_row.addWidget(self.web_search_btn)
         
         opts_row.addSpacing(20)
         opts_row.addStretch()
@@ -2394,7 +2424,7 @@ class InputBar(QFrame):
 
     def is_web_search_enabled(self):
         """Check if web search toggle is enabled."""
-        return self.web_search_cb.isChecked() if hasattr(self, 'web_search_cb') else False
+        return self.web_search_btn.isChecked() if hasattr(self, 'web_search_btn') else False
 
     def show_stop(self):
         """Show stop button, hide send button."""
@@ -4334,6 +4364,9 @@ class LadaApp(QMainWindow):
 
         # Sidebar
         self.side = Sidebar()
+        # Expose sidebar buttons as MainWindow properties for backward compat
+        self.session_btn = self.side._session_btn
+        self.cost_btn = self.side._cost_btn
         main.addWidget(self.side)
 
         # Content
@@ -4369,15 +4402,6 @@ class LadaApp(QMainWindow):
         self._header_timer.start(30000)
         QTimer.singleShot(500, self._update_header_status)
 
-        # Model badge pill
-        self._model_badge = QLabel("auto")
-        self._model_badge.setFixedHeight(26)
-        self._model_badge.setStyleSheet(f"""
-            color: {TEXT_DIM}; font-size: 11px;
-            background: {BG_HOVER}; border-radius: 13px; padding: 2px 12px;
-        """)
-        hl.addWidget(self._model_badge)
-
         # Voice always-on toggle button
         self.voice_toggle_btn = QPushButton("Voice ON")
         self.voice_toggle_btn.setCursor(Qt.PointingHandCursor)
@@ -4409,40 +4433,6 @@ class LadaApp(QMainWindow):
             QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; border-color: {TEXT_DIM}; }}
         """)
         hl.addWidget(self.voice_btn)
-
-        # Session picker button
-        self.session_btn = QPushButton("Session")
-        self.session_btn.setFixedHeight(26)
-        self.session_btn.setMinimumWidth(80)
-        self.session_btn.setCursor(Qt.PointingHandCursor)
-        self.session_btn.setToolTip("Switch or create named topic sessions")
-        self.session_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {BG_HOVER}; color: {TEXT_DIM};
-                border: none; border-radius: 13px; font-size: 11px;
-                padding: 4px 14px;
-            }}
-            QPushButton:hover {{ background: {BG_CARD}; color: {TEXT}; }}
-        """)
-        self.session_btn.clicked.connect(self._open_session_picker)
-        hl.addWidget(self.session_btn)
-
-        # Cost monitor button
-        self.cost_btn = QPushButton("$0.00")
-        self.cost_btn.setFixedHeight(26)
-        self.cost_btn.setMinimumWidth(80)
-        self.cost_btn.setCursor(Qt.PointingHandCursor)
-        self.cost_btn.setToolTip("Token usage and cost summary")
-        self.cost_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {BG_HOVER}; color: {TEXT_DIM};
-                border: none; border-radius: 13px; font-size: 11px;
-                padding: 4px 14px;
-            }}
-            QPushButton:hover {{ background: {BG_CARD}; color: {TEXT}; }}
-        """)
-        self.cost_btn.clicked.connect(self._show_cost_dialog)
-        hl.addWidget(self.cost_btn)
 
         cl.addWidget(hdr)
 
@@ -4926,13 +4916,8 @@ class LadaApp(QMainWindow):
         self.model.setCurrentIndex(0)
 
     def _on_model_selector_changed(self, index):
-        """Update the header model badge when model selector changes."""
-        if hasattr(self, '_model_badge'):
-            text = self.model.currentText()
-            # Truncate long names for the badge
-            if len(text) > 25:
-                text = text[:22] + "..."
-            self._model_badge.setText(text)
+        """Handle model selector change."""
+        pass  # Model is read directly from combobox when sending
 
     def _wire(self):
         self.side.new_chat.connect(self._new)
@@ -4940,6 +4925,8 @@ class LadaApp(QMainWindow):
         self.side.load_voice_chat.connect(self._load_voice_session)
         self.side.open_settings.connect(self._open_settings)  # Settings from sidebar
         self.side.export_chat.connect(self._export_conversation)  # Export from sidebar
+        self.side.open_session.connect(self._open_session_picker)  # Session from sidebar
+        self.side.open_cost.connect(self._show_cost_dialog)  # Cost from sidebar
         self.inp.send.connect(self._send)
         self.voice_btn.clicked.connect(self._toggle_voice)
         self.inp.stop_btn.clicked.connect(self._stop_generation)  # Stop button

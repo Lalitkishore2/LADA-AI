@@ -684,7 +684,8 @@ class HybridAIRouter:
                 last_check=time.time()
             )
     
-    def query(self, prompt: str, prefer_backend: Optional[AIBackend] = None) -> str:
+    def query(self, prompt: str, prefer_backend: Optional[AIBackend] = None,
+              model: Optional[str] = None, use_web_search: Optional[bool] = None, **kwargs) -> str:
         """
         Send query to best available AI backend
         
@@ -715,7 +716,8 @@ class HybridAIRouter:
         # === COMET-STYLE WEB SEARCH ===
         # Check if query needs real-time data and fetch it
         web_context = ""
-        if self.web_search_enabled and self.web_search:
+        ws_enabled = use_web_search if use_web_search is not None else self.web_search_enabled
+        if ws_enabled and self.web_search:
             try:
                 context = self.web_search.get_realtime_context(prompt)
                 if context:
@@ -734,7 +736,7 @@ class HybridAIRouter:
 
         # === PHASE 2: Try ProviderManager first ===
         if self._use_phase2 and not prefer_backend:
-            pm_response = self._query_via_provider_manager(prompt, web_context)
+            pm_response = self._query_via_provider_manager(prompt, web_context, forced_model=model)
             if pm_response:
                 logger.info(f"[Router] Phase 2 response via {self.current_backend_name}")
                 # Add to history
@@ -1142,7 +1144,7 @@ class HybridAIRouter:
     # PHASE 2: ProviderManager & ContextManager Integration
     # ============================================================
 
-    def _query_via_provider_manager(self, prompt: str, web_context: str = "") -> Optional[str]:
+    def _query_via_provider_manager(self, prompt: str, web_context: str = "", forced_model: Optional[str] = None) -> Optional[str]:
         """
         Route a query through the Phase 2 ProviderManager.
         Returns AI response or None if ProviderManager fails.
@@ -1177,11 +1179,13 @@ class HybridAIRouter:
             model_id = None
             provider = None
 
-            # Use forced model if set (user selected a specific model)
-            if self._phase2_forced_model:
-                model_id = self._phase2_forced_model
+            # Use forced model if set (parameter-level is thread-safe, instance-level is legacy)
+            effective_forced = forced_model or self._phase2_forced_model
+            if effective_forced:
+                model_id = effective_forced
                 provider = self.provider_manager.get_provider_for_model(model_id)
-                self._phase2_forced_model = None  # Clear after use
+                if not forced_model:
+                    self._phase2_forced_model = None  # Only clear instance-level
                 logger.info(f"[Router] Using forced model: {model_id}")
 
             if not provider:
@@ -1292,7 +1296,7 @@ class HybridAIRouter:
 
         return None
 
-    def _stream_via_provider_manager(self, prompt: str, web_context: str = ""):
+    def _stream_via_provider_manager(self, prompt: str, web_context: str = "", forced_model: Optional[str] = None):
         """
         Stream a query through the Phase 2 ProviderManager.
         Yields dicts with 'chunk', 'source', 'done' keys (matching legacy format).
@@ -1325,10 +1329,12 @@ class HybridAIRouter:
 
             model_id = None
 
-            # Use forced model if set (user selected a specific model)
-            if self._phase2_forced_model:
-                model_id = self._phase2_forced_model
-                self._phase2_forced_model = None  # Clear after use
+            # Use forced model if set (parameter-level is thread-safe, instance-level is legacy)
+            effective_forced = forced_model or self._phase2_forced_model
+            if effective_forced:
+                model_id = effective_forced
+                if not forced_model:
+                    self._phase2_forced_model = None  # Only clear instance-level
                 selection = {'provider_id': '', 'model_name': model_id}
                 self.current_backend_name = f"forced ({model_id})"
                 logger.info(f"[Router] Streaming with forced model: {model_id}")
@@ -1479,7 +1485,8 @@ class HybridAIRouter:
     # STREAMING METHODS - ChatGPT/Perplexity Style
     # ============================================================
     
-    def stream_query(self, prompt: str, prefer_backend: Optional[AIBackend] = None):
+    def stream_query(self, prompt: str, prefer_backend: Optional[AIBackend] = None,
+                     model: Optional[str] = None, use_web_search: Optional[bool] = None):
         """
         Stream query responses chunk by chunk (generator).
         
@@ -1507,7 +1514,8 @@ class HybridAIRouter:
         research_result = None
 
         # Always try web search for factual/knowledge queries (helps local models)
-        should_search = self.web_search_enabled and self._is_knowledge_query(prompt)
+        ws_enabled = use_web_search if use_web_search is not None else self.web_search_enabled
+        should_search = ws_enabled and self._is_knowledge_query(prompt)
 
         if should_search and self.web_search:
             try:
@@ -1558,7 +1566,7 @@ class HybridAIRouter:
         if self._use_phase2 and not prefer_backend:
             phase2_yielded = False
             try:
-                for chunk_data in self._stream_via_provider_manager(prompt, web_context):
+                for chunk_data in self._stream_via_provider_manager(prompt, web_context, forced_model=model):
                     phase2_yielded = True
                     yield chunk_data
                     if chunk_data.get('done'):

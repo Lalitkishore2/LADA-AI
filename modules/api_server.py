@@ -382,9 +382,10 @@ class LADAAPIServer:
                     ])
                 
                 # Query AI
+                effective_model = request.model if request.model and request.model != 'auto' else None
                 response = self.ai_router.query(
                     request.message,
-                    context=context,
+                    model=effective_model,
                     use_web_search=request.use_web_search
                 )
                 
@@ -1091,6 +1092,9 @@ class LADAAPIServer:
         message = data.get("message", "")
         stream = data.get("stream", True)
         model = data.get("model")
+        use_web_search = data.get("use_web_search", False)
+        # Normalize model: 'auto' means no forced model
+        effective_model = model if model and model != 'auto' else None
 
         if not message:
             await ws.send_json({
@@ -1126,7 +1130,7 @@ class LADAAPIServer:
                 def _stream_worker():
                     """Runs in thread pool, pushes chunks to async queue (thread-safe)."""
                     try:
-                        for chunk_data in self.ai_router.stream_query(message):
+                        for chunk_data in self.ai_router.stream_query(message, model=effective_model, use_web_search=use_web_search):
                             asyncio.run_coroutine_threadsafe(q.put(chunk_data), loop)
                     except Exception as e:
                         asyncio.run_coroutine_threadsafe(q.put(e), loop)
@@ -1186,7 +1190,7 @@ class LADAAPIServer:
             else:
                 # Non-streaming response
                 def _query_sync():
-                    return self.ai_router.query(message)
+                    return self.ai_router.query(message, model=effective_model, use_web_search=use_web_search)
 
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(None, _query_sync)

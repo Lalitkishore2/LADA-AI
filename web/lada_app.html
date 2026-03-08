@@ -185,16 +185,6 @@ a:hover{color:var(--accent-h);text-decoration:underline}
   padding:8px 14px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-shrink:0;
 }
 
-/* Model select in sidebar */
-.sidebar-model-area{padding:6px 12px;flex-shrink:0}
-.sidebar-model-area label{font-size:11px;color:var(--text-faint);margin-bottom:4px;display:block;text-transform:uppercase;letter-spacing:.6px}
-#model-select{
-  width:100%;padding:7px 10px;background:var(--surface2);
-  color:var(--text);border:1px solid var(--border);border-radius:8px;font-size:13px;
-  appearance:none;cursor:pointer;
-}
-#model-select:focus{border-color:var(--accent)}
-
 /* Provider dots */
 .provider-grid{padding:6px 16px 8px;display:flex;flex-wrap:wrap;gap:5px 12px}
 .provider-dot{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim)}
@@ -629,13 +619,13 @@ pre{position:relative}
 }
 .model-row-tier{font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.5px;flex-shrink:0;width:56px;text-align:right}
 #model-trigger{
-  width:100%;padding:8px 12px;background:var(--surface2);color:var(--text);
-  border:1px solid var(--border);border-radius:9999px;font-size:13px;cursor:pointer;
-  display:flex;align-items:center;gap:8px;transition:border-color .15s;text-align:left;
+  padding:4px 12px;background:transparent;color:var(--text-dim);
+  border:1px solid var(--border);border-radius:16px;font-size:12px;cursor:pointer;
+  display:flex;align-items:center;gap:6px;transition:border-color .15s;
+  max-width:200px;flex-shrink:0;white-space:nowrap;overflow:hidden;
 }
-#model-trigger:hover{border-color:var(--accent)}
-#model-trigger-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#model-trigger-chevron{font-size:10px;color:var(--text-faint);flex-shrink:0}
+#model-trigger:hover{border-color:var(--accent);color:var(--text)}
+#model-trigger-chevron{font-size:10px;opacity:.5}
 .model-list-empty{padding:40px 20px;text-align:center;color:var(--text-faint);font-size:13px}
 #model-picker-footer{padding:10px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-shrink:0}
 
@@ -707,20 +697,6 @@ pre{position:relative}
   </button>
 
   <div id="sidebar-content">
-    <!-- Model selector -->
-    <div class="sidebar-section">
-      <div class="sidebar-section-title">Model</div>
-      <div class="sidebar-model-area">
-        <button id="model-trigger" onclick="openModelPicker()">
-          <span id="model-trigger-name">auto (smart routing)</span>
-          <span id="model-trigger-chevron">&#9662;</span>
-        </button>
-        <select id="model-select" style="display:none" onchange="onModelChange(this.value)">
-          <option value="auto">auto (smart routing)</option>
-        </select>
-      </div>
-    </div>
-
     <!-- Provider status -->
     <div class="sidebar-section">
       <div class="sidebar-section-title">Providers</div>
@@ -847,6 +823,13 @@ pre{position:relative}
           <span class="search-toggle-dot"></span>
           Web Search
         </button>
+        <button id="model-trigger" onclick="openModelPicker()" title="Select AI model">
+          <span id="model-trigger-name">auto (smart routing)</span>
+          <span id="model-trigger-chevron">&#9662;</span>
+        </button>
+        <select id="model-select" style="display:none" onchange="onModelChange(this.value)">
+          <option value="auto">auto (smart routing)</option>
+        </select>
         <span class="char-count" id="char-count"></span>
       </div>
     </div>
