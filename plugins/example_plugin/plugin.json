@@ -1,0 +1,23 @@
+{
+    "name": "example_plugin",
+    "version": "1.0.0",
+    "description": "Example LADA plugin demonstrating the plugin system",
+    "author": "LADA Team",
+    "entry_point": "main.py",
+    "class_name": "ExamplePlugin",
+    "capabilities": [
+        {
+            "intent": "coin_flip",
+            "keywords": ["flip a coin", "coin flip", "heads or tails"],
+            "handler": "handle_coin_flip"
+        },
+        {
+            "intent": "dice_roll",
+            "keywords": ["roll a dice", "roll dice", "throw dice"],
+            "handler": "handle_dice_roll"
+        }
+    ],
+    "dependencies": [],
+    "permissions": [],
+    "enabled": true
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "1d8e0120a7f67580",
+    "content": "Test memory: user prefers dark mode",
+    "memory_type": "preference",
+    "importance": 0.8,
+    "source": "user",
+    "tags": "[]",
+    "timestamp": 1771255325.7137735,
+    "access_count": 0,
+    "last_accessed": 1771255325.713774,
+    "created_date": "2026-02-16T20:52:05.713773"
+  }
+]

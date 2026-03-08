@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+
+LABEL maintainer="LADA Team"
+LABEL description="LADA Cloud - Render.com Free Tier (512MB RAM)"
+
+# Minimal system dependencies (no audio/OCR/ffmpeg)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash lada
+WORKDIR /app
+
+# Copy lightweight requirements for layer caching
+COPY requirements.render.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create data directories
+RUN mkdir -p data/conversations data/sessions data/vector_memory config logs
+
+# Set ownership
+RUN chown -R lada:lada /app
+
+USER lada
+
+# Environment defaults
+ENV PYTHONUNBUFFERED=1 \
+    DATA_DIR=/app/data \
+    LOGS_DIR=/app/logs
+
+# Render sets PORT dynamically — CMD bridges it to LADA_API_PORT
+CMD sh -c "LADA_API_PORT=$PORT python lada_webui.py --no-browser"

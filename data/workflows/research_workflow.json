@@ -1,0 +1,26 @@
+{
+  "name": "research_workflow",
+  "created": "2026-03-08T12:41:24.292661",
+  "steps": [
+    {
+      "action": "google_search",
+      "module": "browser_control",
+      "params": {
+        "query": "$search_query"
+      }
+    },
+    {
+      "action": "extract_text",
+      "module": "browser_control",
+      "params": {}
+    },
+    {
+      "action": "create_file",
+      "module": "file_operations",
+      "params": {
+        "path": "$output_file",
+        "content": "$step_2_result"
+      }
+    }
+  ]
+}

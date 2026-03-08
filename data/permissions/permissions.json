@@ -1,0 +1,148 @@
+{
+  "whitelist": [
+    "safe_action",
+    "my\\s+special\\s+command"
+  ],
+  "blacklist": [
+    "dangerous\\s+thing"
+  ],
+  "rate_limits": {
+    "default": 100,
+    "categories": {
+      "execute": 10,
+      "system": 20,
+      "network": 30,
+      "admin": 5
+    }
+  },
+  "custom_rules": [
+    {
+      "pattern": "^(show|display|list|get|check|what|how|when|where|who)\\b",
+      "category": "read",
+      "risk": "SAFE",
+      "min_permission": "GUEST",
+      "requires_confirmation": false,
+      "description": "Read operations"
+    },
+    {
+      "pattern": "(write|save|create|update|edit)\\s+(file|document|note)",
+      "category": "write",
+      "risk": "LOW",
+      "min_permission": "USER",
+      "requires_confirmation": false,
+      "description": "File write operations"
+    },
+    {
+      "pattern": "(delete|remove|erase)\\s+(file|folder|document)",
+      "category": "write",
+      "risk": "HIGH",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "Delete operations"
+    },
+    {
+      "pattern": "(shutdown|restart|reboot|sleep|hibernate)",
+      "category": "system",
+      "risk": "HIGH",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "System power operations"
+    },
+    {
+      "pattern": "(kill|terminate|end)\\s+(process|task|program|app)",
+      "category": "system",
+      "risk": "MEDIUM",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "Process termination"
+    },
+    {
+      "pattern": "(send|email|post|upload|download)",
+      "category": "network",
+      "risk": "MEDIUM",
+      "min_permission": "USER",
+      "requires_confirmation": false,
+      "description": "Network operations"
+    },
+    {
+      "pattern": "(run|execute)\\s+(script|command|program)",
+      "category": "execute",
+      "risk": "HIGH",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "Script execution"
+    },
+    {
+      "pattern": "(admin|sudo|elevate|root|system\\s+settings)",
+      "category": "admin",
+      "risk": "CRITICAL",
+      "min_permission": "ADMIN",
+      "requires_confirmation": true,
+      "description": "Administrative operations"
+    },
+    {
+      "pattern": "^(show|display|list|get|check|what|how|when|where|who)\\b",
+      "category": "read",
+      "risk": "SAFE",
+      "min_permission": "GUEST",
+      "requires_confirmation": false,
+      "description": "Read operations"
+    },
+    {
+      "pattern": "(write|save|create|update|edit)\\s+(file|document|note)",
+      "category": "write",
+      "risk": "LOW",
+      "min_permission": "USER",
+      "requires_confirmation": false,
+      "description": "File write operations"
+    },
+    {
+      "pattern": "(delete|remove|erase)\\s+(file|folder|document)",
+      "category": "write",
+      "risk": "HIGH",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "Delete operations"
+    },
+    {
+      "pattern": "(shutdown|restart|reboot|sleep|hibernate)",
+      "category": "system",
+      "risk": "HIGH",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "System power operations"
+    },
+    {
+      "pattern": "(kill|terminate|end)\\s+(process|task|program|app)",
+      "category": "system",
+      "risk": "MEDIUM",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "Process termination"
+    },
+    {
+      "pattern": "(send|email|post|upload|download)",
+      "category": "network",
+      "risk": "MEDIUM",
+      "min_permission": "USER",
+      "requires_confirmation": false,
+      "description": "Network operations"
+    },
+    {
+      "pattern": "(run|execute)\\s+(script|command|program)",
+      "category": "execute",
+      "risk": "HIGH",
+      "min_permission": "USER",
+      "requires_confirmation": true,
+      "description": "Script execution"
+    },
+    {
+      "pattern": "(admin|sudo|elevate|root|system\\s+settings)",
+      "category": "admin",
+      "risk": "CRITICAL",
+      "min_permission": "ADMIN",
+      "requires_confirmation": true,
+      "description": "Administrative operations"
+    }
+  ]
+}

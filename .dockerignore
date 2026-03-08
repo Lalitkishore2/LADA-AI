@@ -1,0 +1,23 @@
+# Docker files
+*.pyc
+__pycache__
+.env
+*.pkl
+*.log
+data/vector_memory/
+data/code_backups/
+data/conversations/
+data/generated_images/
+config/credentials.json
+config/*_token.json
+config/face_data.pkl
+logs/
+.git/
+.pytest_cache/
+.mypy_cache/
+node_modules/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/

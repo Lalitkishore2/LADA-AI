@@ -1,0 +1,118 @@
+{
+  "token": "725bef9577eb490a99428aa241e4b10d",
+  "pipeline": {
+    "name": "demo-pipeline",
+    "pipeline_id": "d977e7e91026",
+    "description": "Shows exec, function, approval, and conditional steps",
+    "fail_fast": true,
+    "created_at": "2026-02-18T10:34:37.539310+00:00",
+    "metadata": {},
+    "steps": [
+      {
+        "id": "list_dir",
+        "step_type": "exec",
+        "command": "python -c \"import sys; sys.stdout.reconfigure(encoding=chr(117)+chr(116)+chr(102)+chr(45)+chr(56)); import os; print(chr(10).join(os.listdir(chr(46))))\"",
+        "function_name": null,
+        "ai_prompt": null,
+        "approval_message": null,
+        "stdin_source": null,
+        "condition": null,
+        "timeout_ms": 120000,
+        "env": null,
+        "continue_on_error": false,
+        "metadata": {}
+      },
+      {
+        "id": "count",
+        "step_type": "function",
+        "command": null,
+        "function_name": "count_lines",
+        "ai_prompt": null,
+        "approval_message": null,
+        "stdin_source": "list_dir.stdout",
+        "condition": null,
+        "timeout_ms": 120000,
+        "env": null,
+        "continue_on_error": false,
+        "metadata": {}
+      },
+      {
+        "id": "confirm",
+        "step_type": "approval",
+        "command": null,
+        "function_name": null,
+        "ai_prompt": null,
+        "approval_message": "Proceed with processing {count.stdout}?",
+        "stdin_source": null,
+        "condition": null,
+        "timeout_ms": 86400000,
+        "env": null,
+        "continue_on_error": false,
+        "metadata": {}
+      },
+      {
+        "id": "final",
+        "step_type": "exec",
+        "command": "python -c \"print(chr(80)+chr(105)+chr(112)+chr(101)+chr(108)+chr(105)+chr(110)+chr(101)+chr(32)+chr(99)+chr(111)+chr(109)+chr(112)+chr(108)+chr(101)+chr(116)+chr(101)+chr(33))\"",
+        "function_name": null,
+        "ai_prompt": null,
+        "approval_message": null,
+        "stdin_source": null,
+        "condition": "confirm.approved",
+        "timeout_ms": 120000,
+        "env": null,
+        "continue_on_error": false,
+        "metadata": {}
+      }
+    ]
+  },
+  "step_results": {
+    "list_dir": {
+      "step_id": "list_dir",
+      "status": "succeeded",
+      "stdout": ".dockerignore\r\n.env\r\napp.log\r\napp.pid\r\nassets\r\nconfig\r\nc\uf03aJarvisAIpluginsexample_plugin\r\ndata\r\ndocker-compose.yml\r\nDockerfile\r\nexports\r\nHEARTBEAT.md\r\nIMPLEMENTATION_GUIDE.md\r\njarvis_audit.db\r\njarvis_env\r\nLADA-GUI.bat\r\nlada_ai_router.py\r\nlada_desktop_app.py\r\nlada_jarvis_core.py\r\nlada_memory.py\r\nlogs\r\nmain.py\r\nmemory\r\nmodules\r\nnul\r\nplugins\r\nREADME.md\r\nrequirements.txt\r\nscreenshots\r\nsetup_lada.py\r\ntests\r\ntest_e2e_complete.py\r\ntest_v10_modules.py\r\ntmpclaude-0081-cwd\r\ntmpclaude-01c8-cwd\r\ntmpclaude-027a-cwd\r\ntmpclaude-04e4-cwd\r\ntmpclaude-0557-cwd\r\ntmpclaude-0568-cwd\r\ntmpclaude-0625-cwd\r\ntmpclaude-07de-cwd\r\ntmpclaude-0807-cwd\r\ntmpclaude-0886-cwd\r\ntmpclaude-08d4-cwd\r\ntmpclaude-097e-cwd\r\ntmpclaude-0d56-cwd\r\ntmpclaude-0de8-cwd\r\ntmpclaude-0ebd-cwd\r\ntmpclaude-0ef1-cwd\r\ntmpclaude-0f04-cwd\r\ntmpclaude-0ff3-cwd\r\ntmpclaude-10da-cwd\r\ntmpclaude-122e-cwd\r\ntmpclaude-124e-cwd\r\ntmpclaude-1254-cwd\r\ntmpclaude-12af-cwd\r\ntmpclaude-1341-cwd\r\ntmpclaude-14b3-cwd\r\ntmpclaude-1804-cwd\r\ntmpclaude-1853-cwd\r\ntmpclaude-1899-cwd\r\ntmpclaude-192d-cwd\r\ntmpclaude-193f-cwd\r\ntmpclaude-19a2-cwd\r\ntmpclaude-1ab7-cwd\r\ntmpclaude-1af3-cwd\r\ntmpclaude-1bb0-cwd\r\ntmpclaude-1be4-cwd\r\ntmpclaude-1fc1-cwd\r\ntmpclaude-20e5-cwd\r\ntmpclaude-2188-cwd\r\ntmpclaude-223b-cwd\r\ntmpclaude-2268-cwd\r\ntmpclaude-23a9-cwd\r\ntmpclaude-23c3-cwd\r\ntmpclaude-240d-cwd\r\ntmpclaude-2463-cwd\r\ntmpclaude-2472-cwd\r\ntmpclaude-24a3-cwd\r\ntmpclaude-24eb-cwd\r\ntmpclaude-25c0-cwd\r\ntmpclaude-2657-cwd\r\ntmpclaude-26de-cwd\r\ntmpclaude-27fa-cwd\r\ntmpclaude-288d-cwd\r\ntmpclaude-2a6e-cwd\r\ntmpclaude-2b68-cwd\r\ntmpclaude-2c42-cwd\r\ntmpclaude-2c5b-cwd\r\ntmpclaude-2d55-cwd\r\ntmpclaude-2d69-cwd\r\ntmpclaude-2f1a-cwd\r\ntmpclaude-2fbe-cwd\r\ntmpclaude-2fc0-cwd\r\ntmpclaude-3041-cwd\r\ntmpclaude-317a-cwd\r\ntmpclaude-321c-cwd\r\ntmpclaude-33a8-cwd\r\ntmpclaude-344f-cwd\r\ntmpclaude-3518-cwd\r\ntmpclaude-3875-cwd\r\ntmpclaude-3af4-cwd\r\ntmpclaude-3bdd-cwd\r\ntmpclaude-3d84-cwd\r\ntmpclaude-3dc9-cwd\r\ntmpclaude-3e85-cwd\r\ntmpclaude-405b-cwd\r\ntmpclaude-40ed-cwd\r\ntmpclaude-4399-cwd\r\ntmpclaude-43a0-cwd\r\ntmpclaude-4464-cwd\r\ntmpclaude-4599-cwd\r\ntmpclaude-45ab-cwd\r\ntmpclaude-47c0-cwd\r\ntmpclaude-4bea-cwd\r\ntmpclaude-4d4b-cwd\r\ntmpclaude-4df4-cwd\r\ntmpclaude-4dff-cwd\r\ntmpclaude-4e70-cwd\r\ntmpclaude-50fc-cwd\r\ntmpclaude-5131-cwd\r\ntmpclaude-5155-cwd\r\ntmpclaude-5171-cwd\r\ntmpclaude-5192-cwd\r\ntmpclaude-5385-cwd\r\ntmpclaude-5448-cwd\r\ntmpclaude-5531-cwd\r\ntmpclaude-599f-cwd\r\ntmpclaude-5a4f-cwd\r\ntmpclaude-5a71-cwd\r\ntmpclaude-5b21-cwd\r\ntmpclaude-5b99-cwd\r\ntmpclaude-5ba1-cwd\r\ntmpclaude-5bd7-cwd\r\ntmpclaude-5c02-cwd\r\ntmpclaude-5dd3-cwd\r\ntmpclaude-5de2-cwd\r\ntmpclaude-5f28-cwd\r\ntmpclaude-5f69-cwd\r\ntmpclaude-5fe2-cwd\r\ntmpclaude-60ba-cwd\r\ntmpclaude-6180-cwd\r\ntmpclaude-6214-cwd\r\ntmpclaude-6339-cwd\r\ntmpclaude-6361-cwd\r\ntmpclaude-63c0-cwd\r\ntmpclaude-6404-cwd\r\ntmpclaude-6634-cwd\r\ntmpclaude-6868-cwd\r\ntmpclaude-69fd-cwd\r\ntmpclaude-6a9c-cwd\r\ntmpclaude-6ac1-cwd\r\ntmpclaude-6b63-cwd\r\ntmpclaude-6c82-cwd\r\ntmpclaude-6d58-cwd\r\ntmpclaude-6e23-cwd\r\ntmpclaude-6e5a-cwd\r\ntmpclaude-6f3a-cwd\r\ntmpclaude-6f89-cwd\r\ntmpclaude-6fe2-cwd\r\ntmpclaude-718f-cwd\r\ntmpclaude-71e4-cwd\r\ntmpclaude-72a6-cwd\r\ntmpclaude-7343-cwd\r\ntmpclaude-7407-cwd\r\ntmpclaude-74e2-cwd\r\ntmpclaude-763e-cwd\r\ntmpclaude-7787-cwd\r\ntmpclaude-7841-cwd\r\ntmpclaude-78e7-cwd\r\ntmpclaude-7927-cwd\r\ntmpclaude-79b7-cwd\r\ntmpclaude-7b3d-cwd\r\ntmpclaude-7b73-cwd\r\ntmpclaude-7ba1-cwd\r\ntmpclaude-7ba5-cwd\r\ntmpclaude-7c00-cwd\r\ntmpclaude-7c4f-cwd\r\ntmpclaude-7e89-cwd\r\ntmpclaude-7f69-cwd\r\ntmpclaude-7f87-cwd\r\ntmpclaude-7f95-cwd\r\ntmpclaude-7fbf-cwd\r\ntmpclaude-7ff3-cwd\r\ntmpclaude-810d-cwd\r\ntmpclaude-83db-cwd\r\ntmpclaude-847e-cwd\r\ntmpclaude-85a9-cwd\r\ntmpclaude-8691-cwd\r\ntmpclaude-86c7-cwd\r\ntmpclaude-881a-cwd\r\ntmpclaude-8884-cwd\r\ntmpclaude-890b-cwd\r\ntmpclaude-8931-cwd\r\ntmpclaude-8b4c-cwd\r\ntmpclaude-8d27-cwd\r\ntmpclaude-8e63-cwd\r\ntmpclaude-8f45-cwd\r\ntmpclaude-8f55-cwd\r\ntmpclaude-8faf-cwd\r\ntmpclaude-90eb-cwd\r\ntmpclaude-90ec-cwd\r\ntmpclaude-9114-cwd\r\ntmpclaude-9190-cwd\r\ntmpclaude-93cd-cwd\r\ntmpclaude-94e2-cwd\r\ntmpclaude-9592-cwd\r\ntmpclaude-963f-cwd\r\ntmpclaude-9684-cwd\r\ntmpclaude-972c-cwd\r\ntmpclaude-99ef-cwd\r\ntmpclaude-99fe-cwd\r\ntmpclaude-9aa9-cwd\r\ntmpclaude-9ae5-cwd\r\ntmpclaude-9b08-cwd\r\ntmpclaude-9b87-cwd\r\ntmpclaude-9c5b-cwd\r\ntmpclaude-9c69-cwd\r\ntmpclaude-9cdf-cwd\r\ntmpclaude-9eb0-cwd\r\ntmpclaude-9f50-cwd\r\ntmpclaude-a073-cwd\r\ntmpclaude-a1cf-cwd\r\ntmpclaude-a2c1-cwd\r\ntmpclaude-a349-cwd\r\ntmpclaude-a3b8-cwd\r\ntmpclaude-a528-cwd\r\ntmpclaude-a69a-cwd\r\ntmpclaude-a6c8-cwd\r\ntmpclaude-a6ef-cwd\r\ntmpclaude-a744-cwd\r\ntmpclaude-a838-cwd\r\ntmpclaude-a86b-cwd\r\ntmpclaude-a89d-cwd\r\ntmpclaude-a8d0-cwd\r\ntmpclaude-ab0c-cwd\r\ntmpclaude-ac37-cwd\r\ntmpclaude-ac81-cwd\r\ntmpclaude-ad0c-cwd\r\ntmpclaude-adb4-cwd\r\ntmpclaude-ae5c-cwd\r\ntmpclaude-aeb2-cwd\r\ntmpclaude-aeb9-cwd\r\ntmpclaude-af1a-cwd\r\ntmpclaude-af5e-cwd\r\ntmpclaude-afb4-cwd\r\ntmpclaude-b164-cwd\r\ntmpclaude-b481-cwd\r\ntmpclaude-b636-cwd\r\ntmpclaude-b640-cwd\r\ntmpclaude-b694-cwd\r\ntmpclaude-b752-cwd\r\ntmpclaude-b758-cwd\r\ntmpclaude-b7d4-cwd\r\ntmpclaude-bbf8-cwd\r\ntmpclaude-bc34-cwd\r\ntmpclaude-bc74-cwd\r\ntmpclaude-bc7a-cwd\r\ntmpclaude-bcb2-cwd\r\ntmpclaude-bcf1-cwd\r\ntmpclaude-be0d-cwd\r\ntmpclaude-be6d-cwd\r\ntmpclaude-be7a-cwd\r\ntmpclaude-bfb5-cwd\r\ntmpclaude-c154-cwd\r\ntmpclaude-c18c-cwd\r\ntmpclaude-c19d-cwd\r\ntmpclaude-c226-cwd\r\ntmpclaude-c25c-cwd\r\ntmpclaude-c3d5-cwd\r\ntmpclaude-c3d7-cwd\r\ntmpclaude-c454-cwd\r\ntmpclaude-c64e-cwd\r\ntmpclaude-c722-cwd\r\ntmpclaude-c892-cwd\r\ntmpclaude-ca2d-cwd\r\ntmpclaude-cb29-cwd\r\ntmpclaude-cddc-cwd\r\ntmpclaude-cf02-cwd\r\ntmpclaude-cf66-cwd\r\ntmpclaude-d080-cwd\r\ntmpclaude-d145-cwd\r\ntmpclaude-d1b4-cwd\r\ntmpclaude-d308-cwd\r\ntmpclaude-d4c8-cwd\r\ntmpclaude-d73c-cwd\r\ntmpclaude-d866-cwd\r\ntmpclaude-d8a4-cwd\r\ntmpclaude-d9b6-cwd\r\ntmpclaude-d9e2-cwd\r\ntmpclaude-da73-cwd\r\ntmpclaude-dbdc-cwd\r\ntmpclaude-dcf2-cwd\r\ntmpclaude-ded9-cwd\r\ntmpclaude-dfb4-cwd\r\ntmpclaude-e1ec-cwd\r\ntmpclaude-e27c-cwd\r\ntmpclaude-e298-cwd\r\ntmpclaude-e2ae-cwd\r\ntmpclaude-e3c8-cwd\r\ntmpclaude-e466-cwd\r\ntmpclaude-e6de-cwd\r\ntmpclaude-e6ea-cwd\r\ntmpclaude-e72b-cwd\r\ntmpclaude-e75b-cwd\r\ntmpclaude-e7db-cwd\r\ntmpclaude-e8d3-cwd\r\ntmpclaude-e8da-cwd\r\ntmpclaude-ea90-cwd\r\ntmpclaude-eaef-cwd\r\ntmpclaude-ec0d-cwd\r\ntmpclaude-ee94-cwd\r\ntmpclaude-eeb1-cwd\r\ntmpclaude-f220-cwd\r\ntmpclaude-f277-cwd\r\ntmpclaude-f2d8-cwd\r\ntmpclaude-f352-cwd\r\ntmpclaude-f4db-cwd\r\ntmpclaude-f5c4-cwd\r\ntmpclaude-f62c-cwd\r\ntmpclaude-f6f6-cwd\r\ntmpclaude-f7b5-cwd\r\ntmpclaude-fa41-cwd\r\ntmpclaude-fa6e-cwd\r\ntmpclaude-fb27-cwd\r\ntmpclaude-fb7a-cwd\r\ntmpclaude-fc2a-cwd\r\ntmpclaude-ffc1-cwd\r\nvoice_tamil_free.py\r\n_import_test.py\r\n__pycache__\r\n",
+      "stderr": "",
+      "exit_code": 0,
+      "duration_ms": 122.30320001253858,
+      "success": true,
+      "approved": null,
+      "error": null,
+      "started_at": "2026-02-18T10:34:37.562094+00:00",
+      "finished_at": "2026-02-18T10:34:37.684417+00:00",
+      "return_value": null
+    },
+    "count": {
+      "step_id": "count",
+      "status": "succeeded",
+      "stdout": "{\"line_count\": 331, \"lines\": [\".dockerignore\", \".env\", \"app.log\", \"app.pid\", \"assets\", \"config\", \"c\\uf03aJarvisAIpluginsexample_plugin\", \"data\", \"docker-compose.yml\", \"Dockerfile\", \"exports\", \"HEARTBEAT.md\", \"IMPLEMENTATION_GUIDE.md\", \"jarvis_audit.db\", \"jarvis_env\", \"LADA-GUI.bat\", \"lada_ai_router.py\", \"lada_desktop_app.py\", \"lada_jarvis_core.py\", \"lada_memory.py\", \"logs\", \"main.py\", \"memory\", \"modules\", \"nul\", \"plugins\", \"README.md\", \"requirements.txt\", \"screenshots\", \"setup_lada.py\", \"tests\", \"test_e2e_complete.py\", \"test_v10_modules.py\", \"tmpclaude-0081-cwd\", \"tmpclaude-01c8-cwd\", \"tmpclaude-027a-cwd\", \"tmpclaude-04e4-cwd\", \"tmpclaude-0557-cwd\", \"tmpclaude-0568-cwd\", \"tmpclaude-0625-cwd\", \"tmpclaude-07de-cwd\", \"tmpclaude-0807-cwd\", \"tmpclaude-0886-cwd\", \"tmpclaude-08d4-cwd\", \"tmpclaude-097e-cwd\", \"tmpclaude-0d56-cwd\", \"tmpclaude-0de8-cwd\", \"tmpclaude-0ebd-cwd\", \"tmpclaude-0ef1-cwd\", \"tmpclaude-0f04-cwd\", \"tmpclaude-0ff3-cwd\", \"tmpclaude-10da-cwd\", \"tmpclaude-122e-cwd\", \"tmpclaude-124e-cwd\", \"tmpclaude-1254-cwd\", \"tmpclaude-12af-cwd\", \"tmpclaude-1341-cwd\", \"tmpclaude-14b3-cwd\", \"tmpclaude-1804-cwd\", \"tmpclaude-1853-cwd\", \"tmpclaude-1899-cwd\", \"tmpclaude-192d-cwd\", \"tmpclaude-193f-cwd\", \"tmpclaude-19a2-cwd\", \"tmpclaude-1ab7-cwd\", \"tmpclaude-1af3-cwd\", \"tmpclaude-1bb0-cwd\", \"tmpclaude-1be4-cwd\", \"tmpclaude-1fc1-cwd\", \"tmpclaude-20e5-cwd\", \"tmpclaude-2188-cwd\", \"tmpclaude-223b-cwd\", \"tmpclaude-2268-cwd\", \"tmpclaude-23a9-cwd\", \"tmpclaude-23c3-cwd\", \"tmpclaude-240d-cwd\", \"tmpclaude-2463-cwd\", \"tmpclaude-2472-cwd\", \"tmpclaude-24a3-cwd\", \"tmpclaude-24eb-cwd\", \"tmpclaude-25c0-cwd\", \"tmpclaude-2657-cwd\", \"tmpclaude-26de-cwd\", \"tmpclaude-27fa-cwd\", \"tmpclaude-288d-cwd\", \"tmpclaude-2a6e-cwd\", \"tmpclaude-2b68-cwd\", \"tmpclaude-2c42-cwd\", \"tmpclaude-2c5b-cwd\", \"tmpclaude-2d55-cwd\", \"tmpclaude-2d69-cwd\", \"tmpclaude-2f1a-cwd\", \"tmpclaude-2fbe-cwd\", \"tmpclaude-2fc0-cwd\", \"tmpclaude-3041-cwd\", \"tmpclaude-317a-cwd\", \"tmpclaude-321c-cwd\", \"tmpclaude-33a8-cwd\", \"tmpclaude-344f-cwd\", \"tmpclaude-3518-cwd\", \"tmpclaude-3875-cwd\", \"tmpclaude-3af4-cwd\", \"tmpclaude-3bdd-cwd\", \"tmpclaude-3d84-cwd\", \"tmpclaude-3dc9-cwd\", \"tmpclaude-3e85-cwd\", \"tmpclaude-405b-cwd\", \"tmpclaude-40ed-cwd\", \"tmpclaude-4399-cwd\", \"tmpclaude-43a0-cwd\", \"tmpclaude-4464-cwd\", \"tmpclaude-4599-cwd\", \"tmpclaude-45ab-cwd\", \"tmpclaude-47c0-cwd\", \"tmpclaude-4bea-cwd\", \"tmpclaude-4d4b-cwd\", \"tmpclaude-4df4-cwd\", \"tmpclaude-4dff-cwd\", \"tmpclaude-4e70-cwd\", \"tmpclaude-50fc-cwd\", \"tmpclaude-5131-cwd\", \"tmpclaude-5155-cwd\", \"tmpclaude-5171-cwd\", \"tmpclaude-5192-cwd\", \"tmpclaude-5385-cwd\", \"tmpclaude-5448-cwd\", \"tmpclaude-5531-cwd\", \"tmpclaude-599f-cwd\", \"tmpclaude-5a4f-cwd\", \"tmpclaude-5a71-cwd\", \"tmpclaude-5b21-cwd\", \"tmpclaude-5b99-cwd\", \"tmpclaude-5ba1-cwd\", \"tmpclaude-5bd7-cwd\", \"tmpclaude-5c02-cwd\", \"tmpclaude-5dd3-cwd\", \"tmpclaude-5de2-cwd\", \"tmpclaude-5f28-cwd\", \"tmpclaude-5f69-cwd\", \"tmpclaude-5fe2-cwd\", \"tmpclaude-60ba-cwd\", \"tmpclaude-6180-cwd\", \"tmpclaude-6214-cwd\", \"tmpclaude-6339-cwd\", \"tmpclaude-6361-cwd\", \"tmpclaude-63c0-cwd\", \"tmpclaude-6404-cwd\", \"tmpclaude-6634-cwd\", \"tmpclaude-6868-cwd\", \"tmpclaude-69fd-cwd\", \"tmpclaude-6a9c-cwd\", \"tmpclaude-6ac1-cwd\", \"tmpclaude-6b63-cwd\", \"tmpclaude-6c82-cwd\", \"tmpclaude-6d58-cwd\", \"tmpclaude-6e23-cwd\", \"tmpclaude-6e5a-cwd\", \"tmpclaude-6f3a-cwd\", \"tmpclaude-6f89-cwd\", \"tmpclaude-6fe2-cwd\", \"tmpclaude-718f-cwd\", \"tmpclaude-71e4-cwd\", \"tmpclaude-72a6-cwd\", \"tmpclaude-7343-cwd\", \"tmpclaude-7407-cwd\", \"tmpclaude-74e2-cwd\", \"tmpclaude-763e-cwd\", \"tmpclaude-7787-cwd\", \"tmpclaude-7841-cwd\", \"tmpclaude-78e7-cwd\", \"tmpclaude-7927-cwd\", \"tmpclaude-79b7-cwd\", \"tmpclaude-7b3d-cwd\", \"tmpclaude-7b73-cwd\", \"tmpclaude-7ba1-cwd\", \"tmpclaude-7ba5-cwd\", \"tmpclaude-7c00-cwd\", \"tmpclaude-7c4f-cwd\", \"tmpclaude-7e89-cwd\", \"tmpclaude-7f69-cwd\", \"tmpclaude-7f87-cwd\", \"tmpclaude-7f95-cwd\", \"tmpclaude-7fbf-cwd\", \"tmpclaude-7ff3-cwd\", \"tmpclaude-810d-cwd\", \"tmpclaude-83db-cwd\", \"tmpclaude-847e-cwd\", \"tmpclaude-85a9-cwd\", \"tmpclaude-8691-cwd\", \"tmpclaude-86c7-cwd\", \"tmpclaude-881a-cwd\", \"tmpclaude-8884-cwd\", \"tmpclaude-890b-cwd\", \"tmpclaude-8931-cwd\", \"tmpclaude-8b4c-cwd\", \"tmpclaude-8d27-cwd\", \"tmpclaude-8e63-cwd\", \"tmpclaude-8f45-cwd\", \"tmpclaude-8f55-cwd\", \"tmpclaude-8faf-cwd\", \"tmpclaude-90eb-cwd\", \"tmpclaude-90ec-cwd\", \"tmpclaude-9114-cwd\", \"tmpclaude-9190-cwd\", \"tmpclaude-93cd-cwd\", \"tmpclaude-94e2-cwd\", \"tmpclaude-9592-cwd\", \"tmpclaude-963f-cwd\", \"tmpclaude-9684-cwd\", \"tmpclaude-972c-cwd\", \"tmpclaude-99ef-cwd\", \"tmpclaude-99fe-cwd\", \"tmpclaude-9aa9-cwd\", \"tmpclaude-9ae5-cwd\", \"tmpclaude-9b08-cwd\", \"tmpclaude-9b87-cwd\", \"tmpclaude-9c5b-cwd\", \"tmpclaude-9c69-cwd\", \"tmpclaude-9cdf-cwd\", \"tmpclaude-9eb0-cwd\", \"tmpclaude-9f50-cwd\", \"tmpclaude-a073-cwd\", \"tmpclaude-a1cf-cwd\", \"tmpclaude-a2c1-cwd\", \"tmpclaude-a349-cwd\", \"tmpclaude-a3b8-cwd\", \"tmpclaude-a528-cwd\", \"tmpclaude-a69a-cwd\", \"tmpclaude-a6c8-cwd\", \"tmpclaude-a6ef-cwd\", \"tmpclaude-a744-cwd\", \"tmpclaude-a838-cwd\", \"tmpclaude-a86b-cwd\", \"tmpclaude-a89d-cwd\", \"tmpclaude-a8d0-cwd\", \"tmpclaude-ab0c-cwd\", \"tmpclaude-ac37-cwd\", \"tmpclaude-ac81-cwd\", \"tmpclaude-ad0c-cwd\", \"tmpclaude-adb4-cwd\", \"tmpclaude-ae5c-cwd\", \"tmpclaude-aeb2-cwd\", \"tmpclaude-aeb9-cwd\", \"tmpclaude-af1a-cwd\", \"tmpclaude-af5e-cwd\", \"tmpclaude-afb4-cwd\", \"tmpclaude-b164-cwd\", \"tmpclaude-b481-cwd\", \"tmpclaude-b636-cwd\", \"tmpclaude-b640-cwd\", \"tmpclaude-b694-cwd\", \"tmpclaude-b752-cwd\", \"tmpclaude-b758-cwd\", \"tmpclaude-b7d4-cwd\", \"tmpclaude-bbf8-cwd\", \"tmpclaude-bc34-cwd\", \"tmpclaude-bc74-cwd\", \"tmpclaude-bc7a-cwd\", \"tmpclaude-bcb2-cwd\", \"tmpclaude-bcf1-cwd\", \"tmpclaude-be0d-cwd\", \"tmpclaude-be6d-cwd\", \"tmpclaude-be7a-cwd\", \"tmpclaude-bfb5-cwd\", \"tmpclaude-c154-cwd\", \"tmpclaude-c18c-cwd\", \"tmpclaude-c19d-cwd\", \"tmpclaude-c226-cwd\", \"tmpclaude-c25c-cwd\", \"tmpclaude-c3d5-cwd\", \"tmpclaude-c3d7-cwd\", \"tmpclaude-c454-cwd\", \"tmpclaude-c64e-cwd\", \"tmpclaude-c722-cwd\", \"tmpclaude-c892-cwd\", \"tmpclaude-ca2d-cwd\", \"tmpclaude-cb29-cwd\", \"tmpclaude-cddc-cwd\", \"tmpclaude-cf02-cwd\", \"tmpclaude-cf66-cwd\", \"tmpclaude-d080-cwd\", \"tmpclaude-d145-cwd\", \"tmpclaude-d1b4-cwd\", \"tmpclaude-d308-cwd\", \"tmpclaude-d4c8-cwd\", \"tmpclaude-d73c-cwd\", \"tmpclaude-d866-cwd\", \"tmpclaude-d8a4-cwd\", \"tmpclaude-d9b6-cwd\", \"tmpclaude-d9e2-cwd\", \"tmpclaude-da73-cwd\", \"tmpclaude-dbdc-cwd\", \"tmpclaude-dcf2-cwd\", \"tmpclaude-ded9-cwd\", \"tmpclaude-dfb4-cwd\", \"tmpclaude-e1ec-cwd\", \"tmpclaude-e27c-cwd\", \"tmpclaude-e298-cwd\", \"tmpclaude-e2ae-cwd\", \"tmpclaude-e3c8-cwd\", \"tmpclaude-e466-cwd\", \"tmpclaude-e6de-cwd\", \"tmpclaude-e6ea-cwd\", \"tmpclaude-e72b-cwd\", \"tmpclaude-e75b-cwd\", \"tmpclaude-e7db-cwd\", \"tmpclaude-e8d3-cwd\", \"tmpclaude-e8da-cwd\", \"tmpclaude-ea90-cwd\", \"tmpclaude-eaef-cwd\", \"tmpclaude-ec0d-cwd\", \"tmpclaude-ee94-cwd\", \"tmpclaude-eeb1-cwd\", \"tmpclaude-f220-cwd\", \"tmpclaude-f277-cwd\", \"tmpclaude-f2d8-cwd\", \"tmpclaude-f352-cwd\", \"tmpclaude-f4db-cwd\", \"tmpclaude-f5c4-cwd\", \"tmpclaude-f62c-cwd\", \"tmpclaude-f6f6-cwd\", \"tmpclaude-f7b5-cwd\", \"tmpclaude-fa41-cwd\", \"tmpclaude-fa6e-cwd\", \"tmpclaude-fb27-cwd\", \"tmpclaude-fb7a-cwd\", \"tmpclaude-fc2a-cwd\", \"tmpclaude-ffc1-cwd\", \"voice_tamil_free.py\", \"_import_test.py\", \"__pycache__\"]}",
+      "stderr": "",
+      "exit_code": null,
+      "duration_ms": 0.12939999578520656,
+      "success": true,
+      "approved": null,
+      "error": null,
+      "started_at": "2026-02-18T10:34:37.684589+00:00",
+      "finished_at": "2026-02-18T10:34:37.684733+00:00",
+      "return_value": null
+    },
+    "confirm": {
+      "step_id": "confirm",
+      "status": "awaiting_approval",
+      "stdout": "",
+      "stderr": "",
+      "exit_code": null,
+      "duration_ms": 0.0,
+      "success": false,
+      "approved": null,
+      "error": null,
+      "started_at": "2026-02-18T10:34:37.684812+00:00",
+      "finished_at": null,
+      "return_value": null
+    }
+  },
+  "paused_at_step": "confirm",
+  "approval_message": "Proceed with processing {count.stdout}?",
+  "paused_at": "2026-02-18T10:34:37.684847+00:00",
+  "expires_at": "2026-02-19T10:34:37.684847+00:00",
+  "timeout_ms": 86400000
+}

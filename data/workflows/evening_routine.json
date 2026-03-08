@@ -1,0 +1,25 @@
+{
+  "name": "evening_routine",
+  "created": "2026-03-08T12:41:24.291361",
+  "steps": [
+    {
+      "action": "set_brightness",
+      "module": "system_control",
+      "params": {
+        "level": 30
+      }
+    },
+    {
+      "action": "organize_downloads",
+      "module": "file_operations",
+      "params": {}
+    },
+    {
+      "action": "check_calendar",
+      "module": "agents",
+      "params": {
+        "days": 1
+      }
+    }
+  ]
+}

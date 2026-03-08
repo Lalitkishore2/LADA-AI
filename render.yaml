@@ -1,0 +1,35 @@
+# Render.com Blueprint — One-click deploy from GitHub
+# https://render.com/docs/blueprint-spec
+#
+# Usage:
+#   1. Push this repo to GitHub
+#   2. Go to render.com → "New" → "Blueprint" → select your repo
+#   3. Set secret env vars (GEMINI_API_KEY, GROQ_API_KEY, LADA_WEB_PASSWORD)
+#   4. Click "Deploy"
+
+services:
+  - type: web
+    name: lada-ai
+    env: docker
+    dockerfilePath: ./Dockerfile.render
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LADA_WEB_PASSWORD
+        sync: false
+      - key: LADA_API_KEY
+        sync: false
+      - key: LADA_AI_AGENT_ENABLED
+        value: "1"
+      - key: ENABLE_VOICE_INPUT
+        value: "false"
+      - key: ENABLE_VOICE_OUTPUT
+        value: "false"
+      - key: TAMIL_MODE
+        value: "false"
+      - key: ENABLE_STREAMING
+        value: "true"

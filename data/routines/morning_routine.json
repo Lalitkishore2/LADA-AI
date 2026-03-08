@@ -1,0 +1,14 @@
+{
+  "name": "morning_routine",
+  "workflow_name": "morning_routine",
+  "schedule_type": "daily",
+  "schedule_time": "07:00",
+  "days_of_week": [],
+  "trigger_event": null,
+  "context_conditions": {
+    "time_of_day": "morning"
+  },
+  "enabled": true,
+  "last_run": null,
+  "run_count": 0
+}

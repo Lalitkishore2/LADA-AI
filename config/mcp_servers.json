@@ -1,0 +1,62 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Users\\sharm"
+      ],
+      "transport": "stdio",
+      "enabled": false,
+      "_comment": "Enable to allow LADA file operations via MCP"
+    },
+    "web-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-brave-search"
+      ],
+      "env": {
+        "BRAVE_API_KEY": ""
+      },
+      "transport": "stdio",
+      "enabled": false,
+      "_comment": "Enable with Brave API key for web search"
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+      },
+      "transport": "stdio",
+      "enabled": false,
+      "_comment": "Enable with GitHub token for repo operations"
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "transport": "stdio",
+      "enabled": false,
+      "_comment": "Knowledge graph memory server"
+    },
+    "sqlite": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sqlite",
+        "data/lada.db"
+      ],
+      "transport": "stdio",
+      "enabled": false,
+      "_comment": "SQLite database operations"
+    }
+  }
+}

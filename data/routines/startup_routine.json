@@ -1,0 +1,12 @@
+{
+  "name": "startup_routine",
+  "workflow_name": "morning_routine",
+  "schedule_type": "trigger",
+  "schedule_time": null,
+  "days_of_week": [],
+  "trigger_event": "system_startup",
+  "context_conditions": {},
+  "enabled": true,
+  "last_run": null,
+  "run_count": 0
+}

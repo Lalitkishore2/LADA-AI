@@ -1,0 +1,34 @@
+{
+  "name": "morning_routine",
+  "created": "2026-03-08T12:41:24.291361",
+  "steps": [
+    {
+      "action": "set_volume",
+      "module": "system_control",
+      "params": {
+        "level": 50
+      }
+    },
+    {
+      "action": "set_brightness",
+      "module": "system_control",
+      "params": {
+        "level": 80
+      }
+    },
+    {
+      "action": "check_calendar",
+      "module": "agents",
+      "params": {
+        "days": 1
+      }
+    },
+    {
+      "action": "open_url",
+      "module": "browser_control",
+      "params": {
+        "url": "https://gmail.com"
+      }
+    }
+  ]
+}

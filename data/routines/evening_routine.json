@@ -1,0 +1,14 @@
+{
+  "name": "evening_routine",
+  "workflow_name": "evening_routine",
+  "schedule_type": "daily",
+  "schedule_time": "20:00",
+  "days_of_week": [],
+  "trigger_event": null,
+  "context_conditions": {
+    "time_of_day": "evening"
+  },
+  "enabled": true,
+  "last_run": null,
+  "run_count": 0
+}

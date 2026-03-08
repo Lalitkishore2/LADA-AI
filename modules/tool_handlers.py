@@ -1,0 +1,928 @@
+"""
+LADA Tool Handlers — Binds tool_registry ToolDefinitions to actual implementations.
+
+Wires SystemController methods to registered tools and implements new
+file/system tool handlers for the AI Command Agent.
+
+Usage:
+    from modules.tool_handlers import wire_tool_handlers
+    from modules.tool_registry import get_tool_registry
+    registry = get_tool_registry()
+    wired = wire_tool_handlers(registry)
+"""
+
+import os
+import re
+import glob
+import json
+import time
+import logging
+import subprocess
+import webbrowser
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, Any, Optional, List, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Try imports
+try:
+    from modules.tool_registry import ToolRegistry, ToolResult
+    REGISTRY_OK = True
+except ImportError:
+    REGISTRY_OK = False
+
+try:
+    from modules.system_control import SystemController
+    _sys_ctrl = SystemController()
+    SYS_CTRL_OK = True
+except Exception:
+    _sys_ctrl = None
+    SYS_CTRL_OK = False
+
+
+# ============================================================
+# Helper: convert SystemController dict returns to ToolResult
+# ============================================================
+
+def _wrap(result: Dict[str, Any]) -> ToolResult:
+    """Convert SystemController return dict to ToolResult."""
+    if not isinstance(result, dict):
+        return ToolResult(success=True, output=str(result))
+    success = result.get('success', True)
+    message = result.get('message', '')
+    error = result.get('error', None) if not success else None
+    data = {k: v for k, v in result.items() if k not in ('success', 'message', 'error')}
+    return ToolResult(success=success, output=message, data=data or None, error=error)
+
+
+# ============================================================
+# Handlers for EXISTING tools (20 tools registered in tool_registry)
+# ============================================================
+
+def _handle_set_volume(level: int = 50) -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    return _wrap(_sys_ctrl.set_volume(level))
+
+
+def _handle_mute() -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    return _wrap(_sys_ctrl.mute())
+
+
+def _handle_set_brightness(level: int = 50) -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    return _wrap(_sys_ctrl.set_brightness(level))
+
+
+def _handle_screenshot() -> ToolResult:
+    try:
+        import pyautogui
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = Path.home() / "Pictures" / "Screenshots"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        filepath = save_dir / f"screenshot_{ts}.png"
+        img = pyautogui.screenshot()
+        img.save(str(filepath))
+        return ToolResult(success=True, output=f"Screenshot saved to {filepath}",
+                          data={"path": str(filepath)})
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Screenshot failed: {e}")
+
+
+def _handle_open_app(app_name: str = "") -> ToolResult:
+    if not app_name:
+        return ToolResult(success=False, output="", error="No app name provided")
+    try:
+        app_lower = app_name.lower().strip()
+        # Common app shortcuts
+        app_map = {
+            'notepad': 'notepad.exe',
+            'calculator': 'calc.exe',
+            'calc': 'calc.exe',
+            'paint': 'mspaint.exe',
+            'cmd': 'cmd.exe',
+            'terminal': 'wt.exe',
+            'powershell': 'powershell.exe',
+            'explorer': 'explorer.exe',
+            'file explorer': 'explorer.exe',
+            'task manager': 'taskmgr.exe',
+            'settings': 'ms-settings:',
+            'chrome': 'chrome',
+            'edge': 'msedge',
+            'firefox': 'firefox',
+            'code': 'code',
+            'vscode': 'code',
+            'spotify': 'spotify',
+            'discord': 'discord',
+            'slack': 'slack',
+            'teams': 'teams',
+        }
+        exe = app_map.get(app_lower, app_lower)
+        if exe.startswith('ms-'):
+            os.startfile(exe)
+        else:
+            subprocess.Popen(exe, shell=True)
+        return ToolResult(success=True, output=f"Opened {app_name}")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Could not open {app_name}: {e}")
+
+
+def _handle_close_app(app_name: str = "") -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    if not app_name:
+        return ToolResult(success=False, output="", error="No app name provided")
+    return _wrap(_sys_ctrl.kill_process(app_name))
+
+
+def _handle_shutdown(delay: int = 60) -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    return _wrap(_sys_ctrl.power_action('shutdown', delay))
+
+
+def _handle_restart() -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    return _wrap(_sys_ctrl.power_action('restart'))
+
+
+def _handle_lock_screen() -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    return _wrap(_sys_ctrl.power_action('lock'))
+
+
+def _handle_system_info() -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    result = _sys_ctrl.get_system_status()
+    if isinstance(result, dict) and result.get('success'):
+        data = result.get('data', result)
+        lines = []
+        for key, value in data.items():
+            if key not in ('success', 'message'):
+                lines.append(f"{key}: {value}")
+        return ToolResult(success=True, output='\n'.join(lines) if lines else result.get('message', 'OK'),
+                          data=data)
+    return _wrap(result)
+
+
+def _handle_toggle_wifi(enabled: bool = True) -> ToolResult:
+    if not _sys_ctrl:
+        return ToolResult(success=False, output="", error="System control not available")
+    if enabled:
+        return _wrap(_sys_ctrl.connect_wifi("", ""))
+    else:
+        return _wrap(_sys_ctrl.disconnect_wifi())
+
+
+def _handle_minimize_window() -> ToolResult:
+    try:
+        import pyautogui
+        pyautogui.hotkey('win', 'down')
+        return ToolResult(success=True, output="Window minimized")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_maximize_window() -> ToolResult:
+    try:
+        import pyautogui
+        pyautogui.hotkey('win', 'up')
+        return ToolResult(success=True, output="Window maximized")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_web_search(query: str = "") -> ToolResult:
+    if not query:
+        return ToolResult(success=False, output="", error="No search query provided")
+    import urllib.parse
+    url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
+    webbrowser.open(url)
+    return ToolResult(success=True, output=f"Searching for: {query}")
+
+
+def _handle_open_url(url: str = "") -> ToolResult:
+    if not url:
+        return ToolResult(success=False, output="", error="No URL provided")
+    webbrowser.open(url)
+    return ToolResult(success=True, output=f"Opened {url}")
+
+
+def _handle_play_music(query: str = "") -> ToolResult:
+    try:
+        if query:
+            import urllib.parse
+            webbrowser.open(f"https://open.spotify.com/search/{urllib.parse.quote(query)}")
+            return ToolResult(success=True, output=f"Searching Spotify for: {query}")
+        else:
+            subprocess.Popen("spotify", shell=True)
+            return ToolResult(success=True, output="Opening Spotify")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_pause_music() -> ToolResult:
+    try:
+        import pyautogui
+        pyautogui.hotkey('playpause')
+        return ToolResult(success=True, output="Toggled playback")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_next_song() -> ToolResult:
+    try:
+        import pyautogui
+        pyautogui.hotkey('nexttrack')
+        return ToolResult(success=True, output="Skipped to next track")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_lights_control(action: str = "on", brightness: int = 100) -> ToolResult:
+    return ToolResult(success=False, output="",
+                      error="Smart home lights not configured. Set up in .env.")
+
+
+def _handle_comet_task(task: str = "") -> ToolResult:
+    try:
+        from modules.comet_agent import CometAgent
+        agent = CometAgent()
+        result = agent.execute(task)
+        return ToolResult(success=True, output=result or f"Completed task: {task}")
+    except ImportError:
+        return ToolResult(success=False, output="", error="Comet agent not available")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+# ============================================================
+# Handlers for NEW tools (11 tools for AI Command Agent)
+# ============================================================
+
+# --- File type extension mappings ---
+FILE_TYPE_MAP = {
+    'image': ['*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp', '*.webp', '*.heic', '*.svg', '*.ico'],
+    'photo': ['*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp', '*.webp', '*.heic'],
+    'video': ['*.mp4', '*.avi', '*.mkv', '*.mov', '*.wmv', '*.flv', '*.webm'],
+    'audio': ['*.mp3', '*.wav', '*.flac', '*.aac', '*.ogg', '*.m4a', '*.wma'],
+    'document': ['*.pdf', '*.doc', '*.docx', '*.txt', '*.xlsx', '*.xls', '*.pptx', '*.ppt', '*.csv', '*.rtf'],
+    'code': ['*.py', '*.js', '*.ts', '*.java', '*.cpp', '*.c', '*.h', '*.cs', '*.go', '*.rs', '*.html', '*.css'],
+    'archive': ['*.zip', '*.rar', '*.7z', '*.tar', '*.gz', '*.bz2'],
+}
+
+
+def _handle_find_files(pattern: str = "*", directory: str = "~",
+                       max_results: int = 20, file_type: str = None) -> ToolResult:
+    """Search for files by pattern, type, or name."""
+    try:
+        search_dir = Path(os.path.expanduser(directory)).resolve()
+        if not search_dir.exists():
+            return ToolResult(success=False, output="",
+                              error=f"Directory not found: {directory}")
+
+        # Build glob patterns
+        patterns = []
+        if file_type:
+            ft = file_type.lower().strip()
+            if ft in FILE_TYPE_MAP:
+                patterns = FILE_TYPE_MAP[ft]
+            elif ft.startswith('.'):
+                patterns = [f'*{ft}']
+            else:
+                patterns = [f'*.{ft}']
+        else:
+            # If pattern has no wildcard, wrap it
+            if '*' not in pattern and '?' not in pattern:
+                patterns = [f'*{pattern}*']
+            else:
+                patterns = [pattern]
+
+        results = []
+        for p in patterns:
+            if len(results) >= max_results:
+                break
+            try:
+                for match in search_dir.rglob(p):
+                    if len(results) >= max_results:
+                        break
+                    if match.is_file():
+                        try:
+                            stat = match.stat()
+                            size_kb = round(stat.st_size / 1024, 1)
+                            modified = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M')
+                            results.append({
+                                'path': str(match),
+                                'name': match.name,
+                                'size_kb': size_kb,
+                                'modified': modified,
+                            })
+                        except (PermissionError, OSError):
+                            continue
+            except (PermissionError, OSError):
+                continue
+
+        if not results:
+            return ToolResult(success=True,
+                              output=f"No files matching '{pattern}' found in {search_dir}")
+
+        lines = [f"Found {len(results)} file(s):"]
+        for r in results:
+            size_str = f"{r['size_kb']} KB" if r['size_kb'] < 1024 else f"{round(r['size_kb']/1024, 1)} MB"
+            lines.append(f"  {r['name']} ({size_str}, {r['modified']}) — {r['path']}")
+
+        return ToolResult(success=True, output='\n'.join(lines),
+                          data={'files': results, 'count': len(results)})
+
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_list_directory(path: str = "~", show_hidden: bool = False) -> ToolResult:
+    """List directory contents with details."""
+    try:
+        dir_path = Path(os.path.expanduser(path)).resolve()
+        if not dir_path.exists():
+            return ToolResult(success=False, output="", error=f"Path not found: {path}")
+        if not dir_path.is_dir():
+            return ToolResult(success=False, output="", error=f"Not a directory: {path}")
+
+        entries = []
+        for entry in sorted(dir_path.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+            if not show_hidden and entry.name.startswith('.'):
+                continue
+            try:
+                stat = entry.stat()
+                is_dir = entry.is_dir()
+                size = stat.st_size if not is_dir else 0
+                modified = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M')
+                entries.append({
+                    'name': entry.name,
+                    'type': 'DIR' if is_dir else 'FILE',
+                    'size': size,
+                    'modified': modified,
+                })
+            except (PermissionError, OSError):
+                continue
+
+        if not entries:
+            return ToolResult(success=True, output=f"Directory is empty: {dir_path}")
+
+        lines = [f"Contents of {dir_path} ({len(entries)} items):"]
+        for e in entries:
+            if e['type'] == 'DIR':
+                lines.append(f"  [DIR]  {e['name']}/  ({e['modified']})")
+            else:
+                size = e['size']
+                if size < 1024:
+                    size_str = f"{size} B"
+                elif size < 1024 * 1024:
+                    size_str = f"{round(size/1024, 1)} KB"
+                else:
+                    size_str = f"{round(size/(1024*1024), 1)} MB"
+                lines.append(f"  [FILE] {e['name']}  ({size_str}, {e['modified']})")
+
+        return ToolResult(success=True, output='\n'.join(lines),
+                          data={'entries': entries, 'path': str(dir_path)})
+
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_open_path(path: str = "") -> ToolResult:
+    """Open a file or folder in its default application."""
+    if not path:
+        return ToolResult(success=False, output="", error="No path provided")
+    try:
+        target = Path(os.path.expanduser(path)).resolve()
+        if not target.exists():
+            return ToolResult(success=False, output="", error=f"Path not found: {path}")
+        os.startfile(str(target))
+        return ToolResult(success=True, output=f"Opened: {target}")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_read_file_preview(path: str = "", lines: int = 20) -> ToolResult:
+    """Read first N lines of a text file."""
+    if not path:
+        return ToolResult(success=False, output="", error="No file path provided")
+    try:
+        filepath = Path(os.path.expanduser(path)).resolve()
+        if not filepath.exists():
+            return ToolResult(success=False, output="", error=f"File not found: {path}")
+        if not filepath.is_file():
+            return ToolResult(success=False, output="", error=f"Not a file: {path}")
+
+        # Try reading with different encodings
+        content = None
+        for enc in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+            try:
+                with open(filepath, 'r', encoding=enc) as f:
+                    content = f.readlines()[:lines]
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+
+        if content is None:
+            return ToolResult(success=False, output="",
+                              error="Could not read file (binary or unknown encoding)")
+
+        text = ''.join(content)
+        total_lines = len(content)
+        return ToolResult(success=True,
+                          output=f"File: {filepath.name} ({total_lines} lines shown):\n{text}",
+                          data={'path': str(filepath), 'lines_read': total_lines})
+
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+# --- Known app data paths on Windows ---
+APP_DATA_PATHS = {
+    'whatsapp': {
+        'description': 'WhatsApp Desktop media and data',
+        'paths': [
+            '~/AppData/Local/Packages/5319275A.WhatsAppDesktop_cv1g1gvanyjgm/LocalState',
+            '~/AppData/Local/WhatsApp',
+            '~/Documents/WhatsApp',
+            '~/Downloads/WhatsApp Images',
+            '~/Downloads',
+        ],
+    },
+    'telegram': {
+        'description': 'Telegram Desktop data and downloads',
+        'paths': [
+            '~/AppData/Roaming/Telegram Desktop',
+            '~/Downloads/Telegram Desktop',
+        ],
+    },
+    'chrome': {
+        'description': 'Google Chrome user data (bookmarks, history, cache)',
+        'paths': [
+            '~/AppData/Local/Google/Chrome/User Data/Default',
+            '~/AppData/Local/Google/Chrome/User Data',
+        ],
+    },
+    'edge': {
+        'description': 'Microsoft Edge user data',
+        'paths': [
+            '~/AppData/Local/Microsoft/Edge/User Data/Default',
+        ],
+    },
+    'firefox': {
+        'description': 'Firefox profiles and data',
+        'paths': [
+            '~/AppData/Roaming/Mozilla/Firefox/Profiles',
+        ],
+    },
+    'discord': {
+        'description': 'Discord app data and cache',
+        'paths': [
+            '~/AppData/Roaming/discord',
+            '~/AppData/Local/Discord',
+        ],
+    },
+    'spotify': {
+        'description': 'Spotify app data and cache',
+        'paths': [
+            '~/AppData/Roaming/Spotify',
+            '~/AppData/Local/Spotify',
+        ],
+    },
+    'steam': {
+        'description': 'Steam games and data',
+        'paths': [
+            'C:/Program Files (x86)/Steam',
+            'C:/Program Files/Steam',
+            '~/AppData/Local/Steam',
+        ],
+    },
+    'vscode': {
+        'description': 'Visual Studio Code settings and extensions',
+        'paths': [
+            '~/AppData/Roaming/Code/User',
+            '~/.vscode/extensions',
+        ],
+    },
+    'obs': {
+        'description': 'OBS Studio recordings and settings',
+        'paths': [
+            '~/AppData/Roaming/obs-studio',
+            '~/Videos',
+        ],
+    },
+    'minecraft': {
+        'description': 'Minecraft game data',
+        'paths': [
+            '~/AppData/Roaming/.minecraft',
+        ],
+    },
+    'blender': {
+        'description': 'Blender config and addons',
+        'paths': [
+            '~/AppData/Roaming/Blender Foundation/Blender',
+        ],
+    },
+    'outlook': {
+        'description': 'Outlook data files',
+        'paths': [
+            '~/Documents/Outlook Files',
+            '~/AppData/Local/Microsoft/Outlook',
+        ],
+    },
+    'onedrive': {
+        'description': 'OneDrive synced files',
+        'paths': [
+            '~/OneDrive',
+            '~/OneDrive - Personal',
+        ],
+    },
+    'downloads': {
+        'description': 'User downloads folder',
+        'paths': [
+            '~/Downloads',
+        ],
+    },
+}
+
+
+def _handle_get_app_data_paths(app_name: str = "") -> ToolResult:
+    """Return known data locations for common Windows applications."""
+    if not app_name:
+        # List all known apps
+        known = ', '.join(sorted(APP_DATA_PATHS.keys()))
+        return ToolResult(success=True,
+                          output=f"Known apps: {known}\nProvide an app name to get its data paths.")
+
+    key = app_name.lower().strip()
+    # Fuzzy match: try partial matching
+    matched_key = None
+    for k in APP_DATA_PATHS:
+        if k == key or key in k or k in key:
+            matched_key = k
+            break
+
+    if not matched_key:
+        known = ', '.join(sorted(APP_DATA_PATHS.keys()))
+        return ToolResult(success=True,
+                          output=f"No known paths for '{app_name}'. Known apps: {known}")
+
+    info = APP_DATA_PATHS[matched_key]
+    existing_paths = []
+    for p in info['paths']:
+        expanded = Path(os.path.expanduser(p)).resolve()
+        # Handle glob patterns in path
+        if '*' in str(expanded):
+            matches = glob.glob(str(expanded))
+            for m in matches:
+                mp = Path(m)
+                if mp.exists():
+                    existing_paths.append(str(mp))
+        elif expanded.exists():
+            existing_paths.append(str(expanded))
+
+    if not existing_paths:
+        return ToolResult(success=True,
+                          output=f"{matched_key.title()} — {info['description']}\n"
+                                 f"None of the known paths exist on this machine.\n"
+                                 f"Checked: {', '.join(info['paths'])}")
+
+    lines = [f"{matched_key.title()} — {info['description']}",
+             f"Found {len(existing_paths)} location(s):"]
+    for p in existing_paths:
+        lines.append(f"  {p}")
+
+    return ToolResult(success=True, output='\n'.join(lines),
+                      data={'app': matched_key, 'paths': existing_paths})
+
+
+# --- PowerShell sandboxing ---
+POWERSHELL_BLOCKED = [
+    'remove-item', 'remove-', 'delete-', 'del ', 'rd ', 'rmdir',
+    'stop-process', 'stop-service', 'stop-computer',
+    'kill', 'taskkill',
+    'set-executionpolicy', 'invoke-expression', 'iex ',
+    'invoke-webrequest', 'invoke-restmethod',
+    'start-process', 'new-object net.webclient',
+    'downloadfile', 'downloadstring',
+    'format-volume', 'clear-disk', 'initialize-disk',
+    'clear-content', 'clear-recyclebin',
+    'set-mppreference', 'add-mppreference',  # Defender tampering
+    'reg delete', 'reg add',
+    'shutdown', 'restart-computer',
+    'new-psdrive', 'net user', 'net localgroup',
+]
+
+
+def _validate_powershell_command(command: str) -> Tuple[bool, str]:
+    """Validate that a PowerShell command is safe to execute."""
+    cmd_lower = command.lower().strip()
+
+    for blocked in POWERSHELL_BLOCKED:
+        if blocked in cmd_lower:
+            return False, f"Blocked for safety: command contains '{blocked}'"
+
+    # Block piping to dangerous commands
+    if '|' in cmd_lower:
+        pipe_parts = cmd_lower.split('|')
+        for part in pipe_parts[1:]:
+            part = part.strip()
+            for blocked in POWERSHELL_BLOCKED:
+                if part.startswith(blocked):
+                    return False, f"Blocked: pipeline to '{blocked}'"
+
+    return True, ""
+
+
+def _handle_run_powershell(command: str = "", timeout: int = 15) -> ToolResult:
+    """Execute a sandboxed PowerShell command."""
+    if not command:
+        return ToolResult(success=False, output="", error="No command provided")
+
+    safe, reason = _validate_powershell_command(command)
+    if not safe:
+        return ToolResult(success=False, output="", error=reason)
+
+    try:
+        proc = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', command],
+            capture_output=True, text=True, timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+        )
+        output = proc.stdout.strip()
+        error = proc.stderr.strip() if proc.returncode != 0 else None
+
+        if proc.returncode == 0:
+            return ToolResult(success=True, output=output or "(no output)",
+                              data={'return_code': proc.returncode})
+        else:
+            return ToolResult(success=False, output=output,
+                              error=error or f"Exit code {proc.returncode}")
+
+    except subprocess.TimeoutExpired:
+        return ToolResult(success=False, output="",
+                          error=f"Command timed out after {timeout}s")
+    except FileNotFoundError:
+        return ToolResult(success=False, output="",
+                          error="PowerShell not found on this system")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_search_file_content(query: str = "", directory: str = "~",
+                                file_pattern: str = "*.*",
+                                max_results: int = 20) -> ToolResult:
+    """Search for text content inside files (grep-like)."""
+    if not query:
+        return ToolResult(success=False, output="", error="No search query provided")
+
+    try:
+        search_dir = Path(os.path.expanduser(directory)).resolve()
+        if not search_dir.exists():
+            return ToolResult(success=False, output="",
+                              error=f"Directory not found: {directory}")
+
+        try:
+            pattern = re.compile(query, re.IGNORECASE)
+        except re.error:
+            pattern = re.compile(re.escape(query), re.IGNORECASE)
+
+        matches = []
+        for filepath in search_dir.rglob(file_pattern):
+            if len(matches) >= max_results:
+                break
+            if not filepath.is_file():
+                continue
+            # Skip binary/large files
+            try:
+                if filepath.stat().st_size > 10 * 1024 * 1024:  # 10 MB limit
+                    continue
+            except (PermissionError, OSError):
+                continue
+
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line_num, line in enumerate(f, 1):
+                        if len(matches) >= max_results:
+                            break
+                        if pattern.search(line):
+                            matches.append({
+                                'file': str(filepath),
+                                'line': line_num,
+                                'text': line.strip()[:200],
+                            })
+            except (PermissionError, OSError, UnicodeDecodeError):
+                continue
+
+        if not matches:
+            return ToolResult(success=True,
+                              output=f"No matches for '{query}' in {search_dir}")
+
+        lines = [f"Found {len(matches)} match(es) for '{query}':"]
+        for m in matches:
+            lines.append(f"  {m['file']}:{m['line']} — {m['text']}")
+
+        return ToolResult(success=True, output='\n'.join(lines),
+                          data={'matches': matches})
+
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_get_folder_size(path: str = "") -> ToolResult:
+    """Calculate the total size of a directory."""
+    if not path:
+        return ToolResult(success=False, output="", error="No path provided")
+    try:
+        dir_path = Path(os.path.expanduser(path)).resolve()
+        if not dir_path.exists():
+            return ToolResult(success=False, output="", error=f"Path not found: {path}")
+        if not dir_path.is_dir():
+            return ToolResult(success=False, output="", error=f"Not a directory: {path}")
+
+        total_size = 0
+        file_count = 0
+        for f in dir_path.rglob('*'):
+            if f.is_file():
+                try:
+                    total_size += f.stat().st_size
+                    file_count += 1
+                except (PermissionError, OSError):
+                    continue
+
+        if total_size < 1024:
+            size_str = f"{total_size} bytes"
+        elif total_size < 1024 * 1024:
+            size_str = f"{round(total_size/1024, 1)} KB"
+        elif total_size < 1024 * 1024 * 1024:
+            size_str = f"{round(total_size/(1024*1024), 1)} MB"
+        else:
+            size_str = f"{round(total_size/(1024*1024*1024), 2)} GB"
+
+        return ToolResult(success=True,
+                          output=f"{dir_path}: {size_str} ({file_count} files)",
+                          data={'path': str(dir_path), 'size_bytes': total_size,
+                                'file_count': file_count})
+
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_clipboard_read() -> ToolResult:
+    """Read current clipboard text content."""
+    if _sys_ctrl:
+        try:
+            result = _sys_ctrl.get_clipboard_text()
+            return _wrap(result)
+        except Exception:
+            pass
+    # Fallback: use PowerShell
+    try:
+        proc = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', 'Get-Clipboard'],
+            capture_output=True, text=True, timeout=5,
+        )
+        text = proc.stdout.strip()
+        return ToolResult(success=True, output=text or "(clipboard is empty)")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_clipboard_write(text: str = "") -> ToolResult:
+    """Write text to the system clipboard."""
+    if not text:
+        return ToolResult(success=False, output="", error="No text provided")
+    if _sys_ctrl:
+        try:
+            result = _sys_ctrl.set_clipboard_text(text)
+            return _wrap(result)
+        except Exception:
+            pass
+    # Fallback: use PowerShell
+    try:
+        subprocess.run(
+            ['powershell', '-NoProfile', '-Command', f'Set-Clipboard -Value "{text}"'],
+            capture_output=True, text=True, timeout=5,
+        )
+        return ToolResult(success=True, output=f"Copied to clipboard ({len(text)} chars)")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_get_recent_files(directory: str = "~", count: int = 15,
+                             file_type: str = None) -> ToolResult:
+    """Get recently modified files in a directory."""
+    try:
+        search_dir = Path(os.path.expanduser(directory)).resolve()
+        if not search_dir.exists():
+            return ToolResult(success=False, output="",
+                              error=f"Directory not found: {directory}")
+
+        # Get file extension patterns
+        patterns = ['*']
+        if file_type:
+            ft = file_type.lower().strip()
+            if ft in FILE_TYPE_MAP:
+                patterns = FILE_TYPE_MAP[ft]
+            elif ft.startswith('.'):
+                patterns = [f'*{ft}']
+            else:
+                patterns = [f'*.{ft}']
+
+        files = []
+        for p in patterns:
+            for f in search_dir.rglob(p):
+                if f.is_file():
+                    try:
+                        stat = f.stat()
+                        files.append((f, stat.st_mtime, stat.st_size))
+                    except (PermissionError, OSError):
+                        continue
+
+        # Sort by modification time (newest first) and take top N
+        files.sort(key=lambda x: x[1], reverse=True)
+        files = files[:count]
+
+        if not files:
+            return ToolResult(success=True,
+                              output=f"No recent files found in {search_dir}")
+
+        lines = [f"Recent files in {search_dir}:"]
+        for f, mtime, size in files:
+            modified = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+            size_kb = round(size / 1024, 1)
+            size_str = f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb/1024, 1)} MB"
+            lines.append(f"  {f.name} ({size_str}, {modified}) — {f}")
+
+        return ToolResult(success=True, output='\n'.join(lines),
+                          data={'count': len(files)})
+
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+# ============================================================
+# Main wiring function
+# ============================================================
+
+def wire_tool_handlers(registry: ToolRegistry) -> int:
+    """
+    Wire handler functions to all registered tools.
+    Returns count of successfully wired handlers.
+    """
+    handler_map = {
+        # Existing tools
+        'set_volume': _handle_set_volume,
+        'mute': _handle_mute,
+        'set_brightness': _handle_set_brightness,
+        'screenshot': _handle_screenshot,
+        'open_app': _handle_open_app,
+        'close_app': _handle_close_app,
+        'shutdown': _handle_shutdown,
+        'restart': _handle_restart,
+        'lock_screen': _handle_lock_screen,
+        'system_info': _handle_system_info,
+        'toggle_wifi': _handle_toggle_wifi,
+        'minimize_window': _handle_minimize_window,
+        'maximize_window': _handle_maximize_window,
+        'web_search': _handle_web_search,
+        'open_url': _handle_open_url,
+        'play_music': _handle_play_music,
+        'pause_music': _handle_pause_music,
+        'next_song': _handle_next_song,
+        'lights_control': _handle_lights_control,
+        'comet_task': _handle_comet_task,
+        # New tools (AI Command Agent)
+        'find_files': _handle_find_files,
+        'list_directory': _handle_list_directory,
+        'open_path': _handle_open_path,
+        'read_file_preview': _handle_read_file_preview,
+        'get_app_data_paths': _handle_get_app_data_paths,
+        'run_powershell': _handle_run_powershell,
+        'search_file_content': _handle_search_file_content,
+        'get_folder_size': _handle_get_folder_size,
+        'clipboard_read': _handle_clipboard_read,
+        'clipboard_write': _handle_clipboard_write,
+        'get_recent_files': _handle_get_recent_files,
+    }
+
+    wired = 0
+    for tool_name, handler_fn in handler_map.items():
+        tool = registry.get(tool_name)
+        if tool:
+            tool.handler = handler_fn
+            wired += 1
+        else:
+            logger.debug(f"[ToolHandlers] Tool '{tool_name}' not found in registry (skipped)")
+
+    logger.info(f"[ToolHandlers] Wired {wired} tool handlers "
+                f"(sys_ctrl={'OK' if SYS_CTRL_OK else 'N/A'})")
+    return wired

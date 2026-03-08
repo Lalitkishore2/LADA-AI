@@ -1,0 +1,56 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-02-19",
+  "plugins": [
+    {
+      "name": "weather",
+      "version": "1.0.0",
+      "description": "Get current weather and forecasts for any city worldwide",
+      "author": "LADA Team",
+      "category": "utilities",
+      "keywords": ["weather", "temperature", "forecast", "climate"],
+      "download_url": "",
+      "min_lada_version": "7.0.0"
+    },
+    {
+      "name": "notes",
+      "version": "1.0.0",
+      "description": "Create, search, and manage personal notes with tags",
+      "author": "LADA Team",
+      "category": "productivity",
+      "keywords": ["notes", "memo", "reminder", "todo"],
+      "download_url": "",
+      "min_lada_version": "7.0.0"
+    },
+    {
+      "name": "translator",
+      "version": "1.0.0",
+      "description": "Translate text between 100+ languages using AI",
+      "author": "LADA Team",
+      "category": "language",
+      "keywords": ["translate", "language", "translation"],
+      "download_url": "",
+      "min_lada_version": "7.0.0"
+    },
+    {
+      "name": "code_runner",
+      "version": "1.0.0",
+      "description": "Execute Python, JavaScript, and shell code snippets safely",
+      "author": "LADA Team",
+      "category": "development",
+      "keywords": ["code", "run", "execute", "python", "javascript"],
+      "download_url": "",
+      "min_lada_version": "7.0.0"
+    },
+    {
+      "name": "image_gen",
+      "version": "1.0.0",
+      "description": "Generate images using DALL-E, Stable Diffusion, or Flux",
+      "author": "LADA Team",
+      "category": "creative",
+      "keywords": ["image", "generate", "art", "picture", "draw"],
+      "download_url": "",
+      "min_lada_version": "7.0.0"
+    }
+  ]
+}

@@ -1,0 +1,470 @@
+"""
+LADA v7.0 - Export Manager
+Export conversations as PDF, Markdown, DOCX, and JSON
+"""
+
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+
+# Try to import PDF library
+try:
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
+    from reportlab.lib.colors import HexColor
+    REPORTLAB_OK = True
+except ImportError:
+    REPORTLAB_OK = False
+    print("[ExportManager] reportlab not installed - PDF export disabled")
+
+# Try to import DOCX library
+try:
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    DOCX_OK = True
+except ImportError:
+    DOCX_OK = False
+    print("[ExportManager] python-docx not installed - DOCX export disabled")
+
+# Try to import pandas for CSV export
+try:
+    import pandas as pd
+    PANDAS_OK = True
+except ImportError:
+    PANDAS_OK = False
+    pd = None
+    print("[ExportManager] pandas not installed - CSV export will use csv module")
+
+# Fallback to standard csv module
+import csv
+
+
+class ExportManager:
+    """
+    Export conversations to various formats.
+    Supports: JSON, Markdown, PDF, DOCX
+    """
+    
+    def __init__(self, export_dir: str = "exports"):
+        """Initialize export manager."""
+        self.export_dir = Path(export_dir)
+        self.export_dir.mkdir(parents=True, exist_ok=True)
+    
+    def export_conversation(
+        self,
+        conversation: Dict,
+        format: str = "markdown",
+        filename: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Export a conversation to the specified format.
+        
+        Args:
+            conversation: Conversation dict with 'title', 'messages', etc.
+            format: One of 'json', 'markdown', 'md', 'pdf', 'docx'
+            filename: Optional custom filename (without extension)
+            
+        Returns:
+            Path to exported file, or None on failure
+        """
+        format = format.lower()
+        
+        # Generate filename if not provided
+        if not filename:
+            title = conversation.get('title', 'conversation')
+            # Sanitize filename
+            title = "".join(c for c in title if c.isalnum() or c in ' -_')[:50]
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{title}_{timestamp}"
+        
+        if format == 'json':
+            return self._export_json(conversation, filename)
+        elif format in ['markdown', 'md']:
+            return self._export_markdown(conversation, filename)
+        elif format == 'pdf':
+            return self._export_pdf(conversation, filename)
+        elif format == 'docx':
+            return self._export_docx(conversation, filename)
+        elif format == 'csv':
+            return self._export_csv(conversation, filename)
+        else:
+            print(f"[ExportManager] Unknown format: {format}")
+            return None
+    
+    def _export_json(self, conversation: Dict, filename: str) -> str:
+        """Export as JSON."""
+        filepath = self.export_dir / f"{filename}.json"
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(conversation, f, indent=2, ensure_ascii=False, default=str)
+        
+        return str(filepath)
+    
+    def _export_markdown(self, conversation: Dict, filename: str) -> str:
+        """Export as Markdown."""
+        filepath = self.export_dir / f"{filename}.md"
+        
+        title = conversation.get('title', 'Conversation')
+        created = conversation.get('created_at', '')
+        messages = conversation.get('messages', [])
+        
+        lines = [
+            f"# {title}",
+            "",
+            f"*Exported from LADA on {datetime.now().strftime('%Y-%m-%d %H:%M')}*",
+            "",
+            f"**Created:** {created}",
+            f"**Messages:** {len(messages)}",
+            "",
+            "---",
+            ""
+        ]
+        
+        for msg in messages:
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            timestamp = msg.get('timestamp', '')
+            
+            if role == 'user':
+                lines.append(f"### 👤 You")
+            else:
+                lines.append(f"### 🤖 LADA")
+            
+            if timestamp:
+                try:
+                    dt = datetime.fromisoformat(timestamp)
+                    lines.append(f"*{dt.strftime('%I:%M %p')}*")
+                except:
+                    pass
+            
+            lines.append("")
+            lines.append(content)
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        
+        # Add footer
+        lines.extend([
+            "",
+            "*Generated by LADA v7.0 - Local AI Desktop Assistant*"
+        ])
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        
+        return str(filepath)
+    
+    def _export_pdf(self, conversation: Dict, filename: str) -> Optional[str]:
+        """Export as PDF using ReportLab."""
+        if not REPORTLAB_OK:
+            print("[ExportManager] PDF export requires reportlab: pip install reportlab")
+            return None
+        
+        filepath = self.export_dir / f"{filename}.pdf"
+        
+        title = conversation.get('title', 'Conversation')
+        messages = conversation.get('messages', [])
+        
+        # Create PDF document
+        doc = SimpleDocTemplate(
+            str(filepath),
+            pagesize=letter,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=72
+        )
+        
+        # Styles
+        styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            spaceAfter=20,
+            textColor=HexColor('#10a37f')
+        )
+        
+        user_style = ParagraphStyle(
+            'UserMessage',
+            parent=styles['Normal'],
+            fontSize=11,
+            spaceAfter=10,
+            backColor=HexColor('#2f2f2f'),
+            textColor=HexColor('#ececec'),
+            leftIndent=20,
+            rightIndent=20,
+            spaceBefore=5
+        )
+        
+        ai_style = ParagraphStyle(
+            'AIMessage',
+            parent=styles['Normal'],
+            fontSize=11,
+            spaceAfter=10,
+            leftIndent=0,
+            spaceBefore=5
+        )
+        
+        role_style = ParagraphStyle(
+            'RoleLabel',
+            parent=styles['Heading3'],
+            fontSize=12,
+            spaceAfter=5,
+            textColor=HexColor('#10a37f')
+        )
+        
+        # Build content
+        story = []
+        
+        # Title
+        story.append(Paragraph(title, title_style))
+        story.append(Spacer(1, 12))
+        
+        # Metadata
+        meta = f"Exported from LADA on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        story.append(Paragraph(meta, styles['Italic']))
+        story.append(Spacer(1, 20))
+        
+        # Messages
+        for msg in messages:
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            
+            # Escape HTML characters
+            content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            content = content.replace('\n', '<br/>')
+            
+            if role == 'user':
+                story.append(Paragraph("👤 You", role_style))
+                story.append(Paragraph(content, user_style))
+            else:
+                story.append(Paragraph("🤖 LADA", role_style))
+                story.append(Paragraph(content, ai_style))
+            
+            story.append(Spacer(1, 10))
+        
+        # Footer
+        story.append(Spacer(1, 30))
+        footer = "Generated by LADA v7.0 - Local AI Desktop Assistant"
+        story.append(Paragraph(footer, styles['Italic']))
+        
+        # Build PDF
+        doc.build(story)
+        
+        return str(filepath)
+    
+    def _export_docx(self, conversation: Dict, filename: str) -> Optional[str]:
+        """Export as DOCX using python-docx."""
+        if not DOCX_OK:
+            print("[ExportManager] DOCX export requires python-docx: pip install python-docx")
+            return None
+        
+        filepath = self.export_dir / f"{filename}.docx"
+        
+        title = conversation.get('title', 'Conversation')
+        messages = conversation.get('messages', [])
+        
+        # Create document
+        doc = Document()
+        
+        # Title
+        heading = doc.add_heading(title, 0)
+        heading.runs[0].font.color.rgb = RGBColor(16, 163, 127)
+        
+        # Metadata
+        meta = doc.add_paragraph()
+        meta.add_run(f"Exported from LADA on {datetime.now().strftime('%Y-%m-%d %H:%M')}").italic = True
+        
+        doc.add_paragraph()
+        
+        # Messages
+        for msg in messages:
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            
+            # Role header
+            role_para = doc.add_paragraph()
+            role_run = role_para.add_run("👤 You" if role == 'user' else "🤖 LADA")
+            role_run.bold = True
+            role_run.font.color.rgb = RGBColor(16, 163, 127)
+            
+            # Content
+            content_para = doc.add_paragraph(content)
+            if role == 'user':
+                # Indent user messages
+                content_para.paragraph_format.left_indent = Inches(0.5)
+            
+            doc.add_paragraph()
+        
+        # Footer
+        footer = doc.add_paragraph()
+        footer.add_run("Generated by LADA v7.0 - Local AI Desktop Assistant").italic = True
+        
+        # Save
+        doc.save(str(filepath))
+        
+        return str(filepath)
+    
+    def get_available_formats(self) -> List[str]:
+        """Get list of available export formats."""
+        formats = ['json', 'markdown', 'csv']  # CSV always available
+        
+        if REPORTLAB_OK:
+            formats.append('pdf')
+        if DOCX_OK:
+            formats.append('docx')
+        
+        return formats
+    
+    def _export_csv(self, conversation: Dict, filename: str) -> str:
+        """
+        Export conversation as CSV.
+        Uses pandas if available, falls back to csv module.
+        
+        Args:
+            conversation: Conversation dict with messages
+            filename: Output filename without extension
+            
+        Returns:
+            Path to exported CSV file
+        """
+        filepath = self.export_dir / f"{filename}.csv"
+        
+        title = conversation.get('title', 'Conversation')
+        created = conversation.get('created_at', '')
+        messages = conversation.get('messages', [])
+        
+        # Prepare data rows
+        rows = []
+        for idx, msg in enumerate(messages, 1):
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            timestamp = msg.get('timestamp', '')
+            
+            # Clean content for CSV (remove newlines for single cell)
+            content_clean = content.replace('\n', ' | ').replace('\r', '')
+            
+            rows.append({
+                'message_number': idx,
+                'timestamp': timestamp,
+                'role': 'User' if role == 'user' else 'LADA',
+                'content': content_clean,
+                'content_length': len(content)
+            })
+        
+        if PANDAS_OK and pd is not None:
+            # Use pandas for export
+            df = pd.DataFrame(rows)
+            
+            # Add metadata as first rows
+            metadata = pd.DataFrame([
+                {'message_number': '', 'timestamp': '', 'role': 'METADATA', 
+                 'content': f'Title: {title}', 'content_length': ''},
+                {'message_number': '', 'timestamp': '', 'role': 'METADATA', 
+                 'content': f'Created: {created}', 'content_length': ''},
+                {'message_number': '', 'timestamp': '', 'role': 'METADATA', 
+                 'content': f'Messages: {len(messages)}', 'content_length': ''},
+                {'message_number': '', 'timestamp': '', 'role': 'METADATA', 
+                 'content': f'Exported: {datetime.now().strftime("%Y-%m-%d %H:%M")}', 'content_length': ''},
+                {'message_number': '', 'timestamp': '', 'role': '', 
+                 'content': '', 'content_length': ''},  # Empty row separator
+            ])
+            
+            df = pd.concat([metadata, df], ignore_index=True)
+            df.to_csv(filepath, index=False, encoding='utf-8-sig')
+        else:
+            # Fallback to csv module
+            with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                
+                # Write metadata header
+                writer.writerow(['# LADA Conversation Export'])
+                writer.writerow(['# Title:', title])
+                writer.writerow(['# Created:', created])
+                writer.writerow(['# Messages:', len(messages)])
+                writer.writerow(['# Exported:', datetime.now().strftime("%Y-%m-%d %H:%M")])
+                writer.writerow([])  # Empty row
+                
+                # Write column headers
+                writer.writerow(['Message #', 'Timestamp', 'Role', 'Content', 'Length'])
+                
+                # Write data rows
+                for row in rows:
+                    writer.writerow([
+                        row['message_number'],
+                        row['timestamp'],
+                        row['role'],
+                        row['content'],
+                        row['content_length']
+                    ])
+        
+        return str(filepath)
+    
+    def export_multiple(
+        self,
+        conversations: List[Dict],
+        format: str = "markdown"
+    ) -> List[str]:
+        """Export multiple conversations."""
+        exported = []
+        
+        for conv in conversations:
+            result = self.export_conversation(conv, format)
+            if result:
+                exported.append(result)
+        
+        return exported
+
+
+# ============================================================
+# EXAMPLE USAGE
+# ============================================================
+if __name__ == "__main__":
+    print("🚀 Testing ExportManager...")
+    
+    manager = ExportManager(export_dir="exports")
+    
+    # Test conversation
+    test_conv = {
+        'id': 'test-123',
+        'title': 'Python Help Session',
+        'created_at': '2025-12-31T10:00:00',
+        'messages': [
+            {'role': 'user', 'content': 'How do I read a CSV file in Python?', 'timestamp': '2025-12-31T10:00:00'},
+            {'role': 'assistant', 'content': 'You can use pandas:\n\n```python\nimport pandas as pd\ndf = pd.read_csv("file.csv")\n```\n\nOr the csv module for simpler cases.', 'timestamp': '2025-12-31T10:00:05'},
+            {'role': 'user', 'content': 'Thanks!', 'timestamp': '2025-12-31T10:01:00'},
+        ]
+    }
+    
+    print(f"\n📦 Available formats: {manager.get_available_formats()}")
+    
+    # Test JSON export
+    json_path = manager.export_conversation(test_conv, 'json')
+    print(f"✅ JSON: {json_path}")
+    
+    # Test Markdown export
+    md_path = manager.export_conversation(test_conv, 'markdown')
+    print(f"✅ Markdown: {md_path}")
+    
+    # Test PDF export
+    pdf_path = manager.export_conversation(test_conv, 'pdf')
+    if pdf_path:
+        print(f"✅ PDF: {pdf_path}")
+    else:
+        print("⚠️ PDF: Skipped (reportlab not installed)")
+    
+    # Test DOCX export
+    docx_path = manager.export_conversation(test_conv, 'docx')
+    if docx_path:
+        print(f"✅ DOCX: {docx_path}")
+    else:
+        print("⚠️ DOCX: Skipped (python-docx not installed)")
+    
+    print("\n✅ ExportManager test complete!")

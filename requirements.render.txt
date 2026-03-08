@@ -1,0 +1,46 @@
+# LADA - Render.com Cloud Deployment (Lightweight)
+# Stripped of desktop/voice/GUI packages to fit 512MB RAM free tier
+#
+# Install: pip install -r requirements.render.txt
+
+# ============ CORE ============
+python-dotenv>=1.0.0
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# ============ AI BACKENDS ============
+google-genai>=1.0.0              # Google Gemini API (new SDK)
+
+# ============ WEB API SERVER ============
+fastapi>=0.104.0                 # REST API server
+uvicorn[standard]>=0.24.0        # ASGI server (includes websockets support)
+
+# ============ TEXT PROCESSING ============
+fuzzywuzzy>=0.18.0               # Fuzzy string matching
+python-Levenshtein>=0.20.0       # Fast string distance
+markdown>=3.5.1                  # Markdown rendering
+Pygments>=2.17.2                 # Syntax highlighting
+
+# ============ SCHEDULING ============
+schedule>=1.2.0                  # Simple periodic scheduling
+APScheduler>=3.10.0              # Advanced cron-style scheduling
+python-dateutil>=2.8.2           # Date parsing
+
+# ============ DOCUMENT PROCESSING ============
+pdfplumber>=0.10.3               # PDF text extraction
+python-docx>=1.1.0               # Word document read/write
+
+# ============ UTILITIES ============
+tqdm>=4.65.0                     # Progress bars
+humanize>=4.9.0                  # Human-readable formatting
+colorama>=0.4.6                  # Terminal colors
+lxml>=4.9.0                      # XML/HTML parsing
+
+# ============ DATA ============
+pydantic>=2.0.0                  # Data validation (FastAPI dep)
+
+# ============ FILE OPERATIONS ============
+send2trash>=1.8.1                # Safe file deletion
+
+# ============ SECURITY ============
+cryptography>=41.0.7             # File encryption (Fernet/AES)

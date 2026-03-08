@@ -1,0 +1,130 @@
+# LADA - Language Agnostic Digital Assistant
+# Python 3.11+ Required
+#
+# Install: pip install -r requirements.txt
+# Post-install: python -m spacy download en_core_web_sm
+
+# ============ CORE ============
+python-dotenv>=1.0.0
+requests>=2.31.0
+aiohttp>=3.9.0
+psutil>=5.9.6
+
+# ============ GUI ============
+PyQt5>=5.15.10
+
+# ============ AI BACKENDS ============
+google-genai>=1.0.0              # Google Gemini API (new SDK)
+# ollama>=0.1.18                  # Optional: Ollama Python client
+
+# ============ VOICE ============
+pyttsx3>=2.90                    # Offline text-to-speech
+SpeechRecognition>=3.10.0        # Speech-to-text
+gTTS>=2.4.0                     # Google text-to-speech (online)
+pygame>=2.5.2                   # Audio playback for gTTS
+openwakeword>=0.6.0             # Local offline wake word detection (optional)
+
+# ============ SYSTEM CONTROL ============
+pycaw>=20181226                  # Windows audio control
+screen-brightness-control>=0.0.1 # Display brightness
+pyperclip>=1.8.2                 # Clipboard operations
+keyboard>=0.13.5                 # Global hotkeys
+pyautogui>=0.9.54                # GUI automation, screenshots
+
+# ============ BROWSER AUTOMATION ============
+selenium>=4.10.0                 # WebDriver browser control
+beautifulsoup4>=4.12.2           # HTML parsing
+
+# ============ GOOGLE SERVICES ============
+google-api-python-client>=2.108.0 # Gmail, Calendar APIs
+google-auth-oauthlib>=1.1.0       # OAuth2 authentication
+google-auth-httplib2>=0.1.1       # HTTP transport
+
+# ============ NLU & TEXT PROCESSING ============
+spacy>=3.7.2                     # NLU engine, entity extraction
+fuzzywuzzy>=0.18.0               # Fuzzy string matching
+python-Levenshtein>=0.20.0       # Fast string distance
+
+# ============ SCHEDULING ============
+schedule>=1.2.0                  # Simple periodic scheduling
+APScheduler>=3.10.0              # Advanced cron-style scheduling
+python-dateutil>=2.8.2           # Date parsing
+
+# ============ FILE OPERATIONS ============
+send2trash>=1.8.1                # Safe file deletion
+
+# ============ DOCUMENT PROCESSING ============
+pdfplumber>=0.10.3               # PDF text extraction
+python-docx>=1.1.0               # Word document read/write
+reportlab>=4.0.8                 # PDF generation
+PyMuPDF>=1.23.8                  # PDF rendering (fitz)
+
+# ============ SECURITY ============
+cryptography>=41.0.7             # File encryption (Fernet/AES)
+
+# ============ NLP & ANALYSIS ============
+textblob>=0.17.1                 # Sentiment analysis
+Pillow>=10.0.0                   # Image processing
+
+# ============ UTILITIES ============
+tqdm>=4.65.0                     # Progress bars
+humanize>=4.9.0                  # Human-readable formatting
+colorama>=0.4.6                  # Terminal colors
+Pygments>=2.17.2                 # Syntax highlighting
+markdown>=3.5.1                  # Markdown rendering
+lxml>=4.9.0                      # XML/HTML parsing
+
+# ============ WEB API SERVER ============
+fastapi>=0.104.0                 # REST API server
+uvicorn[standard]>=0.24.0        # ASGI server (includes websockets support)
+
+# ============ CODE SANDBOX ============
+RestrictedPython>=7.0            # Safe code execution
+
+# ============ DATA ============
+pandas>=2.0.3                    # Data analysis, CSV export
+
+# ============ OPTIONAL: VECTOR MEMORY ============
+# chromadb>=0.4.22               # Semantic search (requires large install)
+# sentence-transformers>=2.2.2   # Embedding models (requires PyTorch)
+
+# ============ OPTIONAL: ADVANCED VOICE ============
+# faster-whisper>=0.9.0          # Fast offline STT
+# openai-whisper>=20231117       # OpenAI Whisper STT
+# pydub>=0.25.1                  # Audio manipulation
+
+# ============ OPTIONAL: VISION & OCR ============
+# opencv-python>=4.8.0           # Computer vision
+# pytesseract>=0.3.10            # OCR text extraction
+
+# ============ OPTIONAL: AI PROVIDERS ============
+# openai>=1.0.0                  # OpenAI API
+# anthropic>=0.18.0              # Anthropic Claude API
+
+# ============ OPTIONAL: MESSAGING CONNECTORS ============
+# python-telegram-bot>=20.0      # Telegram bot
+# discord.py>=2.3.0              # Discord bot
+# slack-sdk>=3.23.0              # Slack bot
+# pywhatkit>=5.4                 # WhatsApp automation
+
+# ============ OPTIONAL: REAL-TIME VOICE ============
+# livekit>=0.11.0                # LiveKit real-time communication
+# deepgram-sdk>=3.0.0            # Deepgram STT API
+
+# ============ OPTIONAL: IMAGE GENERATION ============
+# stability-sdk>=0.8.0           # Stable Diffusion API
+
+# ============ OPTIONAL: YOUTUBE ============
+# youtube-transcript-api>=0.6.0  # YouTube transcript extraction
+
+# ============ OPTIONAL: BROWSER (PLAYWRIGHT) ============
+# playwright>=1.40.0             # Chromium automation alternative
+
+# ============ TESTING ============
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0
+
+# ============ POST-INSTALL STEPS ============
+# python -m spacy download en_core_web_sm
+# python -m textblob.download_corpora
+# playwright install    (if using playwright)

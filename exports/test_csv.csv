@@ -1,0 +1,8 @@
+﻿message_number,timestamp,role,content,content_length
+,,METADATA,Title: Test CSV Export,
+,,METADATA,Created: ,
+,,METADATA,Messages: 2,
+,,METADATA,Exported: 2026-01-24 02:14,
+,,,,
+1,,User,Test message,12
+2,,LADA,Test response,13

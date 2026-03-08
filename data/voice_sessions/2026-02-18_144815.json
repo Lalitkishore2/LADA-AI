@@ -1,0 +1,62 @@
+[
+  {
+    "role": "user",
+    "message": "Canada",
+    "timestamp": "2026-02-18T14:47:37.324595"
+  },
+  {
+    "role": "assistant",
+    "message": "Opening <app_name>",
+    "timestamp": "2026-02-18T14:48:15.153310"
+  },
+  {
+    "role": "user",
+    "message": "open vs code",
+    "timestamp": "2026-02-18T14:48:31.016681"
+  },
+  {
+    "role": "assistant",
+    "message": "There you go. Opening vs code.",
+    "timestamp": "2026-02-18T14:48:31.028357"
+  },
+  {
+    "role": "user",
+    "message": "create a file name",
+    "timestamp": "2026-02-18T14:48:52.373541"
+  },
+  {
+    "role": "assistant",
+    "message": "Created new_file.txt on your Desktop.",
+    "timestamp": "2026-02-18T14:48:52.384296"
+  },
+  {
+    "role": "user",
+    "message": "where is the location of file",
+    "timestamp": "2026-02-18T14:49:26.167210"
+  },
+  {
+    "role": "assistant",
+    "message": "Can you please specify which file you're looking for?",
+    "timestamp": "2026-02-18T14:49:36.972661"
+  },
+  {
+    "role": "user",
+    "message": "new underscore file.txt on the desktop",
+    "timestamp": "2026-02-18T14:49:50.418347"
+  },
+  {
+    "role": "assistant",
+    "message": "Opening <app_name>",
+    "timestamp": "2026-02-18T14:49:50.424015"
+  },
+  {
+    "role": "user",
+    "message": "open the created new file.txt",
+    "timestamp": "2026-02-18T14:50:16.117052"
+  },
+  {
+    "role": "assistant",
+    "message": "Consider it done. Opening x.",
+    "timestamp": "2026-02-18T14:50:16.459317"
+  }
+]

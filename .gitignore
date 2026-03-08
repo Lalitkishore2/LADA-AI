@@ -1,0 +1,42 @@
+# Virtual environment
+jarvis_env/
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Secrets
+.env
+
+# Logs
+*.log
+logs/
+
+# User data
+data/conversations/
+data/sessions/
+data/vector_memory/
+data/*.json
+data/*.pid
+
+# Node
+node_modules/
+frontend/.next/
+
+# IDE
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

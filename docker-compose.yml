@@ -1,0 +1,114 @@
+version: "3.8"
+
+services:
+  lada:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lada-assistant
+    restart: unless-stopped
+    ports:
+      - "5000:5000"   # API server
+      - "8765:8765"   # Webhook server
+    volumes:
+      - lada-data:/app/data
+      - lada-config:/app/config
+      - lada-logs:/app/logs
+    environment:
+      - LADA_MODE=text
+      - LADA_PORT=5000
+      - ENABLE_VOICE_INPUT=false
+      - ENABLE_VOICE_OUTPUT=false
+      - ENABLE_BROWSER_CONTROL=false
+      - ENABLE_SYSTEM_CONTROL=false
+      - ENABLE_WEBHOOKS=true
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - LOCAL_OLLAMA_URL=${LOCAL_OLLAMA_URL:-http://ollama:11434}
+    depends_on:
+      - ollama
+      - chromadb
+    networks:
+      - lada-net
+
+  # Local LLM server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lada-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - lada-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Vector database
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: lada-chromadb
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - lada-net
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lada-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://lada:8080
+    depends_on:
+      - lada
+    networks:
+      - lada-net
+
+  # Web UI (optional, legacy)
+  lada-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lada-gui
+    restart: unless-stopped
+    ports:
+      - "8081:5000"
+    environment:
+      - LADA_MODE=api
+      - LADA_PORT=5000
+      - LOCAL_OLLAMA_URL=http://ollama:11434
+    depends_on:
+      - ollama
+      - chromadb
+    networks:
+      - lada-net
+    profiles:
+      - gui
+
+volumes:
+  lada-data:
+  lada-config:
+  lada-logs:
+  ollama-models:
+  chroma-data:
+
+networks:
+  lada-net:
+    driver: bridge
