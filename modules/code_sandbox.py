@@ -55,6 +55,18 @@ class ExecutionResult:
     memory_used: Optional[int] = None
 
 
+@dataclass
+class RichExecutionResult:
+    """Result of code execution with rich output (plots, tables)."""
+    success: bool
+    output: str
+    error: Optional[str] = None
+    execution_time: float = 0.0
+    plot_data: Optional[str] = None  # Base64-encoded PNG image
+    table_html: Optional[str] = None  # HTML table for DataFrames
+    has_rich_output: bool = False
+
+
 class CodeSandbox:
     """
     Secure code execution sandbox.
@@ -592,6 +604,120 @@ print(json.dumps({{"output": "\\n".join(_output), "success": True}}))
             'issues': issues,
             'warnings': warnings
         }
+
+    def execute_with_rich_output(
+        self,
+        code: str,
+        language: str = "python",
+        timeout: Optional[float] = None,
+        capture_plots: bool = True
+    ) -> RichExecutionResult:
+        """
+        Execute Python code and capture rich output (matplotlib plots, pandas DataFrames).
+
+        Args:
+            code: Python code to execute
+            language: Must be 'python' for rich output
+            timeout: Execution timeout
+            capture_plots: Whether to capture matplotlib plots
+
+        Returns:
+            RichExecutionResult with plot_data (base64 PNG) and table_html if present
+        """
+        if language.lower() != "python":
+            # Rich output only supported for Python
+            result = self.execute(code, language, timeout=timeout)
+            return RichExecutionResult(
+                success=result.success,
+                output=result.output,
+                error=result.error,
+                execution_time=result.execution_time
+            )
+
+        import base64
+        import uuid
+
+        # Create unique output file for this execution
+        plot_path = self.temp_dir / f"plot_{uuid.uuid4().hex}.png"
+        table_path = self.temp_dir / f"table_{uuid.uuid4().hex}.html"
+
+        # Inject code to capture matplotlib output
+        injected_code = f'''
+import sys
+import io
+_lada_stdout = io.StringIO()
+_lada_orig_stdout = sys.stdout
+
+# Configure matplotlib for headless rendering
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    _lada_has_plt = True
+except ImportError:
+    _lada_has_plt = False
+
+# Capture stdout
+sys.stdout = _lada_stdout
+
+# === USER CODE START ===
+{code}
+# === USER CODE END ===
+
+# Restore stdout
+sys.stdout = _lada_orig_stdout
+_lada_output = _lada_stdout.getvalue()
+
+# Save any matplotlib figures
+if _lada_has_plt and plt.get_fignums():
+    plt.savefig(r'{plot_path}', dpi=100, bbox_inches='tight', facecolor='#1a1a2e')
+    plt.close('all')
+
+# Check for pandas DataFrames in local scope
+try:
+    import pandas as pd
+    for _name, _val in list(locals().items()):
+        if isinstance(_val, pd.DataFrame) and not _name.startswith('_'):
+            _val.to_html(r'{table_path}', classes='dataframe', index=True)
+            break
+except:
+    pass
+
+# Print captured output
+print(_lada_output)
+'''
+
+        # Execute the injected code
+        result = self.execute(injected_code, "python", mode=ExecutionMode.SUBPROCESS, timeout=timeout)
+
+        # Read captured outputs
+        plot_data = None
+        table_html = None
+
+        try:
+            if plot_path.exists():
+                with open(plot_path, 'rb') as f:
+                    plot_data = base64.b64encode(f.read()).decode('utf-8')
+                plot_path.unlink()  # Clean up
+        except Exception:
+            pass
+
+        try:
+            if table_path.exists():
+                table_html = table_path.read_text(encoding='utf-8')
+                table_path.unlink()  # Clean up
+        except Exception:
+            pass
+
+        return RichExecutionResult(
+            success=result.success,
+            output=result.output,
+            error=result.error,
+            execution_time=result.execution_time,
+            plot_data=plot_data,
+            table_html=table_html,
+            has_rich_output=bool(plot_data or table_html)
+        )
 
 
 # ============================================================

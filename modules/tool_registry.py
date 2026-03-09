@@ -760,6 +760,57 @@ def create_agent_tools() -> List[ToolDefinition]:
         permission=PermissionLevel.SAFE,
     ))
 
+    # Git operations (read-only)
+    tools.append(ToolDefinition(
+        name="git",
+        description="Execute read-only git operations: status, log, diff, branch, stash list. Returns git command output.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("operation", "string", "Git operation to perform", required=True,
+                         enum=["status", "log", "diff", "branch", "stash", "show"]),
+            ToolParameter("repo_path", "string", "Path to git repository (default: current directory)", default="."),
+            ToolParameter("args", "string", "Additional git arguments (e.g., '--oneline' for log)", default=""),
+        ],
+        keywords=["git status", "git log", "git diff", "show commits", "git history",
+                   "repository status", "code changes", "git branch"],
+        examples=["show git status", "git log for this project", "show recent commits", "what changed in git"],
+        permission=PermissionLevel.SAFE,
+    ))
+
+    # HTTP requests
+    tools.append(ToolDefinition(
+        name="http_request",
+        description="Make HTTP requests to APIs and web services. Returns response body, status code, and headers.",
+        category=ToolCategory.BROWSER,
+        parameters=[
+            ToolParameter("url", "string", "URL to request", required=True),
+            ToolParameter("method", "string", "HTTP method", default="GET",
+                         enum=["GET", "POST", "PUT", "DELETE", "PATCH"]),
+            ToolParameter("headers", "object", "Request headers as JSON object", default=None),
+            ToolParameter("body", "string", "Request body for POST/PUT/PATCH", default=""),
+            ToolParameter("timeout", "integer", "Request timeout in seconds", default=30),
+        ],
+        keywords=["http request", "api call", "fetch url", "get request", "post request",
+                   "call api", "web request", "rest api"],
+        examples=["fetch data from api", "make http request to url", "call this api endpoint"],
+        permission=PermissionLevel.MODERATE,
+    ))
+
+    # SQLite database queries (read-only)
+    tools.append(ToolDefinition(
+        name="database_query",
+        description="Execute read-only SELECT queries on SQLite databases. Returns query results as a table.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("database", "string", "Path to SQLite database file", required=True),
+            ToolParameter("query", "string", "SQL SELECT query to execute (SELECT only)", required=True),
+        ],
+        keywords=["database query", "sql query", "sqlite", "query database",
+                   "select from", "database search", "sql select"],
+        examples=["query this database", "select from sqlite", "search the database"],
+        permission=PermissionLevel.MODERATE,
+    ))
+
     return tools
 
 

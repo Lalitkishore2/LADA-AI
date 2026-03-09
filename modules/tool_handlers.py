@@ -914,9 +914,10 @@ def _handle_generate_video(prompt: str = "", duration: int = 5, aspect_ratio: st
 
 
 def _handle_execute_code(code: str = "", language: str = "python", timeout: int = 30) -> ToolResult:
-    """Execute code in a secure sandbox."""
+    """Execute code in a secure sandbox with rich output support (plots, tables)."""
     try:
         from modules.code_sandbox import CodeSandbox, ExecutionMode
+
         sandbox = CodeSandbox(timeout=timeout, mode=ExecutionMode.SUBPROCESS)
 
         # Validate first
@@ -926,15 +927,41 @@ def _handle_execute_code(code: str = "", language: str = "python", timeout: int 
             return ToolResult(success=False, output="",
                               error=f"Code validation failed: {issues}")
 
-        result = sandbox.execute(code, language=language, timeout=timeout)
-        output = result.output or "(no output)"
-        if result.success:
-            return ToolResult(success=True,
-                              output=f"Output:\n{output}\n\nExecution time: {result.execution_time:.2f}s",
-                              data={'output': result.output, 'time': result.execution_time})
+        # Use rich output for Python to capture plots/dataframes
+        if language.lower() == "python":
+            result = sandbox.execute_with_rich_output(code, language=language, timeout=timeout)
+            output = result.output or "(no output)"
+
+            if result.success:
+                data = {'output': result.output, 'time': result.execution_time}
+
+                # Include rich output if present
+                if result.has_rich_output:
+                    if result.plot_data:
+                        data['plot_data'] = result.plot_data
+                        output += "\n\n[Plot generated - see inline image]"
+                    if result.table_html:
+                        data['table_html'] = result.table_html
+                        output += "\n\n[DataFrame rendered - see table]"
+
+                return ToolResult(success=True,
+                                  output=f"Output:\n{output}\n\nExecution time: {result.execution_time:.2f}s",
+                                  data=data)
+            else:
+                return ToolResult(success=False, output=output,
+                                  error=result.error or "Execution failed")
         else:
-            return ToolResult(success=False, output=output,
-                              error=result.error or "Execution failed")
+            # Non-Python: use standard execution
+            result = sandbox.execute(code, language=language, timeout=timeout)
+            output = result.output or "(no output)"
+            if result.success:
+                return ToolResult(success=True,
+                                  output=f"Output:\n{output}\n\nExecution time: {result.execution_time:.2f}s",
+                                  data={'output': result.output, 'time': result.execution_time})
+            else:
+                return ToolResult(success=False, output=output,
+                                  error=result.error or "Execution failed")
+
     except ImportError:
         return ToolResult(success=False, output="", error="Code sandbox not available")
     except Exception as e:
@@ -963,6 +990,168 @@ def _handle_read_document(file_path: str = "", summarize: bool = False) -> ToolR
         return ToolResult(success=False, output="", error=result.error)
     except ImportError:
         return ToolResult(success=False, output="", error="Document reader not available (install pymupdf)")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_git(operation: str = "status", repo_path: str = ".", args: str = "") -> ToolResult:
+    """Execute read-only git operations."""
+    import subprocess
+
+    # Only allow read-only operations
+    allowed_ops = ['status', 'log', 'diff', 'branch', 'stash', 'show']
+    if operation not in allowed_ops:
+        return ToolResult(success=False, output="",
+                          error=f"Operation '{operation}' not allowed. Allowed: {', '.join(allowed_ops)}")
+
+    try:
+        # Build command
+        cmd = ['git', operation]
+        if args:
+            cmd.extend(args.split())
+
+        # Add sensible defaults for some operations
+        if operation == 'log' and '--oneline' not in args and '-n' not in args:
+            cmd.extend(['--oneline', '-20'])  # Default to last 20 commits
+        if operation == 'stash':
+            cmd.append('list')  # Only allow stash list
+
+        result = subprocess.run(
+            cmd, cwd=repo_path, capture_output=True, text=True, timeout=30
+        )
+
+        output = result.stdout.strip() or "(no output)"
+        if result.returncode == 0:
+            return ToolResult(success=True, output=output,
+                              data={'operation': operation, 'repo': repo_path})
+        else:
+            error = result.stderr.strip() or f"git {operation} failed"
+            return ToolResult(success=False, output=output, error=error)
+
+    except subprocess.TimeoutExpired:
+        return ToolResult(success=False, output="", error="Git command timed out (30s)")
+    except FileNotFoundError:
+        return ToolResult(success=False, output="", error="Git not found. Is git installed?")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_http_request(url: str = "", method: str = "GET", headers: dict = None,
+                         body: str = "", timeout: int = 30) -> ToolResult:
+    """Make HTTP requests to APIs."""
+    import urllib.request
+    import urllib.error
+    import json as json_mod
+
+    if not url:
+        return ToolResult(success=False, output="", error="URL is required")
+
+    # Validate URL (basic check)
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+
+    try:
+        # Build request
+        req = urllib.request.Request(url, method=method.upper())
+
+        # Add headers
+        default_headers = {'User-Agent': 'LADA-AI/1.0'}
+        if headers:
+            default_headers.update(headers)
+        for key, val in default_headers.items():
+            req.add_header(key, val)
+
+        # Add body for POST/PUT/PATCH
+        data = None
+        if body and method.upper() in ['POST', 'PUT', 'PATCH']:
+            data = body.encode('utf-8')
+            if 'Content-Type' not in default_headers:
+                req.add_header('Content-Type', 'application/json')
+
+        # Make request
+        with urllib.request.urlopen(req, data=data, timeout=timeout) as response:
+            status_code = response.getcode()
+            response_body = response.read().decode('utf-8', errors='replace')
+
+            # Truncate very long responses
+            if len(response_body) > 5000:
+                response_body = response_body[:5000] + "\n... (truncated)"
+
+            return ToolResult(
+                success=True,
+                output=f"Status: {status_code}\n\n{response_body}",
+                data={'status': status_code, 'url': url, 'method': method}
+            )
+
+    except urllib.error.HTTPError as e:
+        return ToolResult(success=False, output="",
+                          error=f"HTTP {e.code}: {e.reason}")
+    except urllib.error.URLError as e:
+        return ToolResult(success=False, output="",
+                          error=f"URL Error: {e.reason}")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_database_query(database: str = "", query: str = "") -> ToolResult:
+    """Execute read-only SELECT queries on SQLite databases."""
+    import sqlite3
+
+    if not database:
+        return ToolResult(success=False, output="", error="Database path is required")
+    if not query:
+        return ToolResult(success=False, output="", error="SQL query is required")
+
+    # Security: Only allow SELECT queries (read-only)
+    query_upper = query.strip().upper()
+    if not query_upper.startswith('SELECT'):
+        return ToolResult(success=False, output="",
+                          error="Only SELECT queries allowed (read-only)")
+
+    # Block dangerous keywords
+    dangerous = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE', 'EXEC']
+    for word in dangerous:
+        if word in query_upper:
+            return ToolResult(success=False, output="",
+                              error=f"Keyword '{word}' not allowed in query")
+
+    try:
+        # Check if database exists
+        if not os.path.exists(database):
+            return ToolResult(success=False, output="",
+                              error=f"Database not found: {database}")
+
+        # Execute query
+        conn = sqlite3.connect(database, timeout=10)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return ToolResult(success=True, output="Query returned no results.",
+                              data={'rows': 0})
+
+        # Format as table
+        columns = rows[0].keys()
+        header = ' | '.join(columns)
+        separator = '-+-'.join(['-' * len(c) for c in columns])
+
+        lines = [header, separator]
+        for row in rows[:100]:  # Limit to 100 rows
+            line = ' | '.join(str(row[c]) for c in columns)
+            lines.append(line)
+
+        if len(rows) > 100:
+            lines.append(f"... ({len(rows)} total rows, showing first 100)")
+
+        output = '\n'.join(lines)
+        return ToolResult(success=True, output=output,
+                          data={'rows': len(rows), 'columns': list(columns)})
+
+    except sqlite3.Error as e:
+        return ToolResult(success=False, output="", error=f"SQLite error: {e}")
     except Exception as e:
         return ToolResult(success=False, output="", error=str(e))
 
@@ -1015,6 +1204,10 @@ def wire_tool_handlers(registry: ToolRegistry) -> int:
         'generate_video': _handle_generate_video,
         'execute_code': _handle_execute_code,
         'read_document': _handle_read_document,
+        # Extended tools (Phase 6)
+        'git': _handle_git,
+        'http_request': _handle_http_request,
+        'database_query': _handle_database_query,
     }
 
     wired = 0

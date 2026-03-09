@@ -748,13 +748,27 @@ class AgentExecutor(BaseExecutor):
             return True, f"Code blocked for safety: {issues}"
 
         try:
-            result = sandbox.execute(code, language=language)
-            if result.success:
-                output = result.output or "(no output)"
-                return True, f"Code executed ({result.execution_time:.2f}s):\n```\n{output}\n```"
+            # Use rich output for Python to capture plots/dataframes
+            if language == "python" and hasattr(sandbox, 'execute_with_rich_output'):
+                result = sandbox.execute_with_rich_output(code, language=language)
+                if result.success:
+                    output = result.output or "(no output)"
+                    # Return PLOT: format if plot data is present
+                    if result.has_rich_output and result.plot_data:
+                        return True, f"PLOT:{result.plot_data}\n\n{output}"
+                    return True, f"Code executed ({result.execution_time:.2f}s):\n```\n{output}\n```"
+                else:
+                    error = result.error or "Unknown error"
+                    return True, f"Execution failed: {error}"
             else:
-                error = result.error or "Unknown error"
-                return True, f"Execution failed: {error}"
+                # Standard execution for non-Python or if rich output not available
+                result = sandbox.execute(code, language=language)
+                if result.success:
+                    output = result.output or "(no output)"
+                    return True, f"Code executed ({result.execution_time:.2f}s):\n```\n{output}\n```"
+                else:
+                    error = result.error or "Unknown error"
+                    return True, f"Execution failed: {error}"
         except Exception as e:
             logger.error(f"[AgentExecutor] Code execution error: {e}")
             return True, f"Code execution error: {e}"

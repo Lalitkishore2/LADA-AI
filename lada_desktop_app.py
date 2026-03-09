@@ -223,6 +223,18 @@ except Exception:
     CostTracker = None
     COST_TRACKER_OK = False
 
+# Proactive agent for intelligent suggestions
+try:
+    from modules.proactive_agent import ProactiveAgent, Suggestion, SuggestionPriority, get_proactive_agent
+    PROACTIVE_AGENT_OK = True
+except Exception as e:
+    ProactiveAgent = None
+    Suggestion = None
+    SuggestionPriority = None
+    get_proactive_agent = None
+    PROACTIVE_AGENT_OK = False
+    print(f"[LADA] ProactiveAgent not loaded: {e}")
+
 
 # ============ Settings Dialog ============
 
@@ -1591,6 +1603,24 @@ class RichTextLabel(QTextBrowser):
                     <a href="file:///{video_url}" style="color: #7c3aed; text-decoration: none;">
                         📁 {video_path.split('/')[-1].split('\\\\')[-1]}
                     </a>
+                    {caption_html}
+                </div>
+            '''
+            self.setHtml(html)
+        elif is_ai and text.startswith("PLOT:"):
+            # Inline matplotlib plot rendering (base64-encoded PNG)
+            lines = text.split("\n", 1)
+            plot_b64 = lines[0].replace("PLOT:", "").strip()
+            caption = lines[1].strip() if len(lines) > 1 else ""
+            if caption and MARKDOWN_OK and _md_renderer:
+                caption_html = _md_renderer.render(caption)
+            else:
+                caption_html = f"<p style='color: #888; font-size: 12px;'>{caption}</p>" if caption else ""
+            # Render base64 image directly
+            html = f'''
+                <div style="padding: 12px; background: #1a1a2e; border-radius: 12px; border: 1px solid #333;">
+                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #10b981;">📊 <b>Code Output</b></p>
+                    <img src="data:image/png;base64,{plot_b64}" style="max-width: 100%; border-radius: 8px;">
                     {caption_html}
                 </div>
             '''
@@ -3212,6 +3242,17 @@ class LadaApp(QMainWindow):
                 persist_path="data/cost_history.json"
             )
 
+        # Proactive agent — intelligent suggestions and notifications
+        self._proactive_agent = None
+        if PROACTIVE_AGENT_OK:
+            try:
+                self._proactive_agent = get_proactive_agent(jarvis_core=self.jarvis)
+                self._proactive_agent.register_callback(self._on_proactive_suggestion)
+                self._proactive_agent.start()
+                print("[LADA] Proactive Agent initialized and started")
+            except Exception as e:
+                logger.warning(f"[LADA] Proactive Agent init failed: {e}")
+
         print("[LADA] Ready.")
 
         # Refresh model/status UI after heavy components are initialized.
@@ -4523,11 +4564,19 @@ class LadaApp(QMainWindow):
                 except:
                     pass
             print("[LADA] Alexa services stopped")
-        
+
+        # Stop proactive agent
+        if hasattr(self, '_proactive_agent') and self._proactive_agent:
+            try:
+                self._proactive_agent.stop()
+                print("[LADA] Proactive Agent stopped")
+            except:
+                pass
+
         # Hide tray icon
         if hasattr(self, 'tray_icon'):
             self.tray_icon.hide()
-        
+
         QApplication.quit()
     
     def _check_face_auth(self):
@@ -6001,6 +6050,43 @@ If not specified, use reasonable defaults. Return ONLY the JSON."""
         self._set_v(VState.IDLE)
         if self.vlay.isVisible():
             QTimer.singleShot(1200, self._listen)
+
+    def _on_proactive_suggestion(self, suggestion):
+        """
+        Handle proactive suggestions from the ProactiveAgent.
+        Displays as a notification or chat message based on priority.
+        """
+        if suggestion is None:
+            return
+
+        try:
+            title = getattr(suggestion, 'title', 'Suggestion')
+            message = getattr(suggestion, 'message', '')
+            priority = getattr(suggestion, 'priority', None)
+            action = getattr(suggestion, 'action', None)
+
+            # Critical/High priority: Show as system notification + chat
+            if priority and hasattr(priority, 'value') and priority.value <= 2:
+                # Show system tray notification
+                if hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
+                    self.tray_icon.showMessage(
+                        f"LADA: {title}",
+                        message[:200],
+                        QSystemTrayIcon.Information,
+                        5000
+                    )
+                # Also add to chat
+                self.chat.add("assistant", f"💡 **{title}**\n\n{message}")
+            else:
+                # Normal/Low priority: Just add to chat
+                self.chat.add("assistant", f"💡 {title}: {message}")
+
+            # If there's an action, offer to execute it
+            if action:
+                logger.info(f"[ProactiveAgent] Suggestion action available: {action}")
+
+        except Exception as e:
+            logger.warning(f"[LADA] Proactive suggestion display error: {e}")
 
     def closeEvent(self, e):
         """Minimize to system tray instead of closing"""
