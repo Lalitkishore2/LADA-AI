@@ -412,6 +412,14 @@ Complete 6-phase refactoring of the LADA codebase. See `LADA-REFACTOR-PLAN.md` f
 
 Comprehensive enhancement to make LADA a best-in-class AI assistant, surpassing competitors like OpenClaw, Open Interpreter, Claude Cowork, and AutoGPT.
 
+**Phase 1 - SeeAct-Style Visual Grounding:**
+- Added Set-of-Mark (SoM) prompting to `visual_grounding.py` for precise element detection
+- New methods: `_annotate_screenshot_with_markers()`, `find_element_som()`, `identify_elements_som()`
+- Edge detection identifies interactive regions, numbered markers overlaid on screenshot
+- Vision model identifies marker number instead of estimating coordinates directly
+- Integrated into Comet agent for SoM-first click targeting with fallback chain
+- Files: `modules/visual_grounding.py`, `modules/comet_agent.py`
+
 **Phase 3 - Full Memory Integration:** Vector memory (`vector_memory.py`) and RAG engine (`rag_engine.py`) already fully wired into AI router. Every AI conversation enriched with semantic memory (800 tokens) and document RAG (1,000 tokens). Conversations stored with importance scoring.
 
 **Phase 4 - Proactive Intelligence Activation:**

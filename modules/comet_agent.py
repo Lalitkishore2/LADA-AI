@@ -40,6 +40,12 @@ except ImportError:
     SCREENSHOT_OK = False
 
 try:
+    from modules.visual_grounding import VisualGrounder
+    VISUAL_GROUNDING_OK = True
+except ImportError:
+    VISUAL_GROUNDING_OK = False
+
+try:
     import pyautogui
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.3
@@ -145,6 +151,7 @@ class CometAgent:
         self.gui: Optional[GUIAutomator] = None
         self.screen_vision: Optional[ScreenVision] = None
         self.screenshot_analyzer: Optional[ScreenshotAnalyzer] = None
+        self.visual_grounder: Optional[VisualGrounder] = None
 
         # State tracking
         self.current_task: Optional[str] = None
@@ -155,6 +162,7 @@ class CometAgent:
         self._pause_event = threading.Event()
         self._pause_event.set()  # Set = not paused (clear = paused)
         self.click_effect_callback = None  # Optional callable(x, y) for click visual feedback
+        self._current_screenshot_path: Optional[str] = None  # Last captured screenshot for SoM
 
         self._initialize_components()
         
@@ -183,6 +191,12 @@ class CometAgent:
                 self.screenshot_analyzer = ScreenshotAnalyzer()
             except Exception:
                 pass
+
+        if VISUAL_GROUNDING_OK:
+            try:
+                self.visual_grounder = VisualGrounder()
+            except Exception:
+                pass
                 
     def _capture_screen_state(self) -> ScreenState:
         """SEE: Capture and analyze current screen state"""
@@ -196,10 +210,32 @@ class CometAgent:
                 state.screenshot_path = screenshot_path
                 screenshot_taken = True
 
-                # Analyze screenshot for elements
-                analysis = self.screenshot_analyzer.analyze_screenshot(screenshot_path)
-                if analysis:
-                    state.detected_elements = analysis.get('elements', [])
+                # Try visual grounding with SoM first (more accurate)
+                if self.visual_grounder:
+                    try:
+                        elements = self.visual_grounder.identify_elements_som(
+                            screenshot_path, task_description=self.current_task or ""
+                        )
+                        if elements:
+                            state.detected_elements = [
+                                {
+                                    'label': e.label,
+                                    'type': e.element_type,
+                                    'x': e.x, 'y': e.y,
+                                    'width': e.width, 'height': e.height,
+                                    'center': e.center,
+                                    'confidence': e.confidence,
+                                }
+                                for e in elements
+                            ]
+                    except Exception:
+                        pass
+
+                # Fallback: Analyze screenshot for elements with OCR
+                if not state.detected_elements:
+                    analysis = self.screenshot_analyzer.analyze_screenshot(screenshot_path)
+                    if analysis:
+                        state.detected_elements = analysis.get('elements', [])
             except Exception:
                 pass
 
@@ -427,7 +463,28 @@ If the task cannot be completed, use action="error" with reasoning.
                                 pass
                         return True, f"Clicked at ({x}, {y})"
                     else:
-                        # Try to find by text/label
+                        # Try SoM-based visual grounding first (most accurate)
+                        if self.visual_grounder and self._current_screenshot_path:
+                            try:
+                                element = self.visual_grounder.find_element_som(
+                                    self._current_screenshot_path, action.target
+                                )
+                                if element and element.confidence > 0.4:
+                                    cx, cy = element.center
+                                    if self.gui:
+                                        self.gui.click(cx, cy)
+                                    elif PYAUTOGUI_OK:
+                                        pyautogui.click(cx, cy)
+                                    if self.click_effect_callback:
+                                        try:
+                                            self.click_effect_callback(cx, cy)
+                                        except Exception:
+                                            pass
+                                    return True, f"Clicked '{action.target}' at ({cx}, {cy}) [SoM]"
+                            except Exception as e:
+                                logger.debug(f"[CometAgent] SoM visual grounding failed: {e}")
+
+                        # Fallback: Try to find by text/label with GUI automator
                         if self.gui:
                             success = self.gui.click_text(action.target)
                             if success:
@@ -701,6 +758,7 @@ If the task cannot be completed, use action="error" with reasoning.
                 # 1. SEE - Capture current state
                 self._report_progress(steps, max_steps, 'see', 'Analyzing screen...')
                 current_state = self._capture_screen_state()
+                self._current_screenshot_path = current_state.screenshot_path  # Store for SoM
                 self._report_progress(steps, max_steps, 'see',
                                       f'Window: {current_state.active_window or "Desktop"}',
                                       current_state.screenshot_path)
