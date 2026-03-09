@@ -870,6 +870,104 @@ def _handle_get_recent_files(directory: str = "~", count: int = 15,
 
 
 # ============================================================
+# Handlers for gap-closing tools (image gen, code sandbox, doc reader)
+# ============================================================
+
+def _handle_generate_image(prompt: str = "", size: str = "1024x1024") -> ToolResult:
+    """Generate an AI image from a text prompt."""
+    try:
+        from modules.image_generation import get_image_generator
+        gen = get_image_generator()
+        if not gen.is_available():
+            return ToolResult(success=False, output="",
+                              error="No image generation backend available. Set STABILITY_API_KEY or GEMINI_API_KEY.")
+        result = gen.generate(prompt, size=size)
+        if result:
+            return ToolResult(success=True,
+                              output=f"Image generated: {result['path']} (backend: {result['backend']})",
+                              data=result)
+        return ToolResult(success=False, output="", error="Image generation failed — backend returned no image")
+    except ImportError:
+        return ToolResult(success=False, output="", error="Image generation module not available")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_generate_video(prompt: str = "", duration: int = 5, aspect_ratio: str = "16:9") -> ToolResult:
+    """Generate an AI video from a text prompt."""
+    try:
+        from modules.video_generation import get_video_generator
+        gen = get_video_generator()
+        if not gen.is_available():
+            return ToolResult(success=False, output="",
+                              error="No video generation backend available. Set STABILITY_API_KEY or GEMINI_API_KEY.")
+        result = gen.generate(prompt, duration=duration, aspect_ratio=aspect_ratio)
+        if result:
+            return ToolResult(success=True,
+                              output=f"Video generated: {result['path']} (backend: {result['backend']}, {result.get('duration', duration)}s)",
+                              data=result)
+        return ToolResult(success=False, output="", error="Video generation failed — backend returned no video")
+    except ImportError:
+        return ToolResult(success=False, output="", error="Video generation module not available")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_execute_code(code: str = "", language: str = "python", timeout: int = 30) -> ToolResult:
+    """Execute code in a secure sandbox."""
+    try:
+        from modules.code_sandbox import CodeSandbox, ExecutionMode
+        sandbox = CodeSandbox(timeout=timeout, mode=ExecutionMode.SUBPROCESS)
+
+        # Validate first
+        validation = sandbox.validate_code(code, language)
+        if not validation.get('safe', True):
+            issues = '; '.join(validation.get('issues', ['Unknown safety issue']))
+            return ToolResult(success=False, output="",
+                              error=f"Code validation failed: {issues}")
+
+        result = sandbox.execute(code, language=language, timeout=timeout)
+        output = result.output or "(no output)"
+        if result.success:
+            return ToolResult(success=True,
+                              output=f"Output:\n{output}\n\nExecution time: {result.execution_time:.2f}s",
+                              data={'output': result.output, 'time': result.execution_time})
+        else:
+            return ToolResult(success=False, output=output,
+                              error=result.error or "Execution failed")
+    except ImportError:
+        return ToolResult(success=False, output="", error="Code sandbox not available")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_read_document(file_path: str = "", summarize: bool = False) -> ToolResult:
+    """Read a PDF, Word, or text document."""
+    try:
+        from modules.document_reader import DocumentReader
+        reader = DocumentReader()
+        if not reader.can_read(file_path):
+            return ToolResult(success=False, output="",
+                              error=f"Unsupported format. Supported: {', '.join(reader.SUPPORTED_FORMATS.keys())}")
+        result = reader.read_document(file_path, summarize=summarize)
+        if result.success:
+            info = result.info
+            output = f"Document: {info.title} ({info.format}, {info.page_count} pages)\n"
+            if result.summary:
+                output += f"Summary: {result.summary}\n\n"
+            text = result.full_text[:3000] if len(result.full_text) > 3000 else result.full_text
+            output += text
+            return ToolResult(success=True, output=output,
+                              data={'title': info.title, 'pages': info.page_count,
+                                    'words': len(result.full_text.split())})
+        return ToolResult(success=False, output="", error=result.error)
+    except ImportError:
+        return ToolResult(success=False, output="", error="Document reader not available (install pymupdf)")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+# ============================================================
 # Main wiring function
 # ============================================================
 
@@ -912,6 +1010,11 @@ def wire_tool_handlers(registry: ToolRegistry) -> int:
         'clipboard_read': _handle_clipboard_read,
         'clipboard_write': _handle_clipboard_write,
         'get_recent_files': _handle_get_recent_files,
+        # Gap-closing tools
+        'generate_image': _handle_generate_image,
+        'generate_video': _handle_generate_video,
+        'execute_code': _handle_execute_code,
+        'read_document': _handle_read_document,
     }
 
     wired = 0

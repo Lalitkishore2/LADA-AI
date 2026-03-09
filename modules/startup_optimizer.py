@@ -177,7 +177,7 @@ def create_optimized_core():
     # Register all module factories
     module_factories = {
         'nlu_engine': lambda: __import__('modules.nlu_engine', fromlist=['NLUEngine']).NLUEngine(),
-        'memory_system': lambda: __import__('modules.memory_system', fromlist=['MemorySystem']).MemorySystem(),
+        'memory_system': lambda: __import__('lada_memory', fromlist=['MemorySystem']).MemorySystem(),
         'workflow_engine': lambda: __import__('modules.workflow_engine', fromlist=['WorkflowEngine']).WorkflowEngine(),
         'window_manager': lambda: __import__('modules.window_manager', fromlist=['WindowManager']).WindowManager(),
         'gui_automator': lambda: __import__('modules.gui_automator', fromlist=['GUIAutomator']).GUIAutomator(),

@@ -15,7 +15,7 @@ except ImportError:
     SensitiveDataDetector = None
 
 try:
-    from .memory_system import MemorySystem
+    from lada_memory import MemorySystem
 except ImportError:
     MemorySystem = None
 
@@ -57,7 +57,7 @@ except ImportError:
     FileOperation = None
 
 try:
-    from .browser_control import BrowserControl
+    from .browser_automation import CometBrowserAgent as BrowserControl
 except ImportError:
     BrowserControl = None
 

@@ -698,6 +698,68 @@ def create_agent_tools() -> List[ToolDefinition]:
         permission=PermissionLevel.SAFE,
     ))
 
+    # Image generation
+    tools.append(ToolDefinition(
+        name="generate_image",
+        description="Generate an AI image from a text prompt using Stability AI or Gemini Imagen. Returns the file path of the generated image.",
+        category=ToolCategory.MEDIA,
+        parameters=[
+            ToolParameter("prompt", "string", "Description of the image to generate", required=True),
+            ToolParameter("size", "string", "Image size (e.g., '1024x1024')", default="1024x1024"),
+        ],
+        keywords=["generate image", "create image", "draw", "imagine", "ai art", "picture",
+                   "make image", "generate picture"],
+        examples=["generate an image of a cat", "draw a sunset", "create art of mountains"],
+        permission=PermissionLevel.SAFE,
+    ))
+
+    # Video generation
+    tools.append(ToolDefinition(
+        name="generate_video",
+        description="Generate an AI video from a text prompt using Google Veo or Stability AI. Returns the file path of the generated video.",
+        category=ToolCategory.MEDIA,
+        parameters=[
+            ToolParameter("prompt", "string", "Description of the video to generate", required=True),
+            ToolParameter("duration", "integer", "Video duration in seconds (default 5)", default=5),
+            ToolParameter("aspect_ratio", "string", "Aspect ratio: 16:9, 9:16, or 1:1", default="16:9"),
+        ],
+        keywords=["generate video", "create video", "make video", "ai video", "video of",
+                   "animate", "generate animation"],
+        examples=["generate a video of waves crashing", "create video of a sunset", "make a video of fireworks"],
+        permission=PermissionLevel.SAFE,
+    ))
+
+    # Code execution
+    tools.append(ToolDefinition(
+        name="execute_code",
+        description="Execute Python, JavaScript, or PowerShell code in a secure sandbox. Returns stdout output and any errors.",
+        category=ToolCategory.AGENT,
+        parameters=[
+            ToolParameter("code", "string", "Code to execute", required=True),
+            ToolParameter("language", "string", "Programming language: python, javascript, powershell", default="python"),
+            ToolParameter("timeout", "integer", "Max execution time in seconds", default=30),
+        ],
+        keywords=["run code", "execute code", "python", "javascript", "run python",
+                   "run script", "code", "calculate"],
+        examples=["run this python code", "execute this script", "calculate using python"],
+        permission=PermissionLevel.MODERATE,
+    ))
+
+    # Document reading
+    tools.append(ToolDefinition(
+        name="read_document",
+        description="Read a PDF, Word (.docx), or text document. Returns text content, metadata, page count, and optionally a summary.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("file_path", "string", "Path to the document file", required=True),
+            ToolParameter("summarize", "boolean", "Generate an AI summary of the document", default=False),
+        ],
+        keywords=["read document", "read pdf", "open document", "read file",
+                   "summarize document", "analyze document"],
+        examples=["read this PDF", "summarize document.pdf", "open resume.docx"],
+        permission=PermissionLevel.SAFE,
+    ))
+
     return tools
 
 

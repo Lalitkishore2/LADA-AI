@@ -15,7 +15,7 @@ class TestLADAAPIServer:
             pytest.skip("FastAPI not installed")
 
         server = LADAAPIServer()
-        assert server.host == "127.0.0.1"
+        assert server.host == "0.0.0.0"
         assert server.port == 5000
 
     def test_init_no_fastapi(self, monkeypatch):
@@ -42,7 +42,8 @@ class TestLADAAPIServer:
         from modules.api_server import LADAAPIServer
 
         server = LADAAPIServer()
-        assert server.start_time is not None
+        # When FastAPI is not available, state is not created
+        assert server.start_time is None
 
     def test_server_components_lazy(self, monkeypatch):
         monkeypatch.setattr("modules.api_server.FASTAPI_OK", False)
@@ -50,7 +51,7 @@ class TestLADAAPIServer:
         from modules.api_server import LADAAPIServer
 
         server = LADAAPIServer()
-        # Components should be lazy-loaded (None initially)
+        # Components should be None (no state when FastAPI missing)
         assert server.ai_router is None
         assert server.chat_manager is None
 

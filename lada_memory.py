@@ -484,6 +484,65 @@ class MemorySystem:
             'languages_used': dict(self.stats['languages_used'])
         }
     
+    # ============================================================
+    # Backward-compatible API (matches modules/memory_system.py)
+    # Used by lada_jarvis_core.py
+    # ============================================================
+
+    def remember(self, key_or_role: str, value_or_content=None, **kwargs):
+        """Backward-compatible remember method.
+
+        Supports both old API: remember(key, value)
+        and new API: remember(role, content, language=, metadata=)
+        """
+        if value_or_content is None:
+            return
+        # If called with role/content pattern (new API), delegate to parent
+        if key_or_role in ('user', 'assistant', 'system'):
+            language = kwargs.get('language', 'en')
+            metadata = kwargs.get('metadata', None)
+            msg = ConversationMessage(
+                role=key_or_role,
+                content=str(value_or_content),
+                language=language,
+                metadata=metadata or {},
+            )
+            self.current_conversation.append(msg)
+            self.stats['total_messages'] += 1
+            return
+        # Old API: remember(key, value), store as a fact
+        self.store_fact(key_or_role, value_or_content, category='command_history')
+
+    def learn_response(self, query: str, response: str):
+        """Learn a query→response pattern for fast recall."""
+        key = f"learned:{query.lower().strip()}"
+        self.store_fact(key, {
+            'response': response,
+            'learned_at': datetime.now().isoformat(),
+        }, category='learned_responses')
+
+    def get_learned(self, query: str) -> Optional[str]:
+        """Get a previously learned response for a query."""
+        key = f"learned:{query.lower().strip()}"
+        entry = self.recall_fact(key, category='learned_responses')
+        if entry and isinstance(entry, dict):
+            return entry.get('response')
+        return None
+
+    def get_routine(self, routine_name: str) -> Optional[List[str]]:
+        """Get a stored routine's commands."""
+        entry = self.recall_fact(f"routine:{routine_name}", category='routines')
+        if entry and isinstance(entry, dict):
+            return entry.get('commands')
+        return None
+
+    def create_routine(self, routine_name: str, commands: List[str]):
+        """Create/update a named routine."""
+        self.store_fact(f"routine:{routine_name}", {
+            'commands': commands,
+            'created_at': datetime.now().isoformat(),
+        }, category='routines')
+
     def shutdown(self) -> None:
         """Clean shutdown - save everything"""
         logger.info("Memory system shutting down...")

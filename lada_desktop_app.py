@@ -708,210 +708,15 @@ Path("data/conversations").mkdir(parents=True, exist_ok=True)
 logging.basicConfig(filename='logs/lada_gui.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-# Colors - LADA Unified Palette (matching web app)
-BG_MAIN = "#0f0f0f"    # Main background - deep dark (matches web --bg)
-BG_SIDE = "#0a0a0a"    # Sidebar - deepest dark (matches web --surface)
-BG_INPUT = "#1a1a1a"   # Input field background (matches web --surface2)
-BG_HOVER = "#2a2a2a"   # Hover state
-BG_CARD = "#1a1a1a"    # Card / bubble / elevated surface
-BG_SURFACE = "#141414" # Raised surface (panels, overlays)
-TEXT = "#e8e8e8"       # Primary text - soft white
-TEXT_DIM = "#9a9a9a"   # Secondary / dimmed text
-GREEN = "#7c3aed"      # Purple accent (matches web --accent)
-ACCENT = GREEN         # Canonical name for the accent color
-ACCENT_GRADIENT_END = "#6d28d9"  # Darker purple for gradient end
-ACCENT_DARK = ACCENT_GRADIENT_END  # Alias
-ACCENT_LIGHT = "rgba(124,58,237,0.15)"  # Light accent for hover states
-BLUE = "#3b82f6"       # Blue accent
-PURPLE = "#9b59b6"     # Purple accent (legacy)
-RED = "#ef4444"        # Error red
-BORDER = "#252525"     # Border color - subtle separator
-BORDER_FOCUS = "#7c3aed"  # Focus ring color - purple accent
-
-# Typography
-FONT_FAMILY = "Segoe UI, -apple-system, Inter, Roboto, Arial, sans-serif"
-FONT_HEADING = "Segoe UI Semibold"
-FONT_SIZE_SM = 12
-FONT_SIZE_MD = 14
-FONT_SIZE_LG = 16
-FONT_SIZE_XL = 28
-
-# Semantic colors
-SUCCESS = "#22c55e"    # Green for success states
-WARNING = "#f59e0b"    # Amber for warnings
-INFO = BLUE            # Blue for informational
-
-# ═══ Global QSS Theme ═══
-# Applied via app.setStyleSheet(GLOBAL_QSS) — cascades to ALL child widgets.
-# This eliminates most inline setStyleSheet() calls.
-GLOBAL_QSS = f"""
-/* ═══ Base ═══ */
-QMainWindow, QDialog {{
-    background: {BG_MAIN}; color: {TEXT};
-    font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_MD}px;
-}}
-QFrame {{ background: transparent; border: none; }}
-QLabel {{ color: {TEXT}; background: transparent; }}
-
-/* ═══ Scrollbars ═══ */
-QScrollBar:vertical {{
-    background: transparent; width: 6px; margin: 0;
-}}
-QScrollBar::handle:vertical {{
-    background: rgba(255,255,255,0.12); border-radius: 3px; min-height: 30px;
-}}
-QScrollBar::handle:vertical:hover {{ background: rgba(255,255,255,0.25); }}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
-QScrollBar:horizontal {{
-    background: transparent; height: 6px; margin: 0;
-}}
-QScrollBar::handle:horizontal {{
-    background: rgba(255,255,255,0.12); border-radius: 3px; min-width: 30px;
-}}
-QScrollBar::handle:horizontal:hover {{ background: rgba(255,255,255,0.25); }}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
-
-/* ═══ Buttons ═══ */
-QPushButton {{
-    background: {BG_HOVER}; color: {TEXT};
-    border: none; border-radius: 8px;
-    padding: 8px 16px; font-size: 13px;
-    font-family: {FONT_FAMILY};
-}}
-QPushButton:hover {{ background: {BG_CARD}; }}
-QPushButton:pressed {{ background: {BORDER}; }}
-QPushButton:disabled {{ color: {TEXT_DIM}; background: rgba(255,255,255,0.03); }}
-
-/* ═══ Inputs ═══ */
-QLineEdit {{
-    background: {BG_INPUT}; color: {TEXT};
-    border: 1px solid {BORDER}; border-radius: 8px;
-    padding: 8px 12px; font-size: 13px;
-    font-family: {FONT_FAMILY};
-    selection-background-color: {ACCENT};
-}}
-QLineEdit:focus {{ border-color: {ACCENT}; }}
-QTextEdit {{
-    background: {BG_INPUT}; color: {TEXT};
-    border: none;
-    selection-background-color: {ACCENT};
-    font-family: {FONT_FAMILY};
-}}
-
-/* ═══ Combo Boxes ═══ */
-QComboBox {{
-    background: {BG_INPUT}; color: {TEXT};
-    border: 1px solid {BORDER}; border-radius: 8px;
-    padding: 6px 12px;
-    font-family: {FONT_FAMILY};
-}}
-QComboBox:hover {{ border-color: {ACCENT}; }}
-QComboBox::drop-down {{ border: none; width: 20px; }}
-QComboBox QAbstractItemView {{
-    background: {BG_SURFACE}; color: {TEXT};
-    border: 1px solid {BORDER};
-    selection-background-color: {BG_HOVER};
-    padding: 4px;
-    font-family: {FONT_FAMILY};
-}}
-
-/* ═══ Lists ═══ */
-QListWidget {{
-    background: transparent; border: none; outline: none;
-    font-family: {FONT_FAMILY};
-}}
-QListWidget::item {{
-    background: transparent; color: {TEXT_DIM};
-    padding: 10px 12px; border-radius: 8px; border: none;
-}}
-QListWidget::item:hover {{ background: {BG_HOVER}; color: {TEXT}; }}
-QListWidget::item:selected {{
-    background: {BG_HOVER}; color: {TEXT};
-    border-left: 3px solid {ACCENT};
-}}
-
-/* ═══ Checkboxes ═══ */
-QCheckBox {{ color: {TEXT}; spacing: 8px; font-family: {FONT_FAMILY}; }}
-QCheckBox::indicator {{
-    width: 18px; height: 18px; border-radius: 4px;
-    border: 2px solid {BORDER}; background: transparent;
-}}
-QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
-
-/* ═══ Sliders ═══ */
-QSlider::groove:horizontal {{ background: {BG_INPUT}; height: 6px; border-radius: 3px; }}
-QSlider::handle:horizontal {{
-    background: {ACCENT}; width: 16px; height: 16px;
-    margin: -5px 0; border-radius: 8px;
-}}
-QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 3px; }}
-
-/* ═══ Tooltips ═══ */
-QToolTip {{
-    background: {BG_SURFACE}; color: {TEXT};
-    border: 1px solid {BORDER}; padding: 6px 10px;
-    border-radius: 6px; font-size: 12px;
-    font-family: {FONT_FAMILY};
-}}
-
-/* ═══ Tab Widgets ═══ */
-QTabWidget::pane {{ border: 1px solid {BORDER}; background: {BG_MAIN}; border-radius: 8px; }}
-QTabBar::tab {{
-    background: {BG_SURFACE}; color: {TEXT_DIM};
-    padding: 8px 16px; border: none;
-    font-family: {FONT_FAMILY};
-}}
-QTabBar::tab:selected {{ background: {BG_MAIN}; color: {TEXT}; border-bottom: 2px solid {ACCENT}; }}
-QTabBar::tab:hover {{ color: {TEXT}; }}
-
-/* ═══ Group Boxes ═══ */
-QGroupBox {{
-    background: rgba(255,255,255,0.02);
-    border: 1px solid {BORDER}; border-radius: 10px;
-    margin-top: 12px; padding-top: 24px;
-    font-weight: 600; color: {TEXT};
-    font-family: {FONT_FAMILY};
-}}
-QGroupBox::title {{
-    subcontrol-origin: margin; left: 16px;
-    padding: 0 8px; color: {TEXT};
-}}
-
-/* ═══ Scroll Areas ═══ */
-QScrollArea {{ background: {BG_MAIN}; border: none; }}
-
-/* ═══ Message Boxes / Dialogs ═══ */
-QMessageBox {{ background: {BG_SURFACE}; color: {TEXT}; }}
-QMessageBox QPushButton {{ min-width: 80px; padding: 8px 20px; }}
-QMessageBox QPushButton:default {{ background: {ACCENT}; color: white; }}
-
-/* ═══ Menu ═══ */
-QMenu {{
-    background: {BG_SURFACE}; color: {TEXT};
-    border: 1px solid {BORDER}; border-radius: 10px;
-    padding: 6px; font-family: {FONT_FAMILY};
-}}
-QMenu::item {{ padding: 8px 20px; border-radius: 6px; }}
-QMenu::item:selected {{ background: {BG_HOVER}; }}
-QMenu::separator {{ height: 1px; background: {BORDER}; margin: 4px 8px; }}
-
-/* ═══ Spin Boxes ═══ */
-QSpinBox, QDoubleSpinBox {{
-    background: {BG_INPUT}; color: {TEXT};
-    border: 1px solid {BORDER}; border-radius: 6px;
-    padding: 4px 8px; font-family: {FONT_FAMILY};
-}}
-
-/* ═══ Progress Bar ═══ */
-QProgressBar {{
-    background: {BG_INPUT}; border: none; border-radius: 4px;
-    height: 6px; text-align: center; color: transparent;
-}}
-QProgressBar::chunk {{ background: {ACCENT}; border-radius: 4px; }}
-"""
+# ── Theme (colors, typography, GLOBAL_QSS) ──
+from theme import (
+    BG_MAIN, BG_SIDE, BG_INPUT, BG_HOVER, BG_CARD, BG_SURFACE,
+    TEXT, TEXT_DIM, GREEN, ACCENT, ACCENT_GRADIENT_END, ACCENT_DARK, ACCENT_LIGHT,
+    BLUE, PURPLE, RED, BORDER, BORDER_FOCUS,
+    FONT_FAMILY, FONT_HEADING, FONT_SIZE_SM, FONT_SIZE_MD, FONT_SIZE_LG, FONT_SIZE_XL,
+    SUCCESS, WARNING, INFO,
+    GLOBAL_QSS, header_button_style,
+)
 
 
 class VState:
@@ -1755,7 +1560,42 @@ class RichTextLabel(QTextBrowser):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
         # Set content
-        if is_ai and MARKDOWN_OK and _md_renderer:
+        if is_ai and text.startswith("IMAGE:"):
+            # Inline image rendering for generated images
+            lines = text.split("\n", 1)
+            image_path = lines[0].replace("IMAGE:", "").strip()
+            caption = lines[1].strip() if len(lines) > 1 else ""
+            # Normalize path for file:/// URL
+            image_url = image_path.replace("\\", "/")
+            if caption and MARKDOWN_OK and _md_renderer:
+                caption_html = _md_renderer.render(caption)
+            else:
+                caption_html = f"<p>{caption}</p>" if caption else ""
+            html = f'<img src="file:///{image_url}" width="512" style="border-radius: 8px; max-width: 100%;"><br>{caption_html}'
+            self.setHtml(html)
+        elif is_ai and text.startswith("VIDEO:"):
+            # Video display - show clickable link since QTextBrowser can't play video
+            lines = text.split("\n", 1)
+            video_path = lines[0].replace("VIDEO:", "").strip()
+            caption = lines[1].strip() if len(lines) > 1 else ""
+            # Normalize path for file:/// URL
+            video_url = video_path.replace("\\", "/")
+            if caption and MARKDOWN_OK and _md_renderer:
+                caption_html = _md_renderer.render(caption)
+            else:
+                caption_html = f"<p>{caption}</p>" if caption else ""
+            # Show video icon + clickable link
+            html = f'''
+                <div style="padding: 16px; background: #1a1a2e; border-radius: 12px; border: 1px solid #333;">
+                    <p style="margin: 0 0 8px 0; font-size: 14px;">🎬 <b>Video Generated</b></p>
+                    <a href="file:///{video_url}" style="color: #7c3aed; text-decoration: none;">
+                        📁 {video_path.split('/')[-1].split('\\\\')[-1]}
+                    </a>
+                    {caption_html}
+                </div>
+            '''
+            self.setHtml(html)
+        elif is_ai and MARKDOWN_OK and _md_renderer:
             html = _md_renderer.render(text)
             self.setHtml(html)
         else:
@@ -2088,6 +1928,8 @@ class ChatArea(QScrollArea):
         
         self._has_messages = False
         self._streaming_msg = None  # Track current streaming message
+        self._typing_step = 0
+        self._typing_timer = QTimer()
 
     def add(self, role, text, show_toolbar=True):
         """Add a message to the chat area."""
@@ -2105,25 +1947,51 @@ class ChatArea(QScrollArea):
         return msg
     
     def add_streaming_placeholder(self):
-        """Add a placeholder for streaming response."""
+        """Add a placeholder for streaming response with animated typing indicator."""
         if not self._has_messages:
             self.welcome.hide()
             self._has_messages = True
-        
-        # Create message with empty text (will be updated)
-        self._streaming_msg = Msg("assistant", "▌", show_toolbar=False)
+
+        # Create message with animated dots as typing indicator
+        self._streaming_msg = Msg("assistant", "●", show_toolbar=False)
+        self._streaming_msg.setProperty("typing", True)
         self.lay.insertWidget(self.lay.count() - 1, self._streaming_msg)
         QTimer.singleShot(30, lambda: self.verticalScrollBar().setValue(self.verticalScrollBar().maximum()))
+
+        # Start dot animation
+        self._typing_step = 0
+        self._typing_timer = QTimer()
+        self._typing_timer.timeout.connect(self._animate_typing)
+        self._typing_timer.start(400)
+
         return self._streaming_msg
+
+    def _animate_typing(self):
+        """Animate typing indicator dots."""
+        if self._streaming_msg and self._streaming_msg.property("typing"):
+            dots = ["●", "● ●", "● ● ●"]
+            self._typing_step = (self._typing_step + 1) % len(dots)
+            self._streaming_msg.update_content(dots[self._typing_step])
+
+    def _stop_typing_animation(self):
+        """Stop the typing animation timer."""
+        if hasattr(self, '_typing_timer') and self._typing_timer.isActive():
+            self._typing_timer.stop()
+        if self._streaming_msg:
+            self._streaming_msg.setProperty("typing", False)
     
     def update_streaming(self, text):
         """Update the streaming message content."""
         if self._streaming_msg:
+            # Stop typing animation on first real content
+            if self._streaming_msg.property("typing"):
+                self._stop_typing_animation()
             self._streaming_msg.update_content(text + "▌")
             QTimer.singleShot(10, lambda: self.verticalScrollBar().setValue(self.verticalScrollBar().maximum()))
     
     def finalize_streaming(self, text):
         """Finalize the streaming message (remove cursor, add toolbar)."""
+        self._stop_typing_animation()
         if self._streaming_msg:
             # Remove from layout immediately to avoid duplicate visible messages
             idx = self.lay.indexOf(self._streaming_msg)
@@ -2272,8 +2140,9 @@ class InputBar(QFrame):
         # Model selector (defined here, added to input row below)
         self.model_selector = QComboBox()
         self.model_selector.setMinimumWidth(140)
-        self.model_selector.setMaximumWidth(200)
+        self.model_selector.setMaximumWidth(280)
         self.model_selector.setFixedHeight(30)
+        self.model_selector.setMaxVisibleItems(15)
         self.model_selector.setStyleSheet(f"""
             QComboBox {{
                 background: transparent; color: {TEXT_DIM};
@@ -4072,6 +3941,17 @@ class LadaApp(QMainWindow):
             'play ', 'pause ', 'stop ', 'skip ', 'next ',
             'close ', 'quit ', 'exit ',
             'find my location', 'my location', 'show my location', 'where am i',
+            # Image generation, code execution, document reading
+            'generate image', 'create image', 'draw ', 'imagine ', 'ai image',
+            'generate picture', 'make an image', 'generate art',
+            'run code', 'execute code', 'run python', 'run javascript', 'run script',
+            'read document', 'read pdf', 'summarize document', 'summarize file',
+            'chat with document', 'chat with file', 'analyze document',
+            'deep research', 'research in depth', 'weather briefing',
+            'focus mode', 'export conversation', 'export to pdf',
+            # Video generation
+            'generate video', 'create video', 'make video', 'ai video',
+            'animate ', 'generate animation',
         ]
         is_system_cmd = any(x in t for x in system_keywords)
 
@@ -4863,14 +4743,6 @@ class LadaApp(QMainWindow):
         self.model.clear()
         self.model.addItem("Auto (Best Available)", "auto")
         if self.router:
-            # Force backend check if not done yet
-            if hasattr(self.router, '_ensure_backends_checked'):
-                try:
-                    self.router._ensure_backends_checked()
-                except Exception as e:
-                    print(f"[LADA] Backend check error: {e}")
-
-            # Phase 2: Show all models from model registry (models.json)
             phase2_models = []
             if hasattr(self.router, 'get_all_available_models'):
                 try:
@@ -4879,38 +4751,30 @@ class LadaApp(QMainWindow):
                     print(f"[LADA] get_all_available_models error: {e}")
 
             if phase2_models:
-                # Group models by provider for cleaner display
                 current_provider = None
+                added = 0
                 for m in phase2_models:
+                    if not m.get('available', False):
+                        continue  # Skip offline models
+
                     provider = m.get('provider', '')
                     model_id = m.get('id', '')
-                    available = m.get('available', False)
+                    name = m.get('name', model_id).replace(' (offline)', '')
 
-                    # Build clean label (to_dropdown_items already adds offline suffix)
-                    raw_name = m.get('name', m.get('id', 'Unknown'))
-                    label = raw_name
+                    # Add provider group header when provider changes
+                    if provider != current_provider:
+                        current_provider = provider
+                        provider_label = m.get('provider_name', provider)
+                        sep = f"\u2500\u2500 {provider_label} \u2500\u2500"
+                        self.model.addItem(sep, "")
+                        idx = self.model.count() - 1
+                        self.model.setItemData(idx, 0, Qt.UserRole - 1)  # Non-selectable
 
-                    self.model.addItem(label, model_id)
-                print(f"[LADA] Model dropdown loaded: {len(phase2_models)} models from model registry")
+                    self.model.addItem(f"  {name}", model_id)
+                    added += 1
+                print(f"[LADA] Model dropdown: {added} available models loaded")
             else:
-                # Legacy fallback: show 5 hardcoded backends
-                print("[LADA] Model registry returned no models, falling back to legacy backends")
-                status = self.router.get_status()
-                model_names = [
-                    ('local_ollama', 'Local Ollama'),
-                    ('gemini', 'Gemini 2.0 Flash'),
-                    ('groq', 'Groq Cloud'),
-                    ('ollama_cloud', 'Ollama Cloud')
-                ]
-                for key, name in model_names:
-                    if key in status:
-                        v = status[key]
-                        if v.get('available'):
-                            self.model.addItem(name)
-                        else:
-                            self.model.addItem(f"{name} (offline)")
-                    elif key == 'groq' and hasattr(self.router, 'groq_api_key') and self.router.groq_api_key:
-                        self.model.addItem(name)
+                print("[LADA] No models available from registry")
         else:
             print("[LADA] Router not available - no models to display")
         self.model.setCurrentIndex(0)

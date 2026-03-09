@@ -238,9 +238,40 @@ class OllamaProvider(BaseProvider):
             )
 
     def check_health(self) -> ProviderStatus:
-        """Check Ollama availability by listing tags"""
-        url = f"{self.config.base_url.rstrip('/')}/api/tags"
+        """Check Ollama availability — /api/tags for local, /api/chat probe for cloud"""
+        base = self.config.base_url.rstrip('/')
 
+        # For cloud endpoints (has API key), use a lightweight chat probe
+        # because cloud Ollama doesn't support /api/tags the same way
+        if self.config.api_key:
+            url = f"{base}/api/chat"
+            try:
+                resp = requests.post(
+                    url,
+                    json={"model": "dummy", "messages": [{"role": "user", "content": "hi"}],
+                           "stream": False, "options": {"num_predict": 1}},
+                    headers=self._get_headers(),
+                    timeout=5
+                )
+                # 200 = working, 404 = model not found but API is alive
+                if resp.status_code in (200, 404):
+                    self.last_error = ""
+                    return ProviderStatus.AVAILABLE
+                elif resp.status_code == 401:
+                    self.last_error = "Invalid API key"
+                    return ProviderStatus.AUTH_FAILED
+                else:
+                    self.last_error = f"HTTP {resp.status_code}"
+                    return ProviderStatus.UNAVAILABLE
+            except requests.Timeout:
+                self.last_error = "Health check timeout"
+                return ProviderStatus.UNAVAILABLE
+            except Exception as e:
+                self.last_error = str(e)
+                return ProviderStatus.UNAVAILABLE
+
+        # For local Ollama (no API key), use /api/tags as before
+        url = f"{base}/api/tags"
         try:
             resp = requests.get(
                 url, headers=self._get_headers(), timeout=3

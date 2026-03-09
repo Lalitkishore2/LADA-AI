@@ -2,7 +2,7 @@
 
 Your own personal AI assistant. Any backend. Any voice. Full system control.
 
-LADA is a modular desktop AI assistant that runs on your machine with config-driven multi-provider AI routing (35 models across 12 providers via 4 protocol adapters), per-provider rate limiting (TokenBucket + CircuitBreaker), always-on voice control, autonomous screen automation, a WebSocket gateway with web dashboard and Next.js frontend, plugin marketplace with hot-reload, 12 communication channels (including 9 messaging connectors), and 100+ Python modules. The provider system supports Local Ollama, Google Gemini, Groq Cloud, Kaggle T4 GPU, Ollama Cloud, Anthropic, Mistral, xAI, DeepSeek, Together AI, Fireworks AI, Cerebras, and more -- with tier-based routing, automatic failover, and per-request cost tracking.
+LADA is a modular desktop AI assistant that runs on your machine with config-driven multi-provider AI routing (36 models across 12 providers via 4 protocol adapters), per-provider rate limiting (TokenBucket + CircuitBreaker), always-on voice control, autonomous screen automation, a WebSocket gateway with web dashboard and Next.js frontend, plugin marketplace with hot-reload, 12 communication channels (including 9 messaging connectors), and 100+ Python modules. The provider system supports Local Ollama, Google Gemini, Groq Cloud, Kaggle T4 GPU, Ollama Cloud, Anthropic, Mistral, xAI, DeepSeek, Together AI, Fireworks AI, Cerebras, and more -- with tier-based routing, automatic failover, and per-request cost tracking.
 
 Inspired by [OpenClaw](https://github.com/openclaw/openclaw) agent architecture: heartbeat system, context compaction, model failover chains, event hooks, and workflow pipelines.
 
@@ -39,7 +39,7 @@ You need **at least one AI backend** configured. The fastest option:
 ## Features
 
 ### AI Engine
-- **34 AI models across 12 providers** with 4 protocol adapters (OpenAI-compatible, Anthropic, Google, Ollama) and tier-based routing with automatic failover
+- **36 AI models across 12 providers** with 4 protocol adapters (OpenAI-compatible, Anthropic, Google, Ollama) and tier-based routing with automatic failover
 - **Config-driven model registry** (`models.json`) with per-model cost, context window, and tier classification
 - **Per-provider rate limiting** with TokenBucket (RPM/RPD) and CircuitBreaker with auto-recovery
 - **Token and cost tracking** with per-request token counting, context window fit checking, and per-model input/output pricing
@@ -79,6 +79,13 @@ You need **at least one AI backend** configured. The fastest option:
 - Code files: .py, .js, .ts, .java, .cpp, .go, .rs, .rb, and more
 - CSV, HTML, XML, YAML, JSON, TOML, SQL
 - 50MB file size guard, 12KB content window per file
+
+### AI Generation & Code Execution
+- **Image generation** with Stability AI (SDXL) + Gemini Imagen backends
+- **Video generation** with Google Veo + Stability AI backends
+- **Secure code sandbox** with RestrictedPython + subprocess isolation (Python, JavaScript, PowerShell)
+- **Document reading** with AI summarization (PDF/DOCX/TXT)
+- Commands: `generate image of...`, `generate video of...`, `run code`, `read document`
 
 ### Integrations
 - **Spotify**: play, pause, next, previous, search, queue, shuffle, playlists
@@ -222,7 +229,7 @@ You need **at least one AI backend** configured. The fastest option:
 
 ### Provider System (v8)
 
-LADA uses a config-driven provider system with 4 protocol adapters that support 11+ providers and 35 models. The `models.json` registry defines per-model cost, context window size, and tier classification.
+LADA uses a config-driven provider system with 4 protocol adapters that support 12+ providers and 36 models. The `models.json` registry defines per-model cost, context window size, and tier classification.
 
 | Provider | Protocol Adapter | Example Models | Speed | Privacy | Cost |
 |----------|-----------------|----------------|-------|---------|------|
@@ -254,7 +261,7 @@ C:\JarvisAI\
 |-- lada_memory.py               # Persistent memory + context management
 |-- voice_tamil_free.py          # TTS (gTTS/pyttsx3) + STT engine
 |-- main.py                      # CLI entry point (voice/text/gui/status)
-|-- models.json                  # Model registry config (35 models, 12 providers)
+|-- models.json                  # Model registry config (36 models, 12 providers)
 |-- .env                         # API keys and configuration
 |-- .env.example                 # Configuration template (~400 lines)
 |-- requirements.txt             # Python dependencies
@@ -272,7 +279,7 @@ C:\JarvisAI\
 |   |   |   |-- google_provider.py     # Google Generative AI adapter
 |   |   |   |-- ollama_provider.py     # Ollama REST API adapter (local + cloud)
 |   |   |   |-- provider_manager.py    # Central orchestrator: auto-config, tier routing, health, cost
-|   |   |-- model_registry.py          # Config-driven catalog (35 models, 12 providers, per-model costs)
+|   |   |-- model_registry.py          # Config-driven catalog (36 models, 12 providers, per-model costs)
 |   |   |-- token_counter.py           # Per-request token counting, cost tracking, context fit checking
 |   |   |-- context_manager.py         # Per-model context window enforcement, message fitting/compaction
 |   |   |-- advanced_planner.py        # Multi-step plans, dependency graphs, conditional branching
@@ -529,7 +536,7 @@ Or via Docker:
 docker-compose up frontend                   # Starts on port 3000
 ```
 
-Features: Chat page with streaming responses, Models page to browse all 35 models across 12 providers, Settings page for configuration.
+Features: Chat page with streaming responses, Models page to browse all 36 models across 12 providers, Settings page for configuration.
 
 ### Docker Deployment (Full Stack)
 
