@@ -41,6 +41,12 @@ try:
 except ImportError:
     REGISTRY_OK = False
 
+try:
+    from modules.agents.specialist_pool import get_specialist_pool, SPECIALIST_CAPABILITIES
+    SPECIALIST_POOL_OK = True
+except ImportError:
+    SPECIALIST_POOL_OK = False
+
 
 @dataclass
 class AgentResult:
@@ -173,6 +179,29 @@ class AICommandAgent:
         # Step 2: Select tier (fast local vs smart cloud)
         tier = self._select_tier(text)
 
+        # Step 2.5: Check if this should be delegated to a specialist agent
+        if SPECIALIST_POOL_OK:
+            should_delegate, specialist, capability = self._should_delegate(text)
+            if should_delegate and specialist:
+                try:
+                    pool = get_specialist_pool()
+                    task_id = pool.delegate_to_specialist(
+                        task_description=text,
+                        required_capability=capability,
+                        context={'original_text': text, 'tier': tier}
+                    )
+                    if task_id:
+                        logger.info(f"[Agent] Delegated to {specialist}: {task_id}")
+                        # For now, return a response indicating delegation
+                        # In future, we could wait for result via hub
+                        return AgentResult(
+                            handled=True,
+                            response=f"Task delegated to {specialist} specialist.",
+                            tier_used=tier,
+                        )
+                except Exception as e:
+                    logger.warning(f"[Agent] Delegation failed: {e}, falling back to direct execution")
+
         # Step 3: Execute via AI tool-calling loop
         start = time.time()
         try:
@@ -249,6 +278,59 @@ class AICommandAgent:
 
         # Everything else (file search, multi-step, PowerShell, complex) → smart
         return 'smart'
+
+    def _should_delegate(self, text: str) -> tuple:
+        """
+        Check if this command should be delegated to a specialist agent.
+
+        Returns: (should_delegate: bool, specialist_name: str, capability: str)
+        """
+        if not SPECIALIST_POOL_OK:
+            return False, None, None
+
+        t = text.lower()
+
+        # Specialist keywords mapped to (agent_name, capability)
+        specialist_triggers = {
+            # Flight agent
+            'flight': ('flight_agent', 'flight_search'),
+            'flights': ('flight_agent', 'flight_search'),
+            'book a flight': ('flight_agent', 'flight_booking'),
+            'airline': ('flight_agent', 'flight_search'),
+            'fly to': ('flight_agent', 'flight_search'),
+            'flying': ('flight_agent', 'flight_search'),
+            # Hotel agent
+            'hotel': ('hotel_agent', 'hotel_search'),
+            'hotels': ('hotel_agent', 'hotel_search'),
+            'book a room': ('hotel_agent', 'hotel_booking'),
+            'accommodation': ('hotel_agent', 'hotel_search'),
+            'stay at': ('hotel_agent', 'hotel_search'),
+            'lodging': ('hotel_agent', 'hotel_search'),
+            # Restaurant agent
+            'restaurant': ('restaurant_agent', 'restaurant_search'),
+            'restaurants': ('restaurant_agent', 'restaurant_search'),
+            'place to eat': ('restaurant_agent', 'restaurant_search'),
+            'dining': ('restaurant_agent', 'restaurant_search'),
+            'food near': ('restaurant_agent', 'restaurant_search'),
+            # Product agent
+            'buy ': ('product_agent', 'product_search'),
+            'shop for': ('product_agent', 'shopping'),
+            'price of': ('product_agent', 'price_comparison'),
+            'compare prices': ('product_agent', 'price_comparison'),
+            'product': ('product_agent', 'product_search'),
+            # Package tracking
+            'track package': ('package_tracking_agent', 'package_tracking'),
+            'tracking number': ('package_tracking_agent', 'package_tracking'),
+            'where is my package': ('package_tracking_agent', 'package_tracking'),
+            'delivery status': ('package_tracking_agent', 'package_tracking'),
+        }
+
+        for trigger, (agent, capability) in specialist_triggers.items():
+            if trigger in t:
+                logger.info(f"[Agent] Detected specialist trigger '{trigger}' -> {agent}")
+                return True, agent, capability
+
+        return False, None, None
 
     def _execute(self, text: str, tier: str) -> tuple:
         """

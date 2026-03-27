@@ -235,6 +235,17 @@ except Exception as e:
     PROACTIVE_AGENT_OK = False
     print(f"[LADA] ProactiveAgent not loaded: {e}")
 
+# Canvas widget
+try:
+    from modules.canvas_widget import AICanvas, ContentType, create_canvas
+    CANVAS_OK = True
+except Exception as e:
+    AICanvas = None
+    ContentType = None
+    create_canvas = None
+    CANVAS_OK = False
+    print(f"[LADA] Canvas not loaded: {e}")
+
 
 # ============ Settings Dialog ============
 
@@ -1168,6 +1179,7 @@ class Sidebar(QFrame):
     export_chat = pyqtSignal()    # Export signal
     open_session = pyqtSignal()   # Session picker signal
     open_cost = pyqtSignal()      # Cost dialog signal
+    open_canvas = pyqtSignal()    # Canvas signal
     collapse_toggled = pyqtSignal(bool)
 
     def __init__(self):
@@ -1307,6 +1319,19 @@ class Sidebar(QFrame):
         self._export_btn.clicked.connect(lambda: self.export_chat.emit())
         lay.addWidget(self._export_btn)
 
+        self._canvas_btn = QPushButton("  Canvas")
+        self._canvas_btn.setCursor(Qt.PointingHandCursor)
+        self._canvas_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_DIM};
+                border: none; border-radius: 8px;
+                padding: 9px 10px; font-size: 13px; text-align: left;
+            }}
+            QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; }}
+        """)
+        self._canvas_btn.clicked.connect(lambda: self.open_canvas.emit())
+        lay.addWidget(self._canvas_btn)
+
         self._settings_btn = QPushButton("  Settings")
         self._settings_btn.setCursor(Qt.PointingHandCursor)
         self._settings_btn.setStyleSheet(f"""
@@ -1352,7 +1377,7 @@ class Sidebar(QFrame):
         self._collapsible_widgets = [
             self._title_label, self._new_chat_btn, self.search_input,
             self.lst, self._voice_label, self.voice_lst,
-            self._export_btn, self._settings_btn, self._session_btn, self._cost_btn,
+            self._export_btn, self._canvas_btn, self._settings_btn, self._session_btn, self._cost_btn,
         ]
     
     def _filter_chats(self):
@@ -1597,11 +1622,12 @@ class RichTextLabel(QTextBrowser):
             else:
                 caption_html = f"<p>{caption}</p>" if caption else ""
             # Show video icon + clickable link
+            video_filename = video_path.replace('\\', '/').split('/')[-1]
             html = f'''
                 <div style="padding: 16px; background: #1a1a2e; border-radius: 12px; border: 1px solid #333;">
                     <p style="margin: 0 0 8px 0; font-size: 14px;">🎬 <b>Video Generated</b></p>
                     <a href="file:///{video_url}" style="color: #7c3aed; text-decoration: none;">
-                        📁 {video_path.split('/')[-1].split('\\\\')[-1]}
+                        📁 {video_filename}
                     </a>
                     {caption_html}
                 </div>
@@ -4288,6 +4314,7 @@ class LadaApp(QMainWindow):
         # Expose sidebar buttons as MainWindow properties for backward compat
         self.session_btn = self.side._session_btn
         self.cost_btn = self.side._cost_btn
+        self.canvas_btn = self.side._canvas_btn
         main.addWidget(self.side)
 
         # Content
@@ -4840,6 +4867,7 @@ class LadaApp(QMainWindow):
         self.side.export_chat.connect(self._export_conversation)  # Export from sidebar
         self.side.open_session.connect(self._open_session_picker)  # Session from sidebar
         self.side.open_cost.connect(self._show_cost_dialog)  # Cost from sidebar
+        self.side.open_canvas.connect(self._open_canvas)  # Canvas from sidebar
         self.inp.send.connect(self._send)
         self.voice_btn.clicked.connect(self._toggle_voice)
         self.inp.stop_btn.clicked.connect(self._stop_generation)  # Stop button
@@ -5192,6 +5220,35 @@ class LadaApp(QMainWindow):
         close_btn.clicked.connect(dlg.accept)
         lay.addWidget(close_btn, alignment=Qt.AlignRight)
         dlg.exec_()
+
+    def _open_canvas(self):
+        """Open the AI Canvas in a floating window."""
+        if not CANVAS_OK:
+            self.chat.add_message("system", "Canvas requires PyQt5 (already installed).")
+            return
+
+        # Use a persistent window so it doesn't get garbage collected
+        if not hasattr(self, '_canvas_window') or self._canvas_window is None:
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout as _VL
+            self._canvas_window = QDialog(self)
+            self._canvas_window.setWindowTitle("AI Canvas")
+            self._canvas_window.setMinimumSize(900, 600)
+            self._canvas_window.setStyleSheet(f"background: {BG_SURFACE}; color: {TEXT};")
+            canvas_layout = _VL(self._canvas_window)
+            canvas_layout.setContentsMargins(0, 0, 0, 0)
+
+            # Build canvas with AI router
+            router = getattr(self, 'router', None)
+            canvas = create_canvas(ai_router=router) if create_canvas else None
+            if canvas:
+                canvas_layout.addWidget(canvas)
+            else:
+                from PyQt5.QtWidgets import QLabel as _QL
+                canvas_layout.addWidget(_QL("Canvas not available."))
+
+        self._canvas_window.show()
+        self._canvas_window.raise_()
+        self._canvas_window.activateWindow()
 
     def _open_session_picker(self):
         """Open dialog to switch to or create a named topic session."""

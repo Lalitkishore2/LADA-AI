@@ -209,6 +209,8 @@ def build_default_registry() -> ServiceRegistry:
                  ['MCPClient', 'get_mcp_client'])
     svc.register('agent_collab', 'modules.agent_collaboration',
                  ['AgentCollaborationHub', 'get_collaboration_hub'])
+    svc.register('specialist_pool', 'modules.agents.specialist_pool',
+                 ['SpecialistPool', 'get_specialist_pool', 'init_specialist_pool', 'SPECIALIST_CAPABILITIES'])
     svc.register('realtime_voice', 'modules.realtime_voice',
                  ['RealTimeVoiceEngine', 'get_realtime_voice', 'VoiceConfig'])
     svc.register('computer_use', 'modules.computer_use_agent',
@@ -275,5 +277,7 @@ def build_default_registry() -> ServiceRegistry:
                  ['CitationEngine'])
     svc.register('export', 'modules.export_manager',
                  ['ExportManager'])
+    svc.register('canvas', 'modules.canvas_widget',
+                 ['AICanvas', 'CanvasState', 'ContentType', 'create_canvas'])
 
     return svc

@@ -15,8 +15,9 @@ import time
 import uuid
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from enum import Enum
-from typing import List, Dict, Any, Optional, Callable, Set
+from typing import List, Dict, Any, Optional, Callable, Set, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
 
@@ -445,6 +446,187 @@ class AgentCollaborationHub:
                     if t.status in (TaskStatus.PENDING, TaskStatus.DELEGATED, TaskStatus.IN_PROGRESS)
                 ),
             }
+
+    def execute_parallel(self, tasks: List[DelegatedTask],
+                        max_workers: int = 4,
+                        timeout: float = 60.0,
+                        executor_fn: Optional[Callable[[DelegatedTask], Dict[str, Any]]] = None
+                        ) -> Dict[str, Dict[str, Any]]:
+        """
+        Execute multiple tasks in parallel with dependency-aware scheduling.
+
+        Tasks are organized into layers where each layer contains tasks
+        whose dependencies are satisfied. Layers execute sequentially,
+        but tasks within a layer execute in parallel.
+
+        Args:
+            tasks: List of DelegatedTask objects to execute
+            max_workers: Maximum parallel workers
+            timeout: Timeout per task in seconds
+            executor_fn: Function to execute each task, receives DelegatedTask, returns result dict
+
+        Returns:
+            Dict mapping task_id to result dict
+        """
+        if not tasks:
+            return {}
+
+        results: Dict[str, Dict[str, Any]] = {}
+        task_map = {t.task_id: t for t in tasks}
+
+        # Build dependency graph from task context
+        # Dependencies stored in task.context['depends_on'] as list of task_ids
+        dependencies: Dict[str, Set[str]] = {}
+        for task in tasks:
+            deps = task.context.get('depends_on', [])
+            dependencies[task.task_id] = set(deps) if deps else set()
+
+        # Find parallel execution layers using topological sort
+        layers = self._topological_layers(task_map, dependencies)
+
+        if executor_fn is None:
+            # Default executor: just mark task complete with placeholder result
+            def default_executor(task: DelegatedTask) -> Dict[str, Any]:
+                time.sleep(0.1)  # Simulate work
+                return {"status": "completed", "task_id": task.task_id}
+            executor_fn = default_executor
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for layer_idx, layer in enumerate(layers):
+                logger.info(f"[AgentHub] Executing layer {layer_idx + 1}/{len(layers)} with {len(layer)} tasks")
+
+                # Submit all tasks in this layer
+                futures: Dict[Future, str] = {}
+                for task_id in layer:
+                    task = task_map[task_id]
+                    task.status = TaskStatus.IN_PROGRESS
+                    future = executor.submit(self._execute_task_wrapper, task, executor_fn, timeout)
+                    futures[future] = task_id
+
+                # Wait for all tasks in layer to complete
+                for future in as_completed(futures.keys()):
+                    task_id = futures[future]
+                    task = task_map[task_id]
+                    try:
+                        result = future.result(timeout=timeout)
+                        results[task_id] = result
+                        task.status = TaskStatus.COMPLETED
+                        task.result = result
+                        task.completed_at = time.time()
+                        self._stats["tasks_completed"] += 1
+                        logger.info(f"[AgentHub] Task {task_id} completed")
+                    except Exception as e:
+                        error_msg = str(e)
+                        results[task_id] = {"error": error_msg, "status": "failed"}
+                        task.status = TaskStatus.FAILED
+                        task.result = {"error": error_msg}
+                        task.completed_at = time.time()
+                        logger.error(f"[AgentHub] Task {task_id} failed: {e}")
+
+        return results
+
+    def _execute_task_wrapper(self, task: DelegatedTask,
+                              executor_fn: Callable[[DelegatedTask], Dict[str, Any]],
+                              timeout: float) -> Dict[str, Any]:
+        """Wrapper to execute a single task with error handling."""
+        try:
+            return executor_fn(task)
+        except Exception as e:
+            logger.error(f"[AgentHub] Task execution error: {e}")
+            raise
+
+    def _topological_layers(self, task_map: Dict[str, DelegatedTask],
+                           dependencies: Dict[str, Set[str]]) -> List[List[str]]:
+        """
+        Organize tasks into layers for parallel execution.
+
+        Each layer contains tasks whose dependencies are all in previous layers.
+        Tasks within a layer can execute in parallel.
+        """
+        layers: List[List[str]] = []
+        remaining = set(task_map.keys())
+        completed = set()
+
+        while remaining:
+            # Find tasks with no unmet dependencies
+            layer = []
+            for task_id in remaining:
+                deps = dependencies.get(task_id, set())
+                # Task is ready if all its dependencies are completed
+                if deps.issubset(completed):
+                    layer.append(task_id)
+
+            if not layer:
+                # Circular dependency or missing dependency - include all remaining
+                logger.warning(f"[AgentHub] Possible circular dependency, executing remaining tasks")
+                layer = list(remaining)
+
+            layers.append(layer)
+            for task_id in layer:
+                remaining.discard(task_id)
+                completed.add(task_id)
+
+        return layers
+
+    def score_agent_for_capability(self, agent_name: str, required_capability: str) -> float:
+        """
+        Score how well an agent matches a required capability.
+
+        Returns a score from 0.0 (no match) to 1.0 (exact match).
+        """
+        with self._lock:
+            caps = self._agent_capabilities.get(agent_name, [])
+            if not caps:
+                return 0.0
+
+            # Exact match
+            if required_capability in caps:
+                return 1.0
+
+            # Partial/fuzzy match
+            req_lower = required_capability.lower()
+            for cap in caps:
+                cap_lower = cap.lower()
+                # Substring match
+                if req_lower in cap_lower or cap_lower in req_lower:
+                    return 0.7
+                # Word overlap
+                req_words = set(req_lower.split('_'))
+                cap_words = set(cap_lower.split('_'))
+                overlap = req_words & cap_words
+                if overlap:
+                    return 0.3 + 0.1 * len(overlap)
+
+            return 0.0
+
+    def find_best_agents(self, required_capability: str,
+                        top_k: int = 3,
+                        exclude: Optional[Set[str]] = None) -> List[Tuple[str, float]]:
+        """
+        Find the best agents for a capability, ranked by score.
+
+        Args:
+            required_capability: The capability needed
+            top_k: Maximum number of agents to return
+            exclude: Set of agent names to exclude
+
+        Returns:
+            List of (agent_name, score) tuples, sorted by score descending
+        """
+        exclude = exclude or set()
+        scores = []
+
+        with self._lock:
+            for agent_name in self._agents.keys():
+                if agent_name in exclude:
+                    continue
+                score = self.score_agent_for_capability(agent_name, required_capability)
+                if score > 0:
+                    scores.append((agent_name, score))
+
+        # Sort by score descending
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:top_k]
 
 
 # Singleton

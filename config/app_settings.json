@@ -1,5 +1,5 @@
 {
   "face_unlock_enabled": false,
-  "personality_mode": 0,
-  "personality_name": "JARVIS"
+  "personality_mode": 3,
+  "personality_name": "Casual"
 }
