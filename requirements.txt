@@ -89,9 +89,14 @@ pandas>=2.0.3                    # Data analysis, CSV export
 # sentence-transformers>=2.2.2   # Embedding models (requires PyTorch)
 
 # ============ OPTIONAL: ADVANCED VOICE ============
-# faster-whisper>=0.9.0          # Fast offline STT
-# openai-whisper>=20231117       # OpenAI Whisper STT
+faster-whisper>=1.0.0            # Fast offline STT (large-v3-turbo support)
+# openai-whisper>=20231117       # OpenAI Whisper STT (fallback)
 # pydub>=0.25.1                  # Audio manipulation
+
+# ============ OPTIONAL: XTTS-v2 TTS ============
+# TTS>=0.21.0                    # Coqui XTTS-v2 (voice cloning, 17 languages)
+# torch>=2.0.0                   # PyTorch (required for XTTS-v2)
+# torchaudio>=2.0.0              # Audio processing
 
 # ============ OPTIONAL: VISION & OCR ============
 # opencv-python>=4.8.0           # Computer vision
@@ -119,6 +124,20 @@ pandas>=2.0.3                    # Data analysis, CSV export
 
 # ============ OPTIONAL: BROWSER (PLAYWRIGHT) ============
 # playwright>=1.40.0             # Chromium automation alternative
+
+# ============ STEALTH BROWSER ============
+undetected-chromedriver>=3.5.0   # Stealth Chrome automation
+websocket-client>=1.6.0          # CDP WebSocket connection
+
+# ============ ALEXA INTEGRATION ============
+# flask-ask-sdk>=1.0.0           # Alexa Skills Kit
+# ngrok>=0.8.0                   # HTTPS tunnel for Alexa
+
+# ============ SYSTEM TRAY ============
+# pystray>=0.19.0                # System tray icon
+
+# ============ MOLTBOT ============
+pyserial>=3.5                    # Serial communication
 
 # ============ TESTING ============
 # pytest>=7.4.0

@@ -10,11 +10,23 @@ from .hotel_agent import HotelAgent
 from .restaurant_agent import RestaurantAgent
 from .calendar_agent import CalendarAgent
 
+# New agents for LADA Next-Gen
+from .file_agent import FileAgent, get_file_agent
+from .code_agent import CodeAgent, get_code_agent
+from .robot_agent import RobotAgent, get_robot_agent
+
 __all__ = [
     'FlightAgent',
     'ProductAgent',
     'EmailAgent',
     'HotelAgent',
     'RestaurantAgent',
-    'CalendarAgent'
+    'CalendarAgent',
+    # New agents
+    'FileAgent',
+    'get_file_agent',
+    'CodeAgent',
+    'get_code_agent',
+    'RobotAgent',
+    'get_robot_agent',
 ]

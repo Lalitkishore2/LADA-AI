@@ -811,6 +811,108 @@ def create_agent_tools() -> List[ToolDefinition]:
         permission=PermissionLevel.MODERATE,
     ))
 
+    # ─────────────────────────────────────────────────────────────────
+    # MoltBot Robot Tools
+    # ─────────────────────────────────────────────────────────────────
+    
+    tools.append(ToolDefinition(
+        name="moltbot_move",
+        description="Move the MoltBot robot forward or backward by a specified distance.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("direction", "string", "Direction to move", required=True,
+                         enum=["forward", "backward"]),
+            ToolParameter("distance", "float", "Distance in centimeters", required=True),
+        ],
+        keywords=["move robot", "robot forward", "robot backward", "move moltbot", "drive robot"],
+        examples=["move robot forward 10 cm", "move moltbot backward 20 centimeters"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="moltbot_turn",
+        description="Turn the MoltBot robot left or right by a specified angle.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("direction", "string", "Direction to turn", required=True,
+                         enum=["left", "right"]),
+            ToolParameter("angle", "float", "Angle in degrees", default=90),
+        ],
+        keywords=["turn robot", "rotate robot", "robot turn", "spin robot", "moltbot turn"],
+        examples=["turn robot left 90 degrees", "rotate moltbot right"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="moltbot_claw",
+        description="Open or close the MoltBot robot's claw/gripper.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("action", "string", "Claw action", required=True,
+                         enum=["open", "close"]),
+        ],
+        keywords=["robot claw", "gripper", "open claw", "close claw", "grab", "release"],
+        examples=["open robot claw", "close gripper", "robot grab"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="moltbot_arm",
+        description="Set MoltBot arm joint position or move to home.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("joint", "string", "Arm joint to control",
+                         enum=["base", "shoulder", "elbow", "wrist", "home"]),
+            ToolParameter("angle", "integer", "Joint angle (0-180, ignored for home)", default=90),
+        ],
+        keywords=["robot arm", "arm position", "move arm", "arm joint", "arm home"],
+        examples=["move robot arm shoulder to 45", "robot arm home position"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="moltbot_sensor",
+        description="Read a sensor from the MoltBot robot.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("sensor", "string", "Sensor type", required=True,
+                         enum=["ultrasonic", "temperature", "light", "battery"]),
+        ],
+        keywords=["robot sensor", "read sensor", "distance sensor", "robot battery", "robot temperature"],
+        examples=["read robot distance sensor", "check moltbot battery", "robot temperature"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="moltbot_camera",
+        description="Trigger the MoltBot camera to capture an image.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[],
+        keywords=["robot camera", "capture image", "take photo", "robot photo"],
+        examples=["take robot photo", "capture image from moltbot"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="moltbot_pickup",
+        description="Execute a pick-up sequence: lower arm, close claw, raise arm.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[],
+        keywords=["robot pickup", "grab object", "pick up", "grasp"],
+        examples=["robot pick up object", "grab item with robot"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="moltbot_putdown",
+        description="Execute a put-down sequence: lower arm, open claw, raise arm.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[],
+        keywords=["robot putdown", "drop object", "put down", "release object"],
+        examples=["robot put down object", "drop item"],
+        permission=PermissionLevel.MODERATE,
+    ))
+
     return tools
 
 

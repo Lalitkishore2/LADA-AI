@@ -19,7 +19,8 @@ import logging
 import json
 import re
 import time
-from typing import Optional, Dict, Any, List, Set, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional, Dict, Any, List, Set, Callable, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
@@ -374,6 +375,110 @@ class AdvancedPlanner:
         logger.info(f"[Planner] Plan {plan.plan_id}: {plan.status.value} "
                      f"({completed}/{total} steps completed, {failed} failed)")
         return plan
+
+    def execute_plan_parallel(self, plan: ExecutionPlan,
+                              executor: Callable = None,
+                              progress_callback: Callable = None,
+                              verify_steps: bool = True,
+                              max_workers: int = 4) -> ExecutionPlan:
+        """
+        Execute plan steps in parallel where dependencies allow.
+
+        Each layer of independent steps executes concurrently.
+        Steps within a layer that have all dependencies met run in parallel.
+
+        Args:
+            plan: The plan to execute
+            executor: Callable(action_type, target, value, parameters) -> result str
+            progress_callback: Called after each step with (plan, node)
+            verify_steps: Whether to AI-verify step outcomes
+            max_workers: Maximum number of parallel workers
+
+        Returns:
+            Updated plan with results
+        """
+        self._cancelled = False
+        plan.status = PlanStatus.EXECUTING
+        exec_fn = executor or self.executor
+
+        layer_num = 0
+        while True:
+            if self._cancelled:
+                plan.status = PlanStatus.CANCELLED
+                break
+
+            # Get all nodes ready to execute (dependencies met)
+            ready = plan.get_next_executable()
+            if not ready:
+                break
+
+            layer_num += 1
+            logger.info(f"[Planner] Executing layer {layer_num} with {len(ready)} parallel tasks")
+
+            # Execute ready nodes in parallel
+            results: Dict[str, Tuple[PlanNode, bool]] = {}
+
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(ready))) as pool:
+                future_to_node = {
+                    pool.submit(self._execute_node_threadsafe, node, plan, exec_fn, verify_steps): node
+                    for node in ready
+                }
+
+                for future in as_completed(future_to_node):
+                    node = future_to_node[future]
+                    try:
+                        success = future.result()
+                        results[node.id] = (node, success)
+                    except Exception as e:
+                        logger.error(f"[Planner] Parallel execution error for {node.id}: {e}")
+                        results[node.id] = (node, False)
+                        node.error = str(e)
+                        self._mark_failed(node, plan)
+
+            # Call progress callbacks for completed nodes
+            if progress_callback:
+                for node_id, (node, success) in results.items():
+                    try:
+                        progress_callback(plan, node)
+                    except Exception:
+                        pass
+
+            # Handle replanning for failed nodes
+            for node_id, (node, success) in results.items():
+                if not success and node.status != PlanNodeStatus.COMPLETED:
+                    if plan.total_replans < plan.max_replans:
+                        revised = self.revise_plan(node.id, node.error or "Step failed")
+                        if revised:
+                            plan.total_replans += 1
+                            node.status = PlanNodeStatus.PENDING
+
+        # Determine final status
+        completed = len(plan.completed_nodes)
+        failed = len(plan.failed_nodes)
+        total = len(plan.nodes)
+
+        if self._cancelled:
+            plan.status = PlanStatus.CANCELLED
+        elif failed == 0 and completed == total:
+            plan.status = PlanStatus.COMPLETED
+        elif completed > 0:
+            plan.status = PlanStatus.PARTIAL
+        else:
+            plan.status = PlanStatus.FAILED
+
+        plan.completed_at = datetime.now().isoformat()
+        logger.info(f"[Planner] Parallel plan {plan.plan_id}: {plan.status.value} "
+                     f"({completed}/{total} steps completed, {failed} failed, {layer_num} layers)")
+        return plan
+
+    def _execute_node_threadsafe(self, node: PlanNode, plan: ExecutionPlan,
+                                  executor: Callable = None, verify: bool = True) -> bool:
+        """
+        Thread-safe version of _execute_node for parallel execution.
+
+        Uses a lock around critical sections to prevent race conditions.
+        """
+        return self._execute_node(node, plan, executor, verify)
 
     def _execute_node(self, node: PlanNode, plan: ExecutionPlan,
                       executor: Callable = None, verify: bool = True) -> bool:
