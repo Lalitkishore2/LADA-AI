@@ -66,12 +66,27 @@ class LADAAPIServer:
             redoc_url="/redoc",
         )
 
-        # CORS middleware
+        # CORS middleware - Restrict to specific origins for security
+        allowed_origins = os.getenv("LADA_CORS_ORIGINS", "")
+        if allowed_origins:
+            # Use specific origins from env var (comma-separated)
+            origins_list = [origin.strip() for origin in allowed_origins.split(",")]
+            logger.info(f"[APIServer] CORS enabled for specific origins: {origins_list}")
+        else:
+            # Default: localhost/127.0.0.1 on common ports for development
+            origins_list = [
+                "http://localhost:3000",
+                "http://localhost:5000",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:5000",
+            ]
+            logger.warning("[APIServer] CORS using default localhost origins. Set LADA_CORS_ORIGINS for production.")
+        
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=origins_list,  # Specific origins only
             allow_credentials=True,
-            allow_methods=["*"],
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             allow_headers=["*"],
         )
 

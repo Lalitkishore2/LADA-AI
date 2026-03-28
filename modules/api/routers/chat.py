@@ -1,5 +1,7 @@
 """
 LADA API — Chat routes (/chat, /conversations, /models, /agents, /voice, /export)
+
+Security: Uses error sanitization to prevent internal details from leaking.
 """
 
 import os
@@ -16,6 +18,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from modules.api.models import (
     ChatRequest, ChatResponse, AgentRequest, AgentResponse, HealthResponse
 )
+from modules.error_sanitizer import safe_error_response, SafeErrorResponse
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +64,17 @@ def create_chat_router(state):
                 model=state.ai_router.current_model or "unknown", sources=[],
                 timestamp=datetime.now().isoformat(),
             )
+        except SafeErrorResponse as e:
+            # Pre-sanitized error with specific status code
+            raise HTTPException(status_code=e.status_code, detail=e.message)
         except Exception as e:
-            logger.error(f"[APIServer] Chat error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            # Sanitize error before exposing to client
+            error_info = safe_error_response(e, operation="chat_query")
+            logger.error(f"[APIServer] Chat error: {type(e).__name__}")  # Don't log full message
+            raise HTTPException(
+                status_code=error_info["status_code"],
+                detail=error_info["error"]
+            )
 
     @r.post("/chat/stream")
     async def chat_stream(request: ChatRequest):

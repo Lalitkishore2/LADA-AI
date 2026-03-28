@@ -1,11 +1,12 @@
 """
 LADA v7.0 - Google Calendar Integration
 View and add calendar events via voice
+
+SECURITY: Uses JSON token storage instead of pickle to prevent code execution vulnerabilities.
 """
 
 import os
 import json
-import pickle
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,7 +40,7 @@ class GoogleCalendar:
     SCOPES = ['https://www.googleapis.com/auth/calendar']
     
     def __init__(self, credentials_path: str = 'config/credentials.json', 
-                 token_path: str = 'config/calendar_token.pickle'):
+                 token_path: str = 'config/calendar_token.json'):
         self.credentials_path = Path(credentials_path)
         self.token_path = Path(token_path)
         self.service = None
@@ -74,8 +75,10 @@ class GoogleCalendar:
         # Try to load existing valid token (no browser needed)
         if self.token_path.exists():
             try:
-                with open(self.token_path, 'rb') as token:
-                    self.creds = pickle.load(token)
+                with open(self.token_path, 'r') as token_file:
+                    token_data = json.load(token_file)
+                
+                self.creds = Credentials.from_authorized_user_info(token_data, self.SCOPES)
                 
                 if self.creds and self.creds.valid:
                     self.service = build('calendar', 'v3', credentials=self.creds)
@@ -84,8 +87,9 @@ class GoogleCalendar:
                     return True
                 elif self.creds and self.creds.expired and self.creds.refresh_token:
                     self.creds.refresh(Request())
-                    with open(self.token_path, 'wb') as token:
-                        pickle.dump(self.creds, token)
+                    # Save refreshed token as JSON
+                    with open(self.token_path, 'w') as token_file:
+                        token_file.write(self.creds.to_json())
                     self.service = build('calendar', 'v3', credentials=self.creds)
                     self.initialized = True
                     logger.info("✅ Google Calendar token refreshed")
@@ -116,10 +120,10 @@ class GoogleCalendar:
             )
             self.creds = flow.run_local_server(port=0)
             
-            # Save token
+            # Save token as JSON
             self.token_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.token_path, 'wb') as token:
-                pickle.dump(self.creds, token)
+            with open(self.token_path, 'w') as token_file:
+                token_file.write(self.creds.to_json())
             
             # Build service
             self.service = build('calendar', 'v3', credentials=self.creds)

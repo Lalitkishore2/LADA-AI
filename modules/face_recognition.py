@@ -1,11 +1,12 @@
 """
 LADA v7.0 - Face Recognition Security Module
 Unlock app with your face - Supports both OpenCV popup and PyQt5 embedded modes
+
+SECURITY: Uses numpy npz format instead of pickle to prevent code execution vulnerabilities.
 """
 
 import os
 import logging
-import pickle
 from pathlib import Path
 from typing import Optional, Tuple, Callable
 import time
@@ -34,7 +35,7 @@ class FaceRecognition:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
-        self.face_data_file = self.data_dir / 'face_data.pkl'
+        self.face_data_file = self.data_dir / 'face_data.npz'
         self.face_cascade_file = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml' if CV_AVAILABLE else None
         
         self.face_cascade = None
@@ -49,10 +50,10 @@ class FaceRecognition:
         try:
             self.face_cascade = cv2.CascadeClassifier(self.face_cascade_file)
             
-            # Load saved face data
+            # Load saved face data from numpy npz format
             if self.face_data_file.exists():
-                with open(self.face_data_file, 'rb') as f:
-                    self.known_face = pickle.load(f)
+                data = np.load(self.face_data_file)
+                self.known_face = data['face_data']
                 self.is_enrolled = True
                 logger.info("✅ Face data loaded - recognition ready")
             else:
@@ -140,8 +141,8 @@ class FaceRecognition:
                 'enrolled_at': time.time()
             }
             
-            with open(self.face_data_file, 'wb') as f:
-                pickle.dump(self.known_face, f)
+            # Save using numpy npz format (secure)
+            np.savez(self.face_data_file, face_data=self.known_face)
             
             self.is_enrolled = True
             logger.info("✅ Face enrolled successfully")
@@ -375,8 +376,8 @@ class FaceRecognition:
                 'enrolled_at': time.time()
             }
             
-            with open(self.face_data_file, 'wb') as f:
-                pickle.dump(self.known_face, f)
+            # Save using numpy npz format
+            np.savez(self.face_data_file, face_data=self.known_face)
             
             self.is_enrolled = True
             logger.info("✅ Face enrolled successfully (in-app mode)")

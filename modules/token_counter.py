@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from modules.singleton_utils import thread_safe_singleton
+
 logger = logging.getLogger(__name__)
 
 # Approximate characters per token (varies by model/language)

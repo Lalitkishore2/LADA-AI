@@ -27,6 +27,14 @@ from modules.providers.base_provider import (
 
 logger = logging.getLogger(__name__)
 
+# Import secure vault for encrypted API key storage
+try:
+    from modules.secure_vault import get_secure_vault
+    SECURE_VAULT_OK = True
+except ImportError:
+    SECURE_VAULT_OK = False
+    logger.warning("[ProviderManager] Secure vault not available, using env vars")
+
 # Import protocol adapters
 try:
     from modules.providers.openai_provider import OpenAIProvider
@@ -145,13 +153,26 @@ class ProviderManager:
                     logger.debug(f"[ProviderManager] No adapter for api_type '{api_type}' (provider {pid})")
                     continue
 
-                # Get API key from ENV
+                # Get API key from secure vault or fallback to ENV
                 config_keys = pinfo.config_keys
                 api_key = ""
                 base_url = ""
 
                 for ck in config_keys:
-                    val = os.getenv(ck, '')
+                    # Try secure vault first
+                    if SECURE_VAULT_OK:
+                        try:
+                            vault = get_secure_vault()
+                            val = vault.get(ck)
+                            if not val:
+                                # Fallback to env for backward compatibility
+                                val = os.getenv(ck, '')
+                        except Exception as e:
+                            logger.warning(f"[ProviderManager] Vault error for {ck}: {e}, using env")
+                            val = os.getenv(ck, '')
+                    else:
+                        val = os.getenv(ck, '')
+                    
                     if val:
                         if 'URL' in ck.upper():
                             base_url = val
