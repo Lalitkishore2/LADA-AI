@@ -8,6 +8,3 @@ This file stores curated facts the assistant should always remember.
 
 ## Project Notes
 
-## Test Notes
-
-- HeartbeatSystem test ran successfully
