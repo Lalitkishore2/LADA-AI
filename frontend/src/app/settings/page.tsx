@@ -2,7 +2,22 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { WSClient, generateId } from '@/lib/ws-client';
-import ProviderStatus from '@/components/ProviderStatus';
+import { cn } from '@/lib/utils';
+import {
+  RefreshCw,
+  Wifi,
+  WifiOff,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Users,
+  Trash2,
+  Activity,
+  Server,
+  Gauge,
+  Settings2,
+  Shield,
+} from 'lucide-react';
 import type { ServerMessage } from '@/types/ws-protocol';
 
 // ---------------------------------------------------------------------------
@@ -47,7 +62,62 @@ function formatUptime(seconds?: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Component
+// Section Card Component
+// ---------------------------------------------------------------------------
+
+function SectionCard({ 
+  title, 
+  icon: Icon, 
+  children,
+  action
+}: { 
+  title: string; 
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800/50 bg-zinc-900/50 overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800/50">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-zinc-800/50">
+            <Icon className="w-4 h-4 text-indigo-400" />
+          </div>
+          <h2 className="font-semibold text-zinc-100">{title}</h2>
+        </div>
+        {action}
+      </div>
+      <div className="p-5">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stat Box Component
+// ---------------------------------------------------------------------------
+
+function StatBox({ 
+  label, 
+  value, 
+  subtext 
+}: { 
+  label: string; 
+  value: string | number; 
+  subtext?: string;
+}) {
+  return (
+    <div className="p-4 rounded-lg bg-zinc-800/30 border border-zinc-800/50">
+      <div className="text-xs text-zinc-500 mb-1">{label}</div>
+      <div className="text-lg font-mono text-zinc-200">{value}</div>
+      {subtext && <div className="text-xs text-zinc-600 mt-0.5">{subtext}</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Component
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
@@ -57,6 +127,7 @@ export default function SettingsPage() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [clearing, setClearing] = useState(false);
   const [clearMessage, setClearMessage] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
   const wsRef = React.useRef<WSClient | null>(null);
 
@@ -82,6 +153,7 @@ export default function SettingsPage() {
           break;
 
         case 'system.status': {
+          setRefreshing(false);
           const raw = msg.data as unknown as SystemStatus;
           setStatus(raw);
 
@@ -121,6 +193,7 @@ export default function SettingsPage() {
 
   const handleRefresh = useCallback(() => {
     if (wsRef.current?.connected) {
+      setRefreshing(true);
       wsRef.current.send({
         type: 'system',
         id: generateId(),
@@ -140,180 +213,208 @@ export default function SettingsPage() {
     });
   }, []);
 
+  // Stats
+  const availableCount = providers.filter(p => p.available).length;
+  const totalCount = providers.length;
+
   // ---- Render -------------------------------------------------------------
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-1">Settings</h1>
-      <p className="text-[var(--text-secondary)] text-sm mb-8">
-        System status, provider health, and session management.
-      </p>
-
-      {/* ---- Connection / Provider status ---- */}
-      <section className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Provider Status</h2>
-          <button
-            onClick={handleRefresh}
-            disabled={!connected}
-            className="text-xs text-indigo-400 hover:text-indigo-300 disabled:text-gray-600 transition-colors"
-          >
-            Refresh
-          </button>
-        </div>
-
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
-          <ProviderStatus
-            connected={connected}
-            sessionId={sessionId}
-            providers={providers}
-          />
-
-          {/* Per-provider cards */}
-          {providers.length > 0 && (
-            <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {providers.map((p) => (
-                <div
-                  key={p.name}
-                  className="flex items-center justify-between bg-[var(--bg-tertiary)] border border-[var(--border)] rounded-lg px-4 py-3"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-block w-2.5 h-2.5 rounded-full ${
-                        p.available
-                          ? 'bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.4)]'
-                          : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.4)]'
-                      }`}
-                    />
-                    <span className="text-sm font-medium">{p.name}</span>
-                  </div>
-                  <span
-                    className={`text-xs ${
-                      p.available ? 'text-green-400' : 'text-red-400'
-                    }`}
-                  >
-                    {p.available ? 'Available' : 'Unavailable'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {providers.length === 0 && connected && (
-            <p className="mt-4 text-sm text-[var(--text-secondary)]">
-              No provider data received yet. Click Refresh to retry.
+    <div className="min-h-screen bg-zinc-950 p-6">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-2xl font-bold text-zinc-100 mb-2">Settings</h1>
+            <p className="text-zinc-400">
+              System status, providers, and session management
             </p>
-          )}
-        </div>
-      </section>
-
-      {/* ---- Rate Limiter Stats ---- */}
-      {status?.rate_limiter && (
-        <section className="mb-8">
-          <h2 className="text-lg font-semibold mb-4">Rate Limiter</h2>
-          <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div>
-                <div className="text-xs text-[var(--text-secondary)] mb-1">
-                  Requests
-                </div>
-                <div className="text-lg font-mono">
-                  {status.rate_limiter.requests_made ?? '-'}
-                  {status.rate_limiter.requests_limit && (
-                    <span className="text-sm text-[var(--text-secondary)]">
-                      {' '}
-                      / {status.rate_limiter.requests_limit}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-[var(--text-secondary)] mb-1">
-                  Tokens Used
-                </div>
-                <div className="text-lg font-mono">
-                  {status.rate_limiter.tokens_used?.toLocaleString() ?? '-'}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-[var(--text-secondary)] mb-1">
-                  Token Limit
-                </div>
-                <div className="text-lg font-mono">
-                  {status.rate_limiter.tokens_limit?.toLocaleString() ?? '-'}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-[var(--text-secondary)] mb-1">
-                  Resets At
-                </div>
-                <div className="text-sm font-mono">
-                  {status.rate_limiter.reset_at ?? '-'}
-                </div>
-              </div>
-            </div>
           </div>
-        </section>
-      )}
-
-      {/* ---- Session Info ---- */}
-      <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-4">Session</h2>
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <div className="text-xs text-[var(--text-secondary)] mb-1">
-                Session ID
-              </div>
-              <div className="text-sm font-mono">
-                {sessionId ?? 'Not connected'}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-[var(--text-secondary)] mb-1">
-                Uptime
-              </div>
-              <div className="text-sm font-mono">
-                {formatUptime(status?.uptime)}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-[var(--text-secondary)] mb-1">
-                WS Connections
-              </div>
-              <div className="text-sm font-mono">
-                {status?.ws_connections ?? '-'}
-              </div>
-            </div>
+          <div className={cn(
+            "flex items-center gap-2 px-3 py-1.5 rounded-full text-sm",
+            connected 
+              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+              : "bg-red-500/10 text-red-400 border border-red-500/20"
+          )}>
+            {connected ? (
+              <>
+                <Wifi className="w-4 h-4" />
+                <span>Connected</span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-4 h-4" />
+                <span>Disconnected</span>
+              </>
+            )}
           </div>
         </div>
-      </section>
 
-      {/* ---- Actions ---- */}
-      <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-4">Actions</h2>
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium">Clear Conversation History</div>
-              <div className="text-xs text-[var(--text-secondary)] mt-0.5">
-                Remove all messages from the current session.
+        <div className="space-y-6">
+          {/* Provider Status */}
+          <SectionCard
+            title="Providers"
+            icon={Server}
+            action={
+              <button
+                onClick={handleRefresh}
+                disabled={!connected || refreshing}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all",
+                  "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50",
+                  "disabled:opacity-50 disabled:cursor-not-allowed"
+                )}
+              >
+                <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
+                Refresh
+              </button>
+            }
+          >
+            {/* Summary */}
+            <div className="flex items-center gap-4 mb-4 pb-4 border-b border-zinc-800/50">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span className="text-sm text-zinc-300">
+                  <span className="font-medium">{availableCount}</span> available
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <XCircle className="w-4 h-4 text-red-400" />
+                <span className="text-sm text-zinc-300">
+                  <span className="font-medium">{totalCount - availableCount}</span> unavailable
+                </span>
               </div>
             </div>
-            <button
-              onClick={handleClearHistory}
-              disabled={!connected || clearing}
-              className="bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg px-4 py-2 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500"
-            >
-              {clearing ? 'Clearing...' : 'Clear History'}
-            </button>
-          </div>
 
-          {clearMessage && (
-            <div className="mt-3 text-sm text-green-400">{clearMessage}</div>
-          )}
+            {/* Provider grid */}
+            {providers.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {providers.map((p) => (
+                  <div
+                    key={p.name}
+                    className={cn(
+                      "flex items-center justify-between p-3 rounded-lg border transition-colors",
+                      p.available
+                        ? "bg-zinc-800/30 border-zinc-800/50 hover:border-zinc-700/50"
+                        : "bg-red-500/5 border-red-500/20"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "w-2 h-2 rounded-full",
+                          p.available 
+                            ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.4)]"
+                            : "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.4)]"
+                        )}
+                      />
+                      <span className="text-sm font-medium text-zinc-200">{p.name}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-zinc-500">
+                {connected ? 'No provider data. Click Refresh.' : 'Connect to see providers.'}
+              </p>
+            )}
+          </SectionCard>
+
+          {/* Rate Limiter */}
+          <SectionCard title="Rate Limits" icon={Gauge}>
+            {status?.rate_limiter ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <StatBox
+                  label="Requests"
+                  value={status.rate_limiter.requests_made ?? 0}
+                  subtext={status.rate_limiter.requests_limit 
+                    ? `of ${status.rate_limiter.requests_limit}` 
+                    : undefined}
+                />
+                <StatBox
+                  label="Tokens Used"
+                  value={(status.rate_limiter.tokens_used ?? 0).toLocaleString()}
+                />
+                <StatBox
+                  label="Token Limit"
+                  value={(status.rate_limiter.tokens_limit ?? 0).toLocaleString()}
+                />
+                <StatBox
+                  label="Resets At"
+                  value={status.rate_limiter.reset_at ?? '-'}
+                />
+              </div>
+            ) : (
+              <p className="text-sm text-zinc-500">No rate limit data available.</p>
+            )}
+          </SectionCard>
+
+          {/* Session Info */}
+          <SectionCard title="Session" icon={Activity}>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <StatBox
+                label="Session ID"
+                value={sessionId ? sessionId.slice(0, 8) + '...' : 'Not connected'}
+              />
+              <StatBox
+                label="Uptime"
+                value={formatUptime(status?.uptime)}
+              />
+              <StatBox
+                label="Active Connections"
+                value={status?.ws_connections ?? '-'}
+              />
+            </div>
+          </SectionCard>
+
+          {/* Actions */}
+          <SectionCard title="Actions" icon={Settings2}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-zinc-200">
+                  Clear Conversation History
+                </div>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Remove all messages from the current session
+                </p>
+              </div>
+              <button
+                onClick={handleClearHistory}
+                disabled={!connected || clearing}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                  "bg-red-500/10 text-red-400 border border-red-500/20",
+                  "hover:bg-red-500/20 hover:border-red-500/30",
+                  "disabled:opacity-50 disabled:cursor-not-allowed"
+                )}
+              >
+                <Trash2 className="w-4 h-4" />
+                {clearing ? 'Clearing...' : 'Clear History'}
+              </button>
+            </div>
+
+            {clearMessage && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-emerald-400">
+                <CheckCircle2 className="w-4 h-4" />
+                {clearMessage}
+              </div>
+            )}
+          </SectionCard>
+
+          {/* Security Note */}
+          <div className="flex items-start gap-3 p-4 rounded-lg bg-indigo-500/5 border border-indigo-500/20">
+            <Shield className="w-5 h-5 text-indigo-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm text-zinc-300">
+                All API keys and credentials are stored locally in your <code className="text-xs bg-zinc-800 px-1.5 py-0.5 rounded">.env</code> file.
+              </p>
+              <p className="text-xs text-zinc-500 mt-1">
+                LADA never sends your credentials to external servers.
+              </p>
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
     </div>
   );
 }
