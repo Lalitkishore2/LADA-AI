@@ -1,5 +1,11 @@
 """
 LADA API — WebSocket gateway (/ws)
+
+Security features:
+- Message size limits (default 64KB)
+- Connection rate limiting
+- Max concurrent connections per IP
+- Idle timeout
 """
 
 import json
@@ -7,11 +13,22 @@ import time
 import uuid
 import asyncio
 import logging
+import os
 from datetime import datetime
+from collections import defaultdict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
+
+# WebSocket security configuration
+WS_MAX_MESSAGE_SIZE = int(os.getenv("LADA_WS_MAX_MESSAGE_SIZE", "65536"))  # 64KB default
+WS_MAX_CONNECTIONS_PER_IP = int(os.getenv("LADA_WS_MAX_CONN_PER_IP", "5"))
+WS_IDLE_TIMEOUT = int(os.getenv("LADA_WS_IDLE_TIMEOUT", "300"))  # 5 minutes
+WS_MESSAGE_RATE_LIMIT = int(os.getenv("LADA_WS_MSG_RATE_LIMIT", "30"))  # messages per minute
+
+# Track connections per IP
+_connections_per_ip: dict = defaultdict(int)
 
 
 def create_ws_router(state):
@@ -21,28 +38,95 @@ def create_ws_router(state):
     @r.websocket("/ws")
     async def websocket_gateway(websocket: WebSocket):
         """WebSocket gateway — real-time messaging with LADA."""
+        # Get client IP
+        client_ip = "unknown"
+        if websocket.client:
+            client_ip = websocket.client.host
+        
+        # Check connection limit per IP
+        if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
+            await websocket.close(code=4029, reason="Too many connections from this IP")
+            logger.warning(f"[WS] Rejected connection from {client_ip}: too many connections")
+            return
+        
         token = websocket.query_params.get("token", "")
         if not state.validate_session_token(token):
             await websocket.close(code=4001, reason="Authentication required")
             return
 
         await websocket.accept()
+        _connections_per_ip[client_ip] += 1
+        
         session_id = str(uuid.uuid4())[:8]
         state.ws_connections[session_id] = websocket
         state.ws_sessions[session_id] = {
-            'connected_at': time.time(), 'messages_sent': 0, 'messages_received': 0,
+            'connected_at': time.time(), 
+            'messages_sent': 0, 
+            'messages_received': 0,
+            'last_activity': time.time(),
+            'client_ip': client_ip,
+            'rate_limit_counter': 0,
+            'rate_limit_window_start': time.time(),
         }
-        logger.info(f"[WS] Client connected: {session_id}")
+        logger.info(f"[WS] Client connected: {session_id} from {client_ip}")
 
         try:
             await websocket.send_json({
                 "type": "system.connected",
                 "data": {"session_id": session_id, "version": "8.0.0",
-                         "capabilities": ["chat", "stream", "agent", "system"]},
+                         "capabilities": ["chat", "stream", "agent", "system"],
+                         "limits": {
+                             "max_message_size": WS_MAX_MESSAGE_SIZE,
+                             "rate_limit": WS_MESSAGE_RATE_LIMIT,
+                             "idle_timeout": WS_IDLE_TIMEOUT,
+                         }},
             })
 
             while True:
-                raw = await websocket.receive_text()
+                # Check idle timeout
+                session = state.ws_sessions.get(session_id, {})
+                if time.time() - session.get('last_activity', 0) > WS_IDLE_TIMEOUT:
+                    await websocket.close(code=4000, reason="Idle timeout")
+                    logger.info(f"[WS] Session {session_id} closed due to idle timeout")
+                    break
+                
+                # Receive with timeout for idle check
+                try:
+                    raw = await asyncio.wait_for(
+                        websocket.receive_text(),
+                        timeout=60  # Check idle every minute
+                    )
+                except asyncio.TimeoutError:
+                    continue  # Loop back to check idle timeout
+                
+                # Check message size
+                if len(raw) > WS_MAX_MESSAGE_SIZE:
+                    await websocket.send_json({
+                        "type": "error", 
+                        "data": {"message": f"Message too large. Max size: {WS_MAX_MESSAGE_SIZE} bytes"}
+                    })
+                    logger.warning(f"[WS] Message from {session_id} rejected: too large ({len(raw)} bytes)")
+                    continue
+                
+                # Check rate limit
+                now = time.time()
+                if now - session.get('rate_limit_window_start', 0) >= 60:
+                    # Reset rate limit window
+                    state.ws_sessions[session_id]['rate_limit_counter'] = 0
+                    state.ws_sessions[session_id]['rate_limit_window_start'] = now
+                
+                state.ws_sessions[session_id]['rate_limit_counter'] = session.get('rate_limit_counter', 0) + 1
+                if state.ws_sessions[session_id]['rate_limit_counter'] > WS_MESSAGE_RATE_LIMIT:
+                    await websocket.send_json({
+                        "type": "error",
+                        "data": {"message": "Rate limit exceeded. Slow down."}
+                    })
+                    logger.warning(f"[WS] Rate limit exceeded for {session_id}")
+                    continue
+                
+                # Update last activity
+                state.ws_sessions[session_id]['last_activity'] = now
+                
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
@@ -79,6 +163,8 @@ def create_ws_router(state):
         except Exception as e:
             logger.error(f"[WS] Error for {session_id}: {e}")
         finally:
+            # Cleanup connection tracking
+            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
             state.ws_connections.pop(session_id, None)
             state.ws_sessions.pop(session_id, None)
 

@@ -90,6 +90,15 @@ class LADAAPIServer:
             allow_headers=["*"],
         )
 
+        # Rate limiting middleware (applied before auth)
+        try:
+            from modules.api_rate_limiter import RateLimitMiddleware, get_api_rate_limiter
+            rate_limiter = get_api_rate_limiter()
+            self.app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
+            logger.info("[APIServer] Rate limiting enabled")
+        except ImportError:
+            logger.warning("[APIServer] Rate limiting not available")
+
         # Session auth middleware
         @self.app.middleware("http")
         async def auth_middleware(request, call_next):
