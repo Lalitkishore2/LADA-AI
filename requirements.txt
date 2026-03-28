@@ -134,7 +134,7 @@ websocket-client>=1.6.0          # CDP WebSocket connection
 # ngrok>=0.8.0                   # HTTPS tunnel for Alexa
 
 # ============ SYSTEM TRAY ============
-# pystray>=0.19.0                # System tray icon
+pystray>=0.19.0                  # System tray icon
 
 # ============ MOLTBOT ============
 pyserial>=3.5                    # Serial communication

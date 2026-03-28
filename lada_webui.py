@@ -23,7 +23,6 @@ import webbrowser
 import logging
 import subprocess
 import re
-import argparse
 from pathlib import Path
 from urllib.request import urlopen
 from urllib.error import URLError

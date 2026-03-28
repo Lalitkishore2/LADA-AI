@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (
     QTextEdit, QPushButton, QLabel, QFrame, QScrollArea,
     QDialog, QFileDialog, QComboBox, QListWidget, QListWidgetItem,
     QSlider, QCheckBox, QSpinBox, QGroupBox, QShortcut, QStatusBar,
-    QSystemTrayIcon, QMenu, QAction, QMessageBox, QSizePolicy,
+    QSystemTrayIcon, QMenu, QMessageBox, QSizePolicy,
     QTextBrowser, QLineEdit
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPointF, QEvent
@@ -734,11 +734,7 @@ logger = logging.getLogger(__name__)
 # ── Theme (colors, typography, GLOBAL_QSS) ──
 from theme import (
     BG_MAIN, BG_SIDE, BG_INPUT, BG_HOVER, BG_CARD, BG_SURFACE,
-    TEXT, TEXT_DIM, GREEN, ACCENT, ACCENT_GRADIENT_END, ACCENT_DARK, ACCENT_LIGHT,
-    BLUE, PURPLE, RED, BORDER, BORDER_FOCUS,
-    FONT_FAMILY, FONT_HEADING, FONT_SIZE_SM, FONT_SIZE_MD, FONT_SIZE_LG, FONT_SIZE_XL,
-    SUCCESS, WARNING, INFO,
-    GLOBAL_QSS, header_button_style,
+    TEXT, TEXT_DIM, GREEN, ACCENT, ACCENT_GRADIENT_END, ACCENT_DARK, BLUE, RED, BORDER, FONT_FAMILY, FONT_HEADING, FONT_SIZE_SM, FONT_SIZE_MD, SUCCESS, WARNING, GLOBAL_QSS,
 )
 
 

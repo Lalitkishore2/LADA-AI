@@ -15,7 +15,6 @@ Features:
 
 import os
 import re
-import json
 import subprocess
 import webbrowser
 import psutil
@@ -90,15 +89,6 @@ IMAGE_GEN_OK = _svc.ok('image_gen')
 VIDEO_GEN_OK = _svc.ok('video_gen')
 CODE_SANDBOX_OK = _svc.ok('code_sandbox')
 DOC_READER_OK = _svc.ok('document_reader')
-DEEP_RESEARCH_OK = _svc.ok('deep_research')
-VISUAL_GROUNDING_OK = _svc.ok('visual_grounding')
-PAGE_VISION_OK = _svc.ok('page_vision')
-SENTIMENT_OK = _svc.ok('sentiment')
-WEATHER_BRIEFING_OK = _svc.ok('weather_briefing')
-FOCUS_MODES_OK = _svc.ok('focus_modes')
-CITATION_OK = _svc.ok('citation')
-EXPORT_OK = _svc.ok('export')
-
 # Backward-compatible class/function references used by __init__
 SystemController = _svc.get('system', 'SystemController')
 CometBrowserAgent = _svc.get('browser', 'CometBrowserAgent')

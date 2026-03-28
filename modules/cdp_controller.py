@@ -35,7 +35,7 @@ import json
 import logging
 import threading
 from typing import Optional, Dict, Any, List, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

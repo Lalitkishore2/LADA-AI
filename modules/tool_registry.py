@@ -14,8 +14,6 @@ instead of scanning through regex patterns.
 Inspired by OpenClaw's tool-display.json architecture.
 """
 
-import os
-import json
 import logging
 from typing import Optional, Dict, Any, List, Callable
 from dataclasses import dataclass, field
@@ -916,6 +914,165 @@ def create_agent_tools() -> List[ToolDefinition]:
     return tools
 
 
+def create_scheduling_tools() -> List[ToolDefinition]:
+    """Create scheduling and reminder tools"""
+    tools: List[ToolDefinition] = []
+    
+    tools.append(ToolDefinition(
+        name="schedule_task",
+        description="Schedule a task to run at a specific time or interval.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("task", "string", "The command or task to execute", required=True),
+            ToolParameter("run_at", "string", "When to run (datetime or cron expression)", required=True),
+            ToolParameter("recurring", "boolean", "Whether this is a recurring task", default=False),
+            ToolParameter("interval", "string", "Interval for recurring (e.g., '1h', '30m', '1d')"),
+        ],
+        keywords=["schedule", "remind", "timer", "alarm", "later", "at time"],
+        examples=["remind me to call mom at 5pm", "schedule backup at midnight", "run cleanup every hour"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="cancel_task",
+        description="Cancel a scheduled task by ID or description.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("task_id", "string", "Task ID or search term to cancel"),
+        ],
+        keywords=["cancel", "remove", "delete", "stop scheduled"],
+        examples=["cancel the 5pm reminder", "remove backup schedule"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="list_scheduled_tasks",
+        description="List all scheduled tasks and their status.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[],
+        keywords=["list schedules", "show reminders", "pending tasks", "upcoming"],
+        examples=["show my reminders", "list scheduled tasks", "what's pending"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="memory_save",
+        description="Save information to LADA's long-term memory for later recall.",
+        category=ToolCategory.AI,
+        parameters=[
+            ToolParameter("key", "string", "Memory key/topic", required=True),
+            ToolParameter("value", "string", "Information to remember", required=True),
+            ToolParameter("tags", "array", "Tags for categorization"),
+        ],
+        keywords=["remember", "save", "store", "note", "memorize"],
+        examples=["remember my wifi password is xyz123", "note that John's birthday is March 15"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="memory_recall",
+        description="Recall information from LADA's long-term memory.",
+        category=ToolCategory.AI,
+        parameters=[
+            ToolParameter("query", "string", "What to recall (semantic search)", required=True),
+        ],
+        keywords=["recall", "remember", "what is", "what was", "retrieve"],
+        examples=["what's my wifi password", "recall John's birthday", "what did I save about"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="memory_list",
+        description="List all stored memories, optionally filtered by tags.",
+        category=ToolCategory.AI,
+        parameters=[
+            ToolParameter("tags", "array", "Filter by tags"),
+            ToolParameter("limit", "integer", "Maximum results", default=20),
+        ],
+        keywords=["list memories", "show saved", "all notes"],
+        examples=["list my memories", "show all saved notes"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    return tools
+
+
+def create_messaging_tools() -> List[ToolDefinition]:
+    """Create multi-platform messaging tools"""
+    tools: List[ToolDefinition] = []
+    
+    tools.append(ToolDefinition(
+        name="send_message",
+        description="Send a message to a contact via any connected platform (SMS, Telegram, Discord, etc.).",
+        category=ToolCategory.COMMUNICATION,
+        parameters=[
+            ToolParameter("recipient", "string", "Contact name or identifier", required=True),
+            ToolParameter("message", "string", "Message content", required=True),
+            ToolParameter("platform", "string", "Platform to use (auto, telegram, discord, slack, whatsapp, sms)", default="auto"),
+        ],
+        keywords=["send", "message", "text", "tell", "notify", "dm"],
+        examples=["send John 'meeting at 3pm'", "text mom I'll be late", "message @user on discord"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="read_messages",
+        description="Read recent messages from a platform or contact.",
+        category=ToolCategory.COMMUNICATION,
+        parameters=[
+            ToolParameter("platform", "string", "Platform to read from (all, telegram, discord, etc.)", default="all"),
+            ToolParameter("contact", "string", "Filter by contact name"),
+            ToolParameter("limit", "integer", "Number of messages to read", default=10),
+        ],
+        keywords=["read messages", "check messages", "new messages", "inbox"],
+        examples=["read my telegram messages", "check messages from John"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="ssh_execute",
+        description="Execute a command on a remote server via SSH.",
+        category=ToolCategory.SYSTEM,
+        parameters=[
+            ToolParameter("host", "string", "Server hostname or IP", required=True),
+            ToolParameter("command", "string", "Command to execute", required=True),
+            ToolParameter("user", "string", "SSH username", default="root"),
+            ToolParameter("port", "integer", "SSH port", default=22),
+        ],
+        keywords=["ssh", "remote", "server", "execute remote", "run on server"],
+        examples=["ssh server1 'df -h'", "run 'systemctl restart nginx' on webserver"],
+        permission=PermissionLevel.DANGEROUS,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="smart_home_control",
+        description="Control smart home devices (lights, thermostat, plugs, etc.).",
+        category=ToolCategory.INTEGRATION,
+        parameters=[
+            ToolParameter("device", "string", "Device name or room", required=True),
+            ToolParameter("action", "string", "Action (on, off, set, toggle)", required=True),
+            ToolParameter("value", "string", "Value for 'set' action (brightness %, temperature, etc.)"),
+        ],
+        keywords=["smart home", "lights", "thermostat", "home assistant", "turn on", "turn off"],
+        examples=["turn on living room lights", "set bedroom lights to 50%", "set thermostat to 72"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    tools.append(ToolDefinition(
+        name="smart_home_status",
+        description="Get status of smart home devices.",
+        category=ToolCategory.INTEGRATION,
+        parameters=[
+            ToolParameter("device", "string", "Device name or 'all' for all devices"),
+        ],
+        keywords=["smart home status", "device status", "lights status", "thermostat status"],
+        examples=["what's the thermostat set to", "are the lights on", "smart home status"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    return tools
+
+
 # Module-level singleton
 _registry: Optional[ToolRegistry] = None
 
@@ -929,5 +1086,10 @@ def get_tool_registry() -> ToolRegistry:
             _registry.register(tool)
         for tool in create_agent_tools():
             _registry.register(tool)
+        for tool in create_scheduling_tools():
+            _registry.register(tool)
+        for tool in create_messaging_tools():
+            _registry.register(tool)
         logger.info(f"[ToolRegistry] {len(_registry._tools)} tools registered")
+    return _registry
     return _registry

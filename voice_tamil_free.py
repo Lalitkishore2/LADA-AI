@@ -12,7 +12,7 @@ import threading
 import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
 
 import speech_recognition as sr
 
