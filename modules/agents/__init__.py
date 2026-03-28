@@ -14,6 +14,7 @@ from .calendar_agent import CalendarAgent
 from .file_agent import FileAgent, get_file_agent
 from .code_agent import CodeAgent, get_code_agent
 from .robot_agent import RobotAgent, get_robot_agent
+from .research_agent import ResearchAgent, get_research_agent
 
 __all__ = [
     'FlightAgent',
@@ -29,4 +30,6 @@ __all__ = [
     'get_code_agent',
     'RobotAgent',
     'get_robot_agent',
+    'ResearchAgent',
+    'get_research_agent',
 ]
