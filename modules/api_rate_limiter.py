@@ -1,12 +1,12 @@
 """
 LADA API Rate Limiter — Per-endpoint and per-user rate limiting.
 
-Provides token-bucket rate limiting for FastAPI endpoints with:
+Provides fixed-window rate limiting for FastAPI endpoints with:
 - Per-IP rate limiting for anonymous requests
 - Per-user rate limiting for authenticated requests  
 - Per-endpoint customizable limits
-- Redis-compatible storage (falls back to in-memory)
-- Sliding window counters
+- In-memory storage (no external dependencies)
+- Fixed-window counters with configurable window size
 
 Usage:
     from modules.api_rate_limiter import RateLimiter, rate_limit
@@ -139,7 +139,9 @@ class RateLimiter:
         request: Any,
         endpoint: str = "",
         user_id: Optional[str] = None,
-        cost: int = 1
+        cost: int = 1,
+        requests: Optional[int] = None,
+        window: Optional[int] = None
     ) -> tuple:
         """
         Check if request should be rate limited.
@@ -149,6 +151,8 @@ class RateLimiter:
             endpoint: Endpoint path (for per-endpoint limits)
             user_id: Authenticated user ID (optional)
             cost: Request cost (default 1, higher for expensive operations)
+            requests: Override for max requests per window (optional)
+            window: Override for window size in seconds (optional)
         
         Returns:
             (allowed: bool, retry_after: Optional[int], remaining: int)
@@ -158,19 +162,24 @@ class RateLimiter:
         
         rpm, rpd = self._get_endpoint_limits(endpoint)
         
+        # Apply per-decorator overrides if provided
+        if requests is not None:
+            rpm = requests
+        actual_window = window if window is not None else self.config.window_size
+        
         with self._lock:
             state = self._states[endpoint_key]
-            state.reset_if_needed(self.config.window_size)
+            state.reset_if_needed(actual_window)
             
             # Check minute limit
             if state.requests + cost > int(rpm * self.config.burst_multiplier):
-                retry_after = int(self.config.window_size - (time.time() - state.window_start))
+                retry_after = int(actual_window - (time.time() - state.window_start))
                 return False, max(1, retry_after), 0
             
             # Check daily limit
             if state.daily_requests + cost > rpd:
                 retry_after = int(86400 - (time.time() - state.daily_reset))
-                return False, retry_after, 0
+                return False, max(1, retry_after), 0
             
             # Allow request
             state.requests += cost
@@ -267,7 +276,7 @@ def rate_limit(
                 
                 endpoint = request.url.path
                 allowed, retry_after, remaining = limiter.check_rate_limit(
-                    request, endpoint, user_id, cost
+                    request, endpoint, user_id, cost, requests=requests, window=window
                 )
                 
                 if not allowed:
@@ -331,8 +340,22 @@ class RateLimitMiddleware:
         class MockRequest:
             def __init__(self, scope):
                 self.scope = scope
-                self.headers = dict(scope.get("headers", []))
-                self.client = type('Client', (), {'host': scope.get("client", ["unknown"])[0]})()
+                # Normalize ASGI headers: list of (bytes, bytes) -> dict with lowercase str keys
+                raw_headers = scope.get("headers", [])
+                self.headers = {}
+                for key, value in raw_headers:
+                    if isinstance(key, bytes):
+                        key = key.decode('latin-1').lower()
+                    if isinstance(value, bytes):
+                        value = value.decode('latin-1')
+                    self.headers[key] = value
+                # Safely extract client host
+                client = scope.get("client")
+                if client and isinstance(client, (list, tuple)) and len(client) > 0:
+                    host = client[0]
+                else:
+                    host = "unknown"
+                self.client = type('Client', (), {'host': host})()
         
         request = MockRequest(scope)
         

@@ -38,24 +38,42 @@ def create_ws_router(state):
     @r.websocket("/ws")
     async def websocket_gateway(websocket: WebSocket):
         """WebSocket gateway — real-time messaging with LADA."""
-        # Get client IP
+        # Get client IP (check X-Forwarded-For for proxied connections)
         client_ip = "unknown"
-        if websocket.client:
+        forwarded_for = websocket.headers.get("x-forwarded-for", "")
+        real_ip = websocket.headers.get("x-real-ip", "")
+        
+        if forwarded_for:
+            # X-Forwarded-For can contain multiple IPs; first is the client
+            client_ip = forwarded_for.split(",")[0].strip()
+        elif real_ip:
+            client_ip = real_ip.strip()
+        elif websocket.client:
             client_ip = websocket.client.host
         
-        # Check connection limit per IP
-        if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
-            await websocket.close(code=4029, reason="Too many connections from this IP")
-            logger.warning(f"[WS] Rejected connection from {client_ip}: too many connections")
-            return
-        
-        token = websocket.query_params.get("token", "")
-        if not state.validate_session_token(token):
-            await websocket.close(code=4001, reason="Authentication required")
-            return
+        # Atomic connection reservation (prevent TOCTOU race condition)
+        reserved = False
+        try:
+            if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
+                await websocket.close(code=4029, reason="Too many connections from this IP")
+                logger.warning(f"[WS] Rejected connection from {client_ip}: too many connections")
+                return
+            
+            # Reserve connection slot before authentication
+            _connections_per_ip[client_ip] += 1
+            reserved = True
+            
+            token = websocket.query_params.get("token", "")
+            if not state.validate_session_token(token):
+                await websocket.close(code=4001, reason="Authentication required")
+                return
 
-        await websocket.accept()
-        _connections_per_ip[client_ip] += 1
+            await websocket.accept()
+        except Exception:
+            # Release reservation if connection setup fails
+            if reserved:
+                _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+            raise
         
         session_id = str(uuid.uuid4())[:8]
         state.ws_connections[session_id] = websocket
@@ -83,8 +101,14 @@ def create_ws_router(state):
             })
 
             while True:
+                # Get live session object (not stale copy)
+                session = state.ws_sessions.get(session_id)
+                if not session:
+                    # Session was removed externally
+                    await websocket.close(code=4000, reason="Session expired")
+                    break
+                
                 # Check idle timeout
-                session = state.ws_sessions.get(session_id, {})
                 if time.time() - session.get('last_activity', 0) > WS_IDLE_TIMEOUT:
                     await websocket.close(code=4000, reason="Idle timeout")
                     logger.info(f"[WS] Session {session_id} closed due to idle timeout")
@@ -108,15 +132,15 @@ def create_ws_router(state):
                     logger.warning(f"[WS] Message from {session_id} rejected: too large ({len(raw)} bytes)")
                     continue
                 
-                # Check rate limit
+                # Check rate limit (read from live session)
                 now = time.time()
                 if now - session.get('rate_limit_window_start', 0) >= 60:
                     # Reset rate limit window
-                    state.ws_sessions[session_id]['rate_limit_counter'] = 0
-                    state.ws_sessions[session_id]['rate_limit_window_start'] = now
+                    session['rate_limit_counter'] = 0
+                    session['rate_limit_window_start'] = now
                 
-                state.ws_sessions[session_id]['rate_limit_counter'] = session.get('rate_limit_counter', 0) + 1
-                if state.ws_sessions[session_id]['rate_limit_counter'] > WS_MESSAGE_RATE_LIMIT:
+                session['rate_limit_counter'] = session.get('rate_limit_counter', 0) + 1
+                if session['rate_limit_counter'] > WS_MESSAGE_RATE_LIMIT:
                     await websocket.send_json({
                         "type": "error",
                         "data": {"message": "Rate limit exceeded. Slow down."}
@@ -125,7 +149,7 @@ def create_ws_router(state):
                     continue
                 
                 # Update last activity
-                state.ws_sessions[session_id]['last_activity'] = now
+                session['last_activity'] = now
                 
                 try:
                     msg = json.loads(raw)

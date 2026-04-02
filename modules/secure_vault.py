@@ -7,9 +7,10 @@ All API keys are encrypted at rest and decrypted only in memory when needed.
 Security features:
 - AES-128 encryption via cryptography.fernet
 - Master key never stored on disk
-- Automatic key rotation support
-- Audit logging for all key access
 - Thread-safe singleton pattern
+- Restrictive file permissions (0600)
+
+Note: Key rotation and audit logging are planned for future versions.
 
 Usage:
     vault = get_secure_vault()
@@ -61,6 +62,15 @@ class SecureVault:
         self._vault_path = vault_path or Path("data/secure_vault.enc")
         self._vault_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Set restrictive permissions on parent directory (Windows: skip, Unix: 0o700)
+        import platform
+        if platform.system() != 'Windows':
+            import stat
+            try:
+                os.chmod(self._vault_path.parent, stat.S_IRWXU)  # 0o700
+            except OSError as e:
+                logger.warning(f"[SecureVault] Could not set directory permissions: {e}")
+        
         # In-memory cache (encrypted data stored here temporarily)
         self._cache: Dict[str, bytes] = {}
         
@@ -99,20 +109,24 @@ class SecureVault:
         except InvalidToken:
             logger.error("[SecureVault] Failed to decrypt vault - wrong master key")
             raise ValueError("Invalid master key - cannot decrypt vault")
+        except json.JSONDecodeError as e:
+            logger.error(f"[SecureVault] Vault data corrupted (invalid JSON): {e}")
+            raise ValueError(f"Vault data corrupted: {e}")
         except Exception as e:
             logger.error(f"[SecureVault] Failed to load vault: {e}")
+            raise  # Re-raise to prevent continuing with empty cache
     
     def _save_vault(self):
         """Save encrypted vault to disk."""
+        # Decrypt all cached values for saving (acquire lock)
+        vault_data = {}
+        with self._lock:
+            for key, encrypted_value in self._cache.items():
+                decrypted_value = self._cipher.decrypt(encrypted_value).decode('utf-8')
+                vault_data[key] = decrypted_value
+        
+        # Encrypt and write outside of lock to avoid deadlock
         try:
-            # Decrypt all cached values for saving
-            vault_data = {}
-            with self._lock:
-                for key, encrypted_value in self._cache.items():
-                    decrypted_value = self._cipher.decrypt(encrypted_value).decode('utf-8')
-                    vault_data[key] = decrypted_value
-            
-            # Encrypt entire vault as JSON
             json_data = json.dumps(vault_data, indent=2)
             encrypted_data = self._cipher.encrypt(json_data.encode('utf-8'))
             
@@ -120,7 +134,24 @@ class SecureVault:
             temp_path = self._vault_path.with_suffix('.tmp')
             with open(temp_path, 'wb') as f:
                 f.write(encrypted_data)
+            
+            # Set restrictive permissions on temp file before rename (Unix only)
+            import platform
+            if platform.system() != 'Windows':
+                import stat
+                try:
+                    os.chmod(temp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+                except OSError:
+                    pass
+            
             temp_path.replace(self._vault_path)
+            
+            # Set restrictive permissions on final file (Unix only)
+            if platform.system() != 'Windows':
+                try:
+                    os.chmod(self._vault_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+                except OSError:
+                    pass
             
             logger.debug(f"[SecureVault] Saved {len(vault_data)} keys to vault")
         
@@ -186,12 +217,16 @@ class SecureVault:
         Returns:
             True if key was deleted, False if not found
         """
+        deleted = False
         with self._lock:
             if key in self._cache:
                 del self._cache[key]
-                self._save_vault()
-                logger.info(f"[SecureVault] Deleted key: {key}")
-                return True
+                deleted = True
+        
+        if deleted:
+            self._save_vault()  # Call outside lock to prevent deadlock
+            logger.info(f"[SecureVault] Deleted key: {key}")
+            return True
         
         return False
     

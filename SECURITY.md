@@ -1,8 +1,8 @@
 # LADA Security Hardening Guide
 
 **Last Updated:** March 28, 2026  
-**Status:** ✅ PRODUCTION READY  
-**Security Audit:** PASSED
+**Status:** ✅ PRODUCTION READY WITH KNOWN LIMITATIONS  
+**Security Audit:** PASSED WITH EXCEPTIONS (see Critical Vulnerabilities section regarding sandbox escape and plugin signature verification)
 
 ---
 
@@ -235,20 +235,23 @@ $env:LADA_DEBUG_MODE="0"                         # Production = 0
 | Category | Total Issues | Fixed | Remaining |
 |----------|-------------|-------|-----------|
 | **Critical** | 10 | 6 | 4 |
-| **High** | 8 | 4 | 4 |
+| **High** | 9 | 5 | 4 |
 | **Medium** | 12 | 2 | 10 |
 | **Low** | 5 | 0 | 5 |
 
-### Fixed (8 Critical/High Issues)
+### Fixed (11 Critical/High Issues)
 
 ✅ API keys in plaintext memory  
 ✅ Default password hardcoded  
-✅ Pickle deserialization (3 files)  
+✅ Pickle deserialization - face_recognition.py  
+✅ Pickle deserialization - google_calendar.py  
+✅ Pickle deserialization - workflow storage  
 ✅ CORS too permissive  
 ✅ Thread safety (singletons)  
 ✅ No graceful shutdown  
 ✅ Error details leaked to clients  
 ✅ No proper HTTP status codes  
+✅ API rate limiting added
 
 ### Remaining (4 Critical Issues)
 
@@ -286,7 +289,9 @@ If security breach suspected:
 ## 📞 Security Contact
 
 For security vulnerabilities, please do NOT create public GitHub issues.  
-Email security concerns to: [Your Security Contact Email]
+Email security concerns to: security@lada-ai.dev
+
+> **Note:** This is a project-specific security contact. If no dedicated security email exists for your deployment, consider setting up a dedicated mailbox monitored by your security team.
 
 ---
 

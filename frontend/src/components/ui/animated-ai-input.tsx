@@ -117,6 +117,8 @@ interface AnimatedAIInputProps {
   isStreaming?: boolean;
   disabled?: boolean;
   placeholder?: string;
+  value?: string;
+  onValueChange?: (value: string) => void;
 }
 
 const getProviderIcon = (provider: string) => {
@@ -132,17 +134,17 @@ const getProviderIcon = (provider: string) => {
 const getTierColor = (tier?: string) => {
   switch (tier?.toLowerCase()) {
     case "fast":
-      return "text-green-400";
+      return "text-emerald-300";
     case "balanced":
-      return "text-blue-400";
+      return "text-sky-300";
     case "smart":
-      return "text-purple-400";
+      return "text-teal-300";
     case "reasoning":
-      return "text-orange-400";
+      return "text-amber-300";
     case "coding":
-      return "text-cyan-400";
+      return "text-cyan-300";
     default:
-      return "text-gray-400";
+      return "text-[var(--text-dim)]";
   }
 };
 
@@ -155,13 +157,40 @@ export function AnimatedAIInput({
   isStreaming = false,
   disabled = false,
   placeholder = "Ask LADA anything...",
+  value: controlledValue,
+  onValueChange,
 }: AnimatedAIInputProps) {
-  const [value, setValue] = useState("");
+  const [internalValue, setInternalValue] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const { textareaRef, adjustHeight } = useAutoResizeTextarea({
     minHeight: 56,
     maxHeight: 200,
   });
+
+  const value = controlledValue ?? internalValue;
+
+  const setComposerValue = useCallback(
+    (nextValue: string) => {
+      if (controlledValue === undefined) {
+        setInternalValue(nextValue);
+      }
+      onValueChange?.(nextValue);
+    },
+    [controlledValue, onValueChange],
+  );
+
+  useEffect(() => {
+    if (!textareaRef.current) {
+      return;
+    }
+
+    if (!value.trim()) {
+      adjustHeight(true);
+      return;
+    }
+
+    adjustHeight();
+  }, [adjustHeight, textareaRef, value]);
 
   const currentModel = models.find((m) => m.id === selectedModel) || {
     id: selectedModel,
@@ -187,7 +216,7 @@ export function AnimatedAIInput({
   const handleSend = () => {
     if (!value.trim() || disabled || isStreaming) return;
     onSend(value.trim());
-    setValue("");
+    setComposerValue("");
     adjustHeight(true);
   };
 
@@ -198,7 +227,7 @@ export function AnimatedAIInput({
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4">
-      <div className="bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-800/50 shadow-2xl overflow-hidden">
+      <div className="bg-[var(--surface-2)]/80 backdrop-blur-xl rounded-2xl border border-[var(--border-color)] shadow-[0_14px_30px_rgba(0,0,0,.28)] overflow-hidden">
         <div className="relative flex flex-col">
           {/* Textarea */}
           <div className="overflow-y-auto" style={{ maxHeight: "200px" }}>
@@ -207,14 +236,14 @@ export function AnimatedAIInput({
               placeholder={placeholder}
               className={cn(
                 "w-full rounded-2xl rounded-b-none px-4 py-4 bg-transparent border-none",
-                "text-zinc-100 placeholder:text-zinc-500 resize-none",
+                "text-[var(--text)] placeholder:text-[var(--text-faint)] resize-none",
                 "focus-visible:ring-0 focus-visible:ring-offset-0",
                 "min-h-[56px] text-base"
               )}
               ref={textareaRef}
               onKeyDown={handleKeyDown}
               onChange={(e) => {
-                setValue(e.target.value);
+                setComposerValue(e.target.value);
                 adjustHeight();
               }}
               disabled={disabled}
@@ -222,7 +251,7 @@ export function AnimatedAIInput({
           </div>
 
           {/* Bottom bar */}
-          <div className="h-12 bg-zinc-900/50 flex items-center px-3 gap-2">
+          <div className="h-12 bg-[var(--surface)]/55 border-t border-[var(--border-color)]/70 flex items-center px-3 gap-2">
             {/* Model selector */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -230,8 +259,8 @@ export function AnimatedAIInput({
                   variant="ghost"
                   className={cn(
                     "flex items-center gap-1.5 h-8 px-2 text-xs rounded-lg",
-                    "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50",
-                    "focus-visible:ring-1 focus-visible:ring-offset-0 focus-visible:ring-indigo-500"
+                    "text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-3)]/75",
+                    "focus-visible:ring-1 focus-visible:ring-offset-0 focus-visible:ring-[var(--accent)]"
                   )}
                 >
                   <AnimatePresence mode="wait">
@@ -253,33 +282,33 @@ export function AnimatedAIInput({
               <DropdownMenuContent
                 className={cn(
                   "min-w-[220px] max-h-[400px] overflow-y-auto",
-                  "border-zinc-800 bg-zinc-900/95 backdrop-blur-xl"
+                  "border-[var(--border-color)] bg-[var(--surface)]/95 backdrop-blur-xl"
                 )}
               >
                 {/* Auto option */}
                 <DropdownMenuItem
                   onSelect={() => onModelChange("auto")}
-                  className="flex items-center justify-between gap-2 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50"
+                  className="flex items-center justify-between gap-2 text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-2)]/80"
                 >
                   <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-indigo-400" />
+                    <Sparkles className="w-4 h-4 text-[var(--accent-hover)]" />
                     <span>Auto (Best Available)</span>
                   </div>
-                  {selectedModel === "auto" && <Check className="w-4 h-4 text-indigo-400" />}
+                  {selectedModel === "auto" && <Check className="w-4 h-4 text-[var(--accent-hover)]" />}
                 </DropdownMenuItem>
-                <DropdownMenuSeparator className="bg-zinc-800" />
+                <DropdownMenuSeparator className="bg-[var(--border-color)]" />
 
                 {/* Models grouped by provider */}
                 {Object.entries(modelsByProvider).map(([provider, providerModels]) => (
                   <div key={provider}>
-                    <DropdownMenuLabel className="text-zinc-500 text-xs uppercase tracking-wider">
+                    <DropdownMenuLabel className="text-[var(--text-faint)] text-xs uppercase tracking-wider">
                       {provider}
                     </DropdownMenuLabel>
                     {providerModels.map((model) => (
                       <DropdownMenuItem
                         key={model.id}
                         onSelect={() => onModelChange(model.id)}
-                        className="flex items-center justify-between gap-2 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50"
+                        className="flex items-center justify-between gap-2 text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-2)]/80"
                       >
                         <div className="flex items-center gap-2">
                           {getProviderIcon(model.provider)}
@@ -290,7 +319,7 @@ export function AnimatedAIInput({
                             </span>
                           )}
                         </div>
-                        {selectedModel === model.id && <Check className="w-4 h-4 text-indigo-400" />}
+                        {selectedModel === model.id && <Check className="w-4 h-4 text-[var(--accent-hover)]" />}
                       </DropdownMenuItem>
                     ))}
                   </div>
@@ -298,13 +327,13 @@ export function AnimatedAIInput({
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <div className="h-4 w-px bg-zinc-800" />
+            <div className="h-4 w-px bg-[var(--border-color)]" />
 
             {/* Attachment */}
             <label
               className={cn(
                 "rounded-lg p-2 cursor-pointer transition-colors",
-                "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                "text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--surface-3)]/75"
               )}
             >
               <input type="file" className="hidden" disabled={disabled} />
@@ -319,7 +348,7 @@ export function AnimatedAIInput({
                 "rounded-lg p-2 transition-colors",
                 isRecording
                   ? "text-red-400 bg-red-500/20 hover:bg-red-500/30"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                  : "text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--surface-3)]/75"
               )}
               disabled={disabled}
             >
@@ -348,8 +377,8 @@ export function AnimatedAIInput({
                 className={cn(
                   "rounded-lg p-2 transition-all",
                   value.trim() && !disabled
-                    ? "bg-indigo-600 text-white hover:bg-indigo-500"
-                    : "bg-zinc-800 text-zinc-600 cursor-not-allowed"
+                    ? "bg-[linear-gradient(145deg,var(--accent),var(--accent-dark))] text-white hover:brightness-110"
+                    : "bg-[var(--surface-3)] text-[var(--text-faint)] cursor-not-allowed"
                 )}
               >
                 <ArrowUp className="w-4 h-4" />
@@ -361,9 +390,9 @@ export function AnimatedAIInput({
 
       {/* Keyboard hint */}
       <div className="flex justify-center mt-2">
-        <span className="text-xs text-zinc-600">
-          Press <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">Enter</kbd> to send,{" "}
-          <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">Shift+Enter</kbd> for new line
+        <span className="text-xs text-[var(--text-faint)]">
+          Press <kbd className="px-1.5 py-0.5 bg-[var(--surface-3)] rounded text-[var(--text-dim)]">Enter</kbd> to send,{" "}
+          <kbd className="px-1.5 py-0.5 bg-[var(--surface-3)] rounded text-[var(--text-dim)]">Shift+Enter</kbd> for new line
         </span>
       </div>
     </div>

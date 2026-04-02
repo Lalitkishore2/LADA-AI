@@ -63,7 +63,20 @@ class LadaPersonality:
                 return cls._phrases
         except Exception as e:
             logger.error(f"Failed to load personality phrases: {e}")
-            return {}
+            # Cache fallback phrases to prevent subsequent failures
+            cls._phrases = {
+                "jarvis": {
+                    "acknowledgments": ["Right away, sir."],
+                    "greetings": {"morning": ["Good morning, sir."], "afternoon": ["Good afternoon, sir."], "evening": ["Good evening, sir."], "night": ["Good evening, sir."]},
+                    "errors": ["I'm afraid there's been an issue."],
+                    "not_understood": ["I beg your pardon, sir. Could you clarify?"],
+                    "confirmations": ["Understood, sir."],
+                    "status_updates": ["Sir, you should know that {info}."],
+                    "warnings": ["Sir, I must advise caution. {warning}."],
+                    "completion": ["Task completed, sir."]
+                }
+            }
+            return cls._phrases
     
     @classmethod
     def set_mode(cls, mode: str) -> bool:

@@ -226,16 +226,18 @@ _counter: Optional[TokenCounter] = None
 _tracker: Optional[CostTracker] = None
 
 
+@thread_safe_singleton
 def get_token_counter() -> TokenCounter:
-    """Get the global token counter"""
+    """Get the global token counter (thread-safe)"""
     global _counter
     if _counter is None:
         _counter = TokenCounter()
     return _counter
 
 
+@thread_safe_singleton
 def get_cost_tracker() -> CostTracker:
-    """Get or create the global cost tracker"""
+    """Get or create the global cost tracker (thread-safe)"""
     global _tracker
     if _tracker is None:
         _tracker = CostTracker(

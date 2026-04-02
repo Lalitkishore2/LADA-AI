@@ -29,7 +29,7 @@ import threading
 import logging
 import atexit
 from typing import List, Dict, Callable, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class ManagedThread:
     name: str
     stop_event: Optional[threading.Event] = None
     cleanup_func: Optional[Callable] = None
-    registered_at: datetime = datetime.now()
+    registered_at: datetime = field(default_factory=datetime.now)
 
 
 class ShutdownManager:
@@ -71,19 +71,31 @@ class ShutdownManager:
         self._cleanup_callbacks: List[Callable] = []
         self._shutdown_complete = False
         
-        # Register signal handlers
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Register signal handlers (only from main thread)
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+        else:
+            logger.warning("[ShutdownManager] Not on main thread - signal handlers not registered")
         
-        # Register atexit handler
+        # Register atexit handler (works from any thread)
         atexit.register(self._atexit_handler)
         
         logger.info(f"[ShutdownManager] Initialized with {shutdown_timeout}s timeout")
     
     def _signal_handler(self, signum, frame):
-        """Handle SIGINT (Ctrl+C) and SIGTERM"""
+        """Handle SIGINT (Ctrl+C) and SIGTERM - async-safe, sets flag only"""
         signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
-        logger.info(f"[ShutdownManager] Received {signal_name}, initiating graceful shutdown...")
+        # Only set flag - do NOT call shutdown() directly from signal handler
+        # to avoid deadlocks if signal interrupts code holding locks
+        self._shutdown_requested = True
+        logger.info(f"[ShutdownManager] Received {signal_name}, shutdown requested...")
+        # Use a separate thread to perform actual shutdown
+        shutdown_thread = threading.Thread(target=self._deferred_shutdown, daemon=True)
+        shutdown_thread.start()
+    
+    def _deferred_shutdown(self):
+        """Perform shutdown from a safe context (not signal handler)"""
         self.shutdown()
     
     def _atexit_handler(self):

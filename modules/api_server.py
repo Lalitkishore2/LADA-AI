@@ -69,8 +69,8 @@ class LADAAPIServer:
         # CORS middleware - Restrict to specific origins for security
         allowed_origins = os.getenv("LADA_CORS_ORIGINS", "")
         if allowed_origins:
-            # Use specific origins from env var (comma-separated)
-            origins_list = [origin.strip() for origin in allowed_origins.split(",")]
+            # Use specific origins from env var (comma-separated), filter empty strings
+            origins_list = [origin.strip() for origin in allowed_origins.split(",") if origin.strip()]
             logger.info(f"[APIServer] CORS enabled for specific origins: {origins_list}")
         else:
             # Default: localhost/127.0.0.1 on common ports for development

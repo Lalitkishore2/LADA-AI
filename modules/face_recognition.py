@@ -52,8 +52,13 @@ class FaceRecognition:
             
             # Load saved face data from numpy npz format
             if self.face_data_file.exists():
-                data = np.load(self.face_data_file)
-                self.known_face = data['face_data']
+                with np.load(self.face_data_file, allow_pickle=False) as data:
+                    # Load individual fields (not a dict wrapped in 0-d array)
+                    self.known_face = {
+                        'samples': data['samples'],
+                        'average': data['average'],
+                        'enrolled_at': str(data['enrolled_at']) if 'enrolled_at' in data else ''
+                    }
                 self.is_enrolled = True
                 logger.info("✅ Face data loaded - recognition ready")
             else:
@@ -141,8 +146,13 @@ class FaceRecognition:
                 'enrolled_at': time.time()
             }
             
-            # Save using numpy npz format (secure)
-            np.savez(self.face_data_file, face_data=self.known_face)
+            # Save using numpy npz format with explicit fields (secure, no pickle)
+            np.savez(
+                self.face_data_file,
+                samples=self.known_face['samples'],
+                average=self.known_face['average'],
+                enrolled_at=np.array([self.known_face['enrolled_at']])
+            )
             
             self.is_enrolled = True
             logger.info("✅ Face enrolled successfully")
@@ -376,8 +386,13 @@ class FaceRecognition:
                 'enrolled_at': time.time()
             }
             
-            # Save using numpy npz format
-            np.savez(self.face_data_file, face_data=self.known_face)
+            # Save using numpy npz format with explicit fields (secure, no pickle)
+            np.savez(
+                self.face_data_file,
+                samples=self.known_face['samples'],
+                average=self.known_face['average'],
+                enrolled_at=np.array([self.known_face['enrolled_at']])
+            )
             
             self.is_enrolled = True
             logger.info("✅ Face enrolled successfully (in-app mode)")

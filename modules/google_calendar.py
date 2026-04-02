@@ -48,6 +48,19 @@ class GoogleCalendar:
         self.initialized = False
         self._auth_attempted = False
         
+        # Migration: handle legacy .pickle tokens
+        legacy_pickle_path = self.token_path.with_suffix('.pickle')
+        if legacy_pickle_path.exists() and not self.token_path.exists():
+            logger.warning(f"[GoogleCalendar] Found legacy token at {legacy_pickle_path}")
+            logger.warning("[GoogleCalendar] Migration note: Pickle tokens no longer supported for security.")
+            logger.warning("[GoogleCalendar] Please re-authenticate to create a new JSON token.")
+            # Remove the insecure pickle file
+            try:
+                legacy_pickle_path.unlink()
+                logger.info(f"[GoogleCalendar] Removed legacy pickle token: {legacy_pickle_path}")
+            except Exception as e:
+                logger.error(f"[GoogleCalendar] Failed to remove legacy pickle: {e}")
+        
         # Don't authenticate on init - defer until first use to avoid blocking startup
         if not GOOGLE_API_AVAILABLE:
             logger.warning("[!] Google API not available - Calendar features disabled")

@@ -58,7 +58,9 @@ SENSITIVE_PATTERNS = [
     (r'(sk-[a-zA-Z0-9]{48})', '[API_KEY_REDACTED]'),  # OpenAI
     (r'(xai-[a-zA-Z0-9]{48})', '[API_KEY_REDACTED]'),  # xAI
     (r'(gsk_[a-zA-Z0-9]{50})', '[API_KEY_REDACTED]'),  # Groq
-    (r'([a-zA-Z0-9]{39})', '[API_KEY_REDACTED]'),  # Anthropic (39 chars)
+    # Anthropic keys: require 'sk-ant-' prefix or nearby context to avoid false positives
+    (r'(sk-ant-[a-zA-Z0-9\-_]{32,})', '[API_KEY_REDACTED]'),  # Anthropic with prefix
+    (r'(?i)(?:anthropic[_\-]?(?:api[_\-]?)?key["\']?\s*[:=]\s*["\']?)([a-zA-Z0-9]{39})', '[API_KEY_REDACTED]'),  # Anthropic with label
     (r'(AIza[0-9A-Za-z-_]{35})', '[API_KEY_REDACTED]'),  # Google
     
     # Tokens
@@ -198,8 +200,10 @@ def sanitize_error(
     user_message = get_user_friendly_message(category)
     
     # Log full error details internally (with stack trace)
+    # Redact sensitive data from exception message
+    redacted_exception = redact_sensitive_data(str(exception))
     logger.error(
-        f"[ErrorSanitizer] {operation} failed: {type(exception).__name__}: {exception}",
+        f"[ErrorSanitizer] {operation} failed: {type(exception).__name__}: {redacted_exception}",
         exc_info=True
     )
     
@@ -307,8 +311,10 @@ def log_error_with_context(
     elif severity == ErrorSeverity.LOW:
         log_func = logger.warning
     
+    # Redact exception message before logging
+    redacted_exception = redact_sensitive_data(str(exception))
     log_func(
-        f"[ErrorContext] {type(exception).__name__}: {exception} | "
+        f"[ErrorContext] {type(exception).__name__}: {redacted_exception} | "
         f"Severity: {severity.value} | Context: {redacted_context}",
         exc_info=True
     )

@@ -18,6 +18,9 @@ interface ChatMessageProps {
   model?: string;
   sources?: Source[];
   streaming?: boolean;
+  onUseAsPrompt?: (content: string, role: 'user' | 'assistant') => void;
+  onResend?: (content: string) => void;
+  onRegenerate?: () => void;
 }
 
 export default function ChatMessage({
@@ -26,27 +29,34 @@ export default function ChatMessage({
   model,
   sources,
   streaming = false,
+  onUseAsPrompt,
+  onResend,
+  onRegenerate,
 }: ChatMessageProps) {
   const isUser = role === 'user';
   const [copied, setCopied] = React.useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
   };
 
   return (
     <div className={cn(
-      "group flex gap-4 py-4 animate-slide-up",
+      "group flex gap-3 py-2 animate-slide-up",
       isUser ? "flex-row-reverse" : ""
     )}>
       {/* Avatar */}
       <div className={cn(
-        "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center",
+        "flex-shrink-0 w-[26px] h-[26px] rounded-md flex items-center justify-center",
         isUser 
-          ? "bg-gradient-to-br from-indigo-500 to-purple-600" 
-          : "bg-gradient-to-br from-emerald-500 to-teal-600"
+          ? "bg-[#233447] border border-white/10" 
+          : "bg-[linear-gradient(145deg,var(--accent),var(--accent-dark))] shadow-[0_6px_16px_rgba(16,163,127,.25)]"
       )}>
         {isUser ? (
           <User className="w-4 h-4 text-white" />
@@ -60,11 +70,11 @@ export default function ChatMessage({
         {/* Role label */}
         <div className={cn(
           "text-xs font-medium mb-1",
-          isUser ? "text-indigo-400" : "text-emerald-400"
+          isUser ? "text-[#b8d6ff]" : "text-[var(--text-dim)]"
         )}>
           {isUser ? 'You' : 'LADA'}
           {!isUser && model && (
-            <span className="text-zinc-500 font-normal ml-2">
+            <span className="text-[var(--text-faint)] font-normal ml-2">
               via {model}
             </span>
           )}
@@ -72,10 +82,10 @@ export default function ChatMessage({
 
         {/* Message content */}
         <div className={cn(
-          "rounded-2xl px-4 py-3 inline-block text-left",
+          "rounded-2xl px-4 py-3 inline-block text-left leading-relaxed",
           isUser 
-            ? "bg-gradient-to-br from-indigo-600/80 to-purple-600/80 text-white max-w-[85%]" 
-            : "bg-zinc-900 border border-zinc-800 text-zinc-100 w-full"
+            ? "bg-[#233447] border border-white/10 text-[#dce9ff] max-w-[78%] rounded-br-md" 
+            : "bg-[rgba(17,25,35,.66)] border border-white/10 text-[var(--text)] w-full backdrop-blur rounded-bl-md"
         )}>
           {isUser ? (
             <p className="whitespace-pre-wrap text-sm leading-relaxed">
@@ -93,7 +103,7 @@ export default function ChatMessage({
                     if (isInline) {
                       return (
                         <code
-                          className="bg-zinc-800 text-emerald-400 px-1.5 py-0.5 rounded text-xs font-mono"
+                          className="bg-[var(--surface-3)] text-sky-300 px-1.5 py-0.5 rounded text-xs font-mono"
                           {...props}
                         >
                           {children}
@@ -104,13 +114,13 @@ export default function ChatMessage({
                     return (
                       <div className="relative my-3 group/code">
                         {match && (
-                          <div className="absolute top-0 left-0 px-3 py-1 text-[10px] text-zinc-500 uppercase tracking-wider bg-zinc-950 rounded-tl-lg rounded-br font-medium">
+                          <div className="absolute top-0 left-0 px-3 py-1 text-[10px] text-[var(--text-faint)] uppercase tracking-wider bg-[var(--surface)] rounded-tl-lg rounded-br font-medium">
                             {match[1]}
                           </div>
                         )}
-                        <pre className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 pt-8 overflow-x-auto">
+                        <pre className="bg-[#0f1722] border border-[var(--border-color)] rounded-lg p-4 pt-8 overflow-x-auto">
                           <code
-                            className={`text-xs font-mono leading-relaxed text-zinc-200 ${className || ''}`}
+                            className={`text-xs font-mono leading-relaxed text-[var(--text)] ${className || ''}`}
                             {...props}
                           >
                             {children}
@@ -121,21 +131,21 @@ export default function ChatMessage({
                   },
                   p({ children }) {
                     return (
-                      <p className="mb-3 last:mb-0 leading-relaxed text-sm text-zinc-200">
+                      <p className="mb-3 last:mb-0 leading-relaxed text-sm text-[var(--text)]">
                         {children}
                       </p>
                     );
                   },
                   ul({ children }) {
                     return (
-                      <ul className="list-disc list-inside mb-3 space-y-1.5 text-sm text-zinc-200">
+                      <ul className="list-disc list-inside mb-3 space-y-1.5 text-sm text-[var(--text)]">
                         {children}
                       </ul>
                     );
                   },
                   ol({ children }) {
                     return (
-                      <ol className="list-decimal list-inside mb-3 space-y-1.5 text-sm text-zinc-200">
+                      <ol className="list-decimal list-inside mb-3 space-y-1.5 text-sm text-[var(--text)]">
                         {children}
                       </ol>
                     );
@@ -146,7 +156,7 @@ export default function ChatMessage({
                         href={href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 inline-flex items-center gap-1"
+                        className="text-[var(--accent-hover)] hover:text-[#7de5cb] underline underline-offset-2 inline-flex items-center gap-1"
                       >
                         {children}
                         <ExternalLink className="w-3 h-3" />
@@ -155,14 +165,14 @@ export default function ChatMessage({
                   },
                   blockquote({ children }) {
                     return (
-                      <blockquote className="border-l-2 border-indigo-500/50 pl-4 my-3 text-zinc-400 italic">
+                      <blockquote className="border-l-2 border-[var(--accent)] pl-4 my-3 text-[var(--text-dim)] italic">
                         {children}
                       </blockquote>
                     );
                   },
                   table({ children }) {
                     return (
-                      <div className="overflow-x-auto my-3 rounded-lg border border-zinc-800">
+                      <div className="overflow-x-auto my-3 rounded-lg border border-[var(--border-color)]">
                         <table className="min-w-full text-sm">
                           {children}
                         </table>
@@ -171,47 +181,51 @@ export default function ChatMessage({
                   },
                   th({ children }) {
                     return (
-                      <th className="border-b border-zinc-800 px-4 py-2 bg-zinc-900 text-left font-semibold text-zinc-300">
+                      <th className="border-b border-[var(--border-color)] px-4 py-2 bg-[var(--surface-2)] text-left font-semibold text-[var(--text-dim)]">
                         {children}
                       </th>
                     );
                   },
                   td({ children }) {
                     return (
-                      <td className="border-b border-zinc-800/50 px-4 py-2 text-zinc-300">
+                      <td className="border-b border-[var(--border-color)]/60 px-4 py-2 text-[var(--text-dim)]">
                         {children}
                       </td>
                     );
                   },
                   h1({ children }) {
-                    return <h1 className="text-xl font-bold text-zinc-100 mb-3 mt-4">{children}</h1>;
+                    return <h1 className="text-xl font-bold text-[var(--text)] mb-3 mt-4">{children}</h1>;
                   },
                   h2({ children }) {
-                    return <h2 className="text-lg font-semibold text-zinc-100 mb-2 mt-3">{children}</h2>;
+                    return <h2 className="text-lg font-semibold text-[var(--text)] mb-2 mt-3">{children}</h2>;
                   },
                   h3({ children }) {
-                    return <h3 className="text-base font-semibold text-zinc-200 mb-2 mt-3">{children}</h3>;
+                    return <h3 className="text-base font-semibold text-[var(--text)] mb-2 mt-3">{children}</h3>;
                   },
                 }}
               />
               {streaming && (
-                <span className="inline-block w-2 h-4 ml-1 bg-emerald-400 animate-pulse-soft rounded-sm" />
+                <span className="inline-block w-2 h-4 ml-1 bg-[var(--accent-hover)] animate-pulse-soft rounded-sm" />
               )}
             </div>
           )}
         </div>
 
-        {/* Actions (copy button) */}
-        {!isUser && !streaming && content && (
-          <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Message actions */}
+        {!streaming && !!content && (
+          <div className={cn(
+            "flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity",
+            isUser ? "justify-end" : ""
+          )}>
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              className="flex items-center gap-1 text-xs text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors"
+              title="Copy message"
             >
               {copied ? (
                 <>
-                  <Check className="w-3 h-3 text-emerald-400" />
-                  <span className="text-emerald-400">Copied!</span>
+                  <Check className="w-3 h-3 text-[var(--accent-hover)]" />
+                  <span className="text-[var(--accent-hover)]">Copied!</span>
                 </>
               ) : (
                 <>
@@ -220,6 +234,36 @@ export default function ChatMessage({
                 </>
               )}
             </button>
+
+            {onUseAsPrompt && (
+              <button
+                onClick={() => onUseAsPrompt(content, role)}
+                className="text-xs text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors"
+                title="Use this message in prompt"
+              >
+                Use in prompt
+              </button>
+            )}
+
+            {isUser && onResend && (
+              <button
+                onClick={() => onResend(content)}
+                className="text-xs text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors"
+                title="Resend this message"
+              >
+                Resend
+              </button>
+            )}
+
+            {!isUser && onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="text-xs text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors"
+                title="Regenerate this answer"
+              >
+                Regenerate
+              </button>
+            )}
           </div>
         )}
 
@@ -234,14 +278,14 @@ export default function ChatMessage({
                 rel="noopener noreferrer"
                 className={cn(
                   "inline-flex items-center gap-1.5 px-3 py-1.5",
-                  "bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700",
-                  "rounded-full text-xs text-zinc-400 hover:text-zinc-200 transition-all"
+                  "bg-[var(--surface-2)] hover:bg-[var(--surface-3)] border border-[var(--border-color)] hover:border-[var(--accent)]/60",
+                  "rounded-full text-xs text-[var(--text-dim)] hover:text-[#c8f9eb] transition-all"
                 )}
                 title={source.title}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-hover)] flex-shrink-0" />
                 <span className="truncate max-w-[150px]">{source.title}</span>
-                <span className="text-zinc-600">• {source.domain}</span>
+                <span className="text-[var(--text-faint)]">• {source.domain}</span>
               </a>
             ))}
           </div>

@@ -58,12 +58,8 @@ def thread_safe_singleton(func: Callable) -> Callable:
     
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        # Fast path: if already initialized, return immediately
-        result = func(*args, **kwargs)
-        if result is not None:
-            return result
-        
-        # Slow path: acquire lock and double-check
+        # Always acquire lock before calling func to prevent race conditions
+        # The "fast path" optimization was racy - multiple threads could call func() concurrently
         with lock:
             result = func(*args, **kwargs)
             if result is None:
