@@ -1,17 +1,17 @@
 {
   "name": "research_workflow",
-  "created": "2026-03-28T13:52:21.548803",
+  "created": "2026-04-01T00:53:53.645154",
   "steps": [
     {
       "action": "google_search",
-      "module": "browser_control",
+      "module": "browser_automation",
       "params": {
         "query": "$search_query"
       }
     },
     {
       "action": "extract_text",
-      "module": "browser_control",
+      "module": "browser_automation",
       "params": {}
     },
     {

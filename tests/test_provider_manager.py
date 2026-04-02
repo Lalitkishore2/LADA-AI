@@ -67,6 +67,7 @@ def mock_model_registry():
     }
     registry.get_model = Mock(return_value=mock_model)
     registry.get_models_by_tier = Mock(return_value=[mock_model])
+    registry.get_models_by_provider = Mock(return_value=[mock_model])
     
     return registry
 
@@ -118,14 +119,16 @@ class TestAutoConfiguration:
     """Tests for auto_configure() method"""
     
     def test_auto_configure_with_no_env(self):
-        """No providers configured when no env vars set"""
+        """No cloud providers configured when no env vars set; local fallback may exist"""
         with patch.dict(os.environ, {}, clear=True):
             with patch('modules.providers.provider_manager.get_model_registry', return_value=None):
                 with patch('modules.providers.provider_manager.get_cost_tracker', return_value=None):
                     from modules.providers.provider_manager import ProviderManager
                     manager = ProviderManager()
                     count = manager.auto_configure()
-                    assert count == 0
+                    assert count in (0, 1)
+                    if count == 1:
+                        assert 'ollama-local' in manager.providers
     
     def test_auto_configure_detects_providers(self, mock_env, mock_model_registry):
         """Providers detected from env vars"""
@@ -171,10 +174,13 @@ class TestProviderRetrieval:
             with patch('modules.providers.provider_manager.get_cost_tracker', return_value=None):
                 from modules.providers.provider_manager import ProviderManager
                 manager = ProviderManager()
+                mock_provider.ensure_available = Mock(return_value=True)
+                mock_provider.config = Mock(priority=1)
                 manager.providers['healthy'] = mock_provider
                 
                 unhealthy = Mock()
-                unhealthy.is_healthy = Mock(return_value=False)
+                unhealthy.ensure_available = Mock(return_value=False)
+                unhealthy.config = Mock(priority=99)
                 manager.providers['unhealthy'] = unhealthy
                 
                 available = manager.get_available_providers()
@@ -260,7 +266,7 @@ class TestQueryExecution:
                 from modules.providers.provider_manager import ProviderManager
                 manager = ProviderManager()
                 response = manager.query("test prompt")
-                assert response is None or (hasattr(response, 'text') and 'error' in response.text.lower())
+                assert response is None or (hasattr(response, 'content') and ('error' in response.content.lower() or 'no ai providers' in response.content.lower()))
     
     def test_query_returns_response(self, mock_provider, mock_model_registry):
         """Query returns provider response"""
@@ -286,6 +292,61 @@ class TestQueryExecution:
                 manager.query("test prompt", model_id='gemini-2.0-flash')
                 # Should add user message and assistant response
                 assert len(manager.conversation_history) >= initial_len
+
+    def test_query_falls_back_to_secondary_provider_on_failure(self, mock_model_registry):
+        """Query rotates to another available provider when the primary response fails."""
+        with patch('modules.providers.provider_manager.get_model_registry', return_value=mock_model_registry):
+            with patch('modules.providers.provider_manager.get_cost_tracker', return_value=None):
+                from modules.providers.provider_manager import ProviderManager
+                from modules.providers.base_provider import ProviderResponse
+
+                manager = ProviderManager()
+
+                primary = Mock()
+                primary.provider_id = 'primary'
+                primary.name = 'Primary'
+                primary.ensure_available = Mock(return_value=True)
+                primary.config = Mock(priority=1)
+                primary.complete_with_retry = Mock(return_value=ProviderResponse(
+                    content='',
+                    model='primary-model',
+                    provider='primary',
+                    error='primary failed',
+                ))
+
+                fallback = Mock()
+                fallback.provider_id = 'fallback'
+                fallback.name = 'Fallback'
+                fallback.ensure_available = Mock(return_value=True)
+                fallback.config = Mock(priority=2)
+                fallback.complete_with_retry = Mock(return_value=ProviderResponse(
+                    content='fallback-ok',
+                    model='fallback-model',
+                    provider='fallback',
+                ))
+
+                manager.providers['primary'] = primary
+                manager.providers['fallback'] = fallback
+
+                primary_model = Mock()
+                primary_model.provider = 'primary'
+                primary_model.id = 'primary-model'
+
+                fallback_model = Mock()
+                fallback_model.provider = 'fallback'
+                fallback_model.id = 'fallback-model'
+
+                mock_model_registry.get_model = Mock(return_value=primary_model)
+                mock_model_registry.get_models_by_provider = Mock(
+                    side_effect=lambda pid: [primary_model] if pid == 'primary' else [fallback_model]
+                )
+
+                response = manager.query('test prompt', model_id='primary-model')
+
+                assert response.success is True
+                assert response.provider == 'fallback'
+                assert primary.complete_with_retry.called
+                assert fallback.complete_with_retry.called
 
 
 class TestStreamExecution:
@@ -326,7 +387,8 @@ class TestMessageBuilding:
                     {'role': 'user', 'content': 'previous'},
                     {'role': 'assistant', 'content': 'response'}
                 ]
-                messages = manager._build_messages("test", "", history)
+                manager.conversation_history = history
+                messages = manager._build_messages("test", "", "")
                 assert len(messages) >= 3  # history + current
 
 

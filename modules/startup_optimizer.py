@@ -191,7 +191,6 @@ def create_optimized_core():
         'gmail_controller': 'modules.gmail_controller.GmailController',
         'calendar_controller': 'modules.calendar_controller.CalendarController',
         'proactive_agent': 'modules.proactive_agent.ProactiveAgent',
-        'permission_system': 'modules.permission_system.PermissionSystem',
         'pattern_learning': 'modules.pattern_learning.PatternLearning',
     }
     

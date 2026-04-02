@@ -182,7 +182,6 @@ class ModulePriority:
         'screenshot_analysis',
         'pattern_learning',
         'proactive_agent',
-        'permission_system',
     ]
     
     @classmethod

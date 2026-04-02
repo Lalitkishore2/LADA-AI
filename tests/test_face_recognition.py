@@ -62,7 +62,7 @@ class TestFaceRecognition:
         from modules.face_recognition import FaceRecognition
 
         fr = FaceRecognition(data_dir=str(tmp_path))
-        assert fr.face_data_file == tmp_path / "face_data.pkl"
+        assert fr.face_data_file == tmp_path / "face_data.npz"
 
     def test_capture_face_no_cv(self, tmp_path, monkeypatch):
         monkeypatch.setattr("modules.face_recognition.CV_AVAILABLE", False)

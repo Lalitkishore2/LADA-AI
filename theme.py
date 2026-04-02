@@ -28,26 +28,45 @@ BG_CARD = "#1a1a1a"    # Card / bubble / elevated surface
 BG_SURFACE = "#141414" # Raised surface (panels, overlays)
 TEXT = "#e8e8e8"       # Primary text - soft white
 TEXT_DIM = "#9a9a9a"   # Secondary / dimmed text
-GREEN = "#7c3aed"      # Purple accent (matches web --accent)
+GREEN = "#10a37f"      # ChatGPT-style green accent (matches refreshed web --accent)
 ACCENT = GREEN         # Canonical name for the accent color
-ACCENT_GRADIENT_END = "#6d28d9"  # Darker purple for gradient end
+ACCENT_GRADIENT_END = "#0f8f70"  # Darker green for gradient end
 ACCENT_DARK = ACCENT_GRADIENT_END  # Alias
-ACCENT_LIGHT = "rgba(124,58,237,0.15)"  # Light accent for hover states
+ACCENT_LIGHT = "rgba(16,163,127,0.15)"  # Light accent for hover states
 BLUE = "#3b82f6"       # Blue accent
 PURPLE = "#9b59b6"     # Purple accent (legacy)
 RED = "#ef4444"        # Error red
 BORDER = "#252525"     # Border color - subtle separator
-BORDER_FOCUS = "#7c3aed"  # Focus ring color - purple accent
+BORDER_FOCUS = "#10a37f"  # Focus ring color - green accent
 
 # ═══════════════════════════════════════════════════════════════════════
 # Typography
 # ═══════════════════════════════════════════════════════════════════════
-FONT_FAMILY = "Segoe UI, -apple-system, Inter, Roboto, Arial, sans-serif"
+FONT_FAMILY = "Manrope, Avenir Next, Nunito Sans, Segoe UI, sans-serif"
 FONT_HEADING = "Segoe UI Semibold"
 FONT_SIZE_SM = 12
 FONT_SIZE_MD = 14
 FONT_SIZE_LG = 16
 FONT_SIZE_XL = 28
+
+# ═══════════════════════════════════════════════════════════════════════
+# Layout Tokens (Desktop)
+# ═══════════════════════════════════════════════════════════════════════
+SPACING_XS = 4
+SPACING_SM = 8
+SPACING_MD = 12
+SPACING_LG = 16
+SPACING_XL = 24
+
+CONTROL_ICON_SIZE = 32
+CONTROL_TOOLBAR_BUTTON_SIZE = 26
+
+APP_COLUMN_MAX_WIDTH = 920
+APP_INPUT_MAX_WIDTH = 880
+APP_WELCOME_GRID_MAX_WIDTH = 760
+APP_SUGGESTION_CARD_MIN_HEIGHT = 72
+APP_ASSISTANT_TEXT_MAX_WIDTH = 760
+APP_USER_TEXT_MAX_WIDTH = 700
 
 # ═══════════════════════════════════════════════════════════════════════
 # Semantic colors

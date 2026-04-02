@@ -247,10 +247,23 @@ def build_default_registry() -> ServiceRegistry:
     # Spotify / Smart Home
     svc.register('spotify', 'modules.spotify_controller', ['SpotifyController'])
     svc.register('smart_home', 'modules.smart_home', ['SmartHomeHub'])
+    svc.register('alexa_server', 'integrations.alexa_server', ['AlexaSkillServer'])
+    svc.register('openclaw_adapter', 'integrations.openclaw_adapter',
+                 ['OpenClawAdapter', 'get_openclaw_adapter', 'openclaw_adapter_enabled'])
+    svc.register('stealth_browser', 'modules.stealth_browser',
+                 ['StealthBrowser', 'StealthConfig', 'get_stealth_browser'])
 
     # Orchestration
     svc.register('advanced_planner', 'modules.advanced_planner', ['AdvancedPlanner'])
     svc.register('skill_generator', 'modules.skill_generator', ['SkillGenerator'])
+
+    # Standalone runtime foundations
+    svc.register('standalone_contracts', 'modules.standalone.contracts',
+                 ['CommandEnvelope', 'EventEnvelope', 'CommandResult'])
+    svc.register('standalone_bus', 'modules.standalone.command_bus',
+                 ['InMemoryCommandBus', 'RedisStreamsCommandBus', 'create_command_bus'])
+    svc.register('standalone_orchestrator', 'modules.standalone.orchestrator',
+                 ['StandaloneOrchestrator', 'create_orchestrator'])
 
     # Gap-closing: wire existing dormant modules
     svc.register('image_gen', 'modules.image_generation',

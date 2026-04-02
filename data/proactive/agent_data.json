@@ -1,6 +1,24 @@
 {
-  "suggestion_history": [],
+  "suggestion_history": [
+    {
+      "id": "sug_20260331_170206_0",
+      "title": "End of Day",
+      "message": "Consider wrapping up and reviewing tomorrow's schedule",
+      "action": "tomorrow's schedule",
+      "priority": "LOW",
+      "trigger": "time",
+      "context": {
+        "suggestion_key": "end_of_day",
+        "auto_expired": true
+      },
+      "created_at": "2026-03-31T17:02:06.935437",
+      "expires_at": "2026-03-31T18:02:06.935437",
+      "shown": false,
+      "accepted": false,
+      "dismissed": true
+    }
+  ],
   "suggestion_responses": {},
   "last_morning_briefing": null,
-  "last_evening_briefing": null
+  "last_evening_briefing": "2026-03-31T18:00:07.236927"
 }

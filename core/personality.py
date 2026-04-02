@@ -18,14 +18,14 @@ class LadaPersonality:
     Manages LADA's personality modes and response phrases.
     
     Supported modes:
-    - JARVIS: British, formal, sophisticated (Tony Stark's AI)
-    - FRIDAY: Modern, efficient, professional (Tony's successor AI)  
-    - KAREN: Warm, friendly, supportive (Peter Parker's suit AI)
-    - CASUAL: Relaxed, conversational, fun
+    - JARVIS: formal, composed, high-precision
+    - FRIDAY: modern, efficient, professional
+    - KAREN: warm, friendly, supportive
+    - CASUAL: relaxed, conversational, fun
     """
     
-    # Current personality mode (default: JARVIS)
-    _current_mode = "jarvis"
+    # Current personality mode (default: KAREN)
+    _current_mode = "karen"
     
     # Loaded phrases
     _phrases: Dict[str, Dict[str, Any]] = {}
@@ -45,14 +45,14 @@ class LadaPersonality:
             # Return minimal fallback phrases
             return {
                 "jarvis": {
-                    "acknowledgments": ["Right away, sir."],
-                    "greetings": {"morning": ["Good morning, sir."], "afternoon": ["Good afternoon, sir."], "evening": ["Good evening, sir."], "night": ["Good evening, sir."]},
+                    "acknowledgments": ["Right away."],
+                    "greetings": {"morning": ["Good morning."], "afternoon": ["Good afternoon."], "evening": ["Good evening."], "night": ["Good evening."]},
                     "errors": ["I'm afraid there's been an issue."],
-                    "not_understood": ["I beg your pardon, sir. Could you clarify?"],
-                    "confirmations": ["Understood, sir."],
-                    "status_updates": ["Sir, you should know that {info}."],
-                    "warnings": ["Sir, I must advise caution. {warning}."],
-                    "completion": ["Task completed, sir."]
+                    "not_understood": ["I beg your pardon. Could you clarify?"],
+                    "confirmations": ["Understood."],
+                    "status_updates": ["You should know that {info}."],
+                    "warnings": ["I must advise caution. {warning}."],
+                    "completion": ["Task completed."]
                 }
             }
         
@@ -66,14 +66,14 @@ class LadaPersonality:
             # Cache fallback phrases to prevent subsequent failures
             cls._phrases = {
                 "jarvis": {
-                    "acknowledgments": ["Right away, sir."],
-                    "greetings": {"morning": ["Good morning, sir."], "afternoon": ["Good afternoon, sir."], "evening": ["Good evening, sir."], "night": ["Good evening, sir."]},
+                    "acknowledgments": ["Right away."],
+                    "greetings": {"morning": ["Good morning."], "afternoon": ["Good afternoon."], "evening": ["Good evening."], "night": ["Good evening."]},
                     "errors": ["I'm afraid there's been an issue."],
-                    "not_understood": ["I beg your pardon, sir. Could you clarify?"],
-                    "confirmations": ["Understood, sir."],
-                    "status_updates": ["Sir, you should know that {info}."],
-                    "warnings": ["Sir, I must advise caution. {warning}."],
-                    "completion": ["Task completed, sir."]
+                    "not_understood": ["I beg your pardon. Could you clarify?"],
+                    "confirmations": ["Understood."],
+                    "status_updates": ["You should know that {info}."],
+                    "warnings": ["I must advise caution. {warning}."],
+                    "completion": ["Task completed."]
                 }
             }
             return cls._phrases

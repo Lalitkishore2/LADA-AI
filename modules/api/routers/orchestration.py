@@ -5,14 +5,141 @@ LADA API — Orchestration routes (/plans/*, /workflows/*, /tasks/*, /skills/*)
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks, Request, Response, Depends
+from modules.api.deps import set_request_id_header
+from modules.error_sanitizer import safe_error_response
 
 logger = logging.getLogger(__name__)
 
 
 def create_orchestration_router(state):
     """Create plan/workflow/task/skill router."""
-    r = APIRouter(tags=["orchestration"])
+    async def _trace_request(request: Request, response: Response):
+        set_request_id_header(request, response, prefix="orchestration")
+
+    r = APIRouter(tags=["orchestration"], dependencies=[Depends(_trace_request)])
+
+    def _raise_sanitized_error(exc: Exception, operation: str, *, status_code: int = 500) -> None:
+        error_info = safe_error_response(exc, operation=operation)
+        logger.error(f"[APIServer] {operation} error: {type(exc).__name__}")
+        raise HTTPException(status_code=status_code, detail=error_info["error"])
+
+    @r.get("/orchestrator/subscriptions")
+    async def get_orchestrator_subscriptions(include_sessions: bool = Query(True)):
+        """Return current orchestrator WS event-stream subscription status."""
+        state.load_components()
+
+        subscribers = list(getattr(state, 'ws_orchestrator_subscribers', set()))
+        filter_map = getattr(state, 'ws_orchestrator_subscription_filters', {})
+        sessions = getattr(state, 'ws_sessions', {})
+        connections = getattr(state, 'ws_connections', {})
+
+        payload = {
+            "enabled": bool(getattr(state, '_standalone_orchestrator_enabled', False)),
+            "orchestrator_available": bool(getattr(state, 'orchestrator', None)),
+            "stream_active": bool(getattr(state, 'ws_orchestrator_bus_subscription_token', None)),
+            "subscriber_count": len(subscribers),
+        }
+
+        if include_sessions:
+            entries = []
+            for session_id in subscribers:
+                session = sessions.get(session_id, {})
+                raw_filters = filter_map.get(session_id, {})
+
+                serialized_filters = {}
+                if isinstance(raw_filters, dict):
+                    for key, value in raw_filters.items():
+                        if isinstance(value, set):
+                            if value:
+                                serialized_filters[key] = sorted(value)
+                        elif isinstance(value, (list, tuple)):
+                            if value:
+                                serialized_filters[key] = [str(v) for v in value]
+                        elif value:
+                            serialized_filters[key] = [str(value)]
+
+                entries.append({
+                    "session_id": session_id,
+                    "connected": session_id in connections,
+                    "orchestrator_events": bool(session.get("orchestrator_events", False)),
+                    "messages_sent": int(session.get("messages_sent", 0)),
+                    "messages_received": int(session.get("messages_received", 0)),
+                    "last_activity": session.get("last_activity"),
+                    "filters": serialized_filters,
+                })
+
+            payload["sessions"] = entries
+
+        return payload
+
+    @r.post("/orchestrator/dispatch")
+    async def dispatch_orchestrator_command(body: dict = Body(default={})):
+        """Dispatch a command envelope through the standalone orchestrator."""
+        state.load_components()
+
+        orchestrator = getattr(state, 'orchestrator', None)
+        if not orchestrator:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Standalone orchestrator is not enabled. "
+                    "Set LADA_STANDALONE_ORCHESTRATOR=true to enable it."
+                ),
+            )
+
+        from modules.standalone.contracts import CommandEnvelope
+
+        wait_for_result = bool(body.get("wait", True))
+        timeout_ms = int(body.get("timeout_ms", body.get("timeout", 60000)))
+
+        envelope_data = body.get("envelope")
+        if isinstance(envelope_data, dict):
+            raw_envelope = dict(envelope_data)
+        else:
+            raw_envelope = {
+                "source": body.get("source", "api"),
+                "target": body.get("target", "system"),
+                "action": body.get("action", ""),
+                "payload": body.get("payload", {}),
+                "timeout_ms": timeout_ms,
+                "metadata": body.get("metadata", {}),
+                "idempotency_key": body.get("idempotency_key"),
+            }
+
+        if "source" not in raw_envelope:
+            raw_envelope["source"] = "api"
+        if "timeout_ms" not in raw_envelope:
+            raw_envelope["timeout_ms"] = timeout_ms
+
+        try:
+            envelope = CommandEnvelope.from_dict(raw_envelope)
+        except Exception as e:
+            logger.warning(f"[APIServer] Invalid command envelope: {type(e).__name__}")
+            raise HTTPException(status_code=400, detail="Invalid command envelope")
+
+        try:
+            event = orchestrator.submit(
+                envelope,
+                wait_for_result=wait_for_result,
+                timeout_ms=timeout_ms,
+            )
+        except Exception as e:
+            _raise_sanitized_error(e, "orchestrator_dispatch", status_code=500)
+
+        response = {
+            "success": True,
+            "accepted": True,
+            "status": "accepted",
+            "command": envelope.to_dict(),
+        }
+
+        if event is not None:
+            response["status"] = event.status
+            response["event_type"] = event.event_type
+            response["result_event"] = event.to_dict()
+
+        return response
 
     # ── Plans ────────────────────────────────────────────────
 
@@ -31,7 +158,7 @@ def create_orchestration_router(state):
             plan = await loop.run_in_executor(None, lambda: planner.create_plan(task, context))
             return {"success": True, "plan": plan.to_dict()}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            _raise_sanitized_error(e, "create_plan", status_code=500)
 
     @r.get("/plans")
     async def list_plans(count: int = Query(10)):
@@ -121,7 +248,7 @@ def create_orchestration_router(state):
                 "error": result.error,
             }
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            _raise_sanitized_error(e, "execute_workflow", status_code=500)
 
     @r.get("/workflows/history")
     async def workflow_history(limit: int = Query(10)):
@@ -225,7 +352,7 @@ def create_orchestration_router(state):
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            _raise_sanitized_error(e, "generate_skill", status_code=500)
 
     @r.get("/skills")
     async def list_skills():

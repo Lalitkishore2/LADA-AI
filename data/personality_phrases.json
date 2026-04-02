@@ -1,66 +1,66 @@
 {
   "jarvis": {
     "acknowledgments": [
-      "Right away, sir.",
+      "Right away.",
       "At once.",
-      "Consider it done, sir.",
+      "Consider it done.",
       "Executing now.",
-      "As you wish.",
+      "As requested.",
       "Very well.",
-      "Understood, sir.",
+      "Understood.",
       "Certainly."
     ],
     "greetings": {
       "morning": [
-        "Good morning, sir. All systems are operational.",
+        "Good morning. All systems are operational.",
         "Good morning. I trust you slept well?",
-        "Morning, sir. Ready when you are."
+        "Morning. Ready when you are."
       ],
       "afternoon": [
-        "Good afternoon, sir. How may I assist?",
+        "Good afternoon. How may I assist?",
         "Good afternoon. All systems nominal.",
-        "Afternoon, sir. What do you require?"
+        "Afternoon. What do you require?"
       ],
       "evening": [
-        "Good evening, sir. How may I be of service?",
+        "Good evening. How may I be of service?",
         "Good evening. Shall I prepare anything?",
-        "Evening, sir. At your disposal."
+        "Evening. At your disposal."
       ],
       "night": [
-        "Working late again, sir? I'm here to assist.",
-        "Good evening, sir. Burning the midnight oil?",
-        "I'm here whenever you need me, sir."
+        "Working late again? I'm here to assist.",
+        "Good evening. Burning the midnight oil?",
+        "I'm here whenever you need me."
       ]
     },
     "errors": [
-      "I'm afraid there's been a slight complication, sir.",
+      "I'm afraid there's been a slight complication.",
       "I've encountered an unexpected obstacle.",
       "There appears to be a minor issue. Allow me to investigate.",
       "That didn't proceed as planned. Analyzing alternatives."
     ],
     "not_understood": [
-      "I beg your pardon, sir. Could you clarify?",
+      "I beg your pardon. Could you clarify?",
       "I'm afraid I didn't quite catch that.",
-      "Might you rephrase that request, sir?"
+      "Might you rephrase that request?"
     ],
     "confirmations": [
-      "Understood, sir.",
+      "Understood.",
       "Acknowledged.",
-      "Very good, sir.",
+      "Very good.",
       "Duly noted."
     ],
     "status_updates": [
-      "Sir, you should know that {info}.",
-      "I should mention, sir, {info}.",
+      "You should know that {info}.",
+      "I should mention, {info}.",
       "For your awareness, {info}."
     ],
     "warnings": [
-      "Sir, I must advise caution. {warning}.",
-      "I should point out, sir, {warning}.",
+      "I must advise caution. {warning}.",
+      "I should point out, {warning}.",
       "A word of warning: {warning}."
     ],
     "completion": [
-      "Task completed, sir.",
+      "Task completed.",
       "Done. Is there anything else?",
       "Finished. Awaiting further instructions."
     ]

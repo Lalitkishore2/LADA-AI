@@ -19,8 +19,18 @@ class BrowserExecutor(BaseExecutor):
     """Handles browser control, tab management, summarization, and multi-tab commands."""
 
     def try_handle(self, cmd: str) -> Tuple[bool, str]:
+        # OpenClaw compatibility aliases (shared core path for CLI/API/Desktop)
+        handled, resp = self._handle_openclaw_compat(cmd)
+        if handled:
+            return True, resp
+
         # Comet autonomous agent (browser/GUI tasks)
         handled, resp = self._handle_comet(cmd)
+        if handled:
+            return True, resp
+
+        # Stealth browser mode (anti-bot, undetected)
+        handled, resp = self._handle_stealth(cmd)
         if handled:
             return True, resp
 
@@ -55,6 +65,282 @@ class BrowserExecutor(BaseExecutor):
                 return True, resp
 
         return False, ""
+
+    # -- OpenClaw Compatibility Aliases ----------------------
+
+    def _handle_openclaw_compat(self, cmd: str) -> Tuple[bool, str]:
+        if not cmd.strip().startswith("openclaw"):
+            return False, ""
+
+        command = cmd.strip()
+        adapter = None
+
+        try:
+            from integrations.openclaw_adapter import get_openclaw_adapter
+            adapter = get_openclaw_adapter()
+        except Exception as e:
+            logger.debug(f"[BrowserExecutor] OpenClaw adapter unavailable: {e}")
+
+        if command in {"openclaw", "openclaw help"}:
+            return True, (
+                "OpenClaw compatibility commands:\n"
+                "- openclaw status\n"
+                "- openclaw connect\n"
+                "- openclaw disconnect\n"
+                "- openclaw navigate <url>\n"
+                "- openclaw snapshot\n"
+                "- openclaw click <selector>\n"
+                "- openclaw type <selector> :: <text>\n"
+                "- openclaw scroll <up|down> [pixels]\n"
+                "- openclaw extract [selector]"
+            )
+
+        if command == "openclaw status":
+            lines = ["OpenClaw compatibility status:"]
+            if adapter:
+                status = adapter.status()
+                lines.append(f"- adapter enabled: {status.get('enabled', False)}")
+                lines.append(f"- adapter state: {status.get('state', 'unknown')}")
+                lines.append(f"- adapter connected: {status.get('connected', False)}")
+                if status.get('url'):
+                    lines.append(f"- gateway: {status.get('url')}")
+            else:
+                lines.append("- adapter: disabled (set LADA_OPENCLAW_ADAPTER_ENABLED=true to enable gateway mode)")
+            return True, "\n".join(lines)
+
+        if command == "openclaw connect":
+            if not adapter:
+                return True, "OpenClaw adapter is disabled. Set LADA_OPENCLAW_ADAPTER_ENABLED=true and restart."
+            ok = adapter.connect()
+            return True, "OpenClaw adapter connected." if ok else "OpenClaw adapter connection failed."
+
+        if command == "openclaw disconnect":
+            if not adapter:
+                return True, "OpenClaw adapter is not active."
+            adapter.disconnect()
+            return True, "OpenClaw adapter disconnected."
+
+        if command.startswith("openclaw navigate "):
+            url = command[len("openclaw navigate "):].strip()
+            if not url:
+                return True, "Usage: openclaw navigate <url>"
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+
+            if adapter and adapter.navigate(url):
+                return True, f"OpenClaw adapter navigated to {url}."
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.navigate(url)
+                if result.get('success'):
+                    return True, f"Stealth navigation successful: {result.get('url', url)}"
+            except Exception:
+                pass
+
+            if getattr(self.core, 'browser_tabs', None):
+                result = self.core.browser_tabs.navigate_to(url)
+                if result.get('success'):
+                    return True, f"Navigated to {url}"
+
+            return True, f"Tried native navigation to {url}, but could not complete it."
+
+        if command == "openclaw snapshot":
+            if adapter:
+                snapshot = adapter.snapshot_summary()
+                if snapshot:
+                    return True, (
+                        "OpenClaw snapshot summary:\n"
+                        f"- URL: {snapshot.get('url', '')}\n"
+                        f"- Title: {snapshot.get('title', '')}\n"
+                        f"- Interactive elements: {snapshot.get('interactive_elements', 0)}\n"
+                        f"- Text chars: {snapshot.get('text_chars', 0)}"
+                    )
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                page = browser.get_page_content()
+                if page.get('success'):
+                    shot = browser.screenshot()
+                    msg = (
+                        "Native snapshot summary:\n"
+                        f"- URL: {page.get('url', '')}\n"
+                        f"- Title: {page.get('title', '')}\n"
+                        f"- Text chars: {len(str(page.get('text', '')))}"
+                    )
+                    if shot.get('success'):
+                        msg += f"\n- Screenshot: {shot.get('path', '')}"
+                    return True, msg
+            except Exception:
+                pass
+
+            return True, "Native snapshot command is currently unavailable."
+
+        if command.startswith("openclaw click "):
+            selector = command[len("openclaw click "):].strip()
+            if not selector:
+                return True, "Usage: openclaw click <selector>"
+
+            if adapter and adapter.click(selector):
+                return True, f"OpenClaw adapter clicked: {selector}"
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.click(selector=selector)
+                if result.get('success'):
+                    return True, f"Stealth click successful: {selector}"
+            except Exception:
+                pass
+
+            return True, f"Could not click selector: {selector}"
+
+        if command.startswith("openclaw type "):
+            payload = command[len("openclaw type "):].strip()
+            separator = "::" if "::" in payload else "|" if "|" in payload else ""
+            if not separator:
+                return True, "Usage: openclaw type <selector> :: <text>"
+
+            selector, typed = [p.strip() for p in payload.split(separator, 1)]
+            if not selector:
+                return True, "Usage: openclaw type <selector> :: <text>"
+
+            if adapter and adapter.type_text(selector, typed):
+                return True, f"OpenClaw adapter typed into {selector}."
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.type_text(selector=selector, text=typed)
+                if result.get('success'):
+                    return True, f"Stealth typed into {selector}."
+            except Exception:
+                pass
+
+            return True, f"Could not type into selector: {selector}"
+
+        if command.startswith("openclaw scroll "):
+            payload = command[len("openclaw scroll "):].strip().split()
+            direction = payload[0].lower() if payload else "down"
+            if direction not in {"up", "down"}:
+                direction = "down"
+
+            amount = 500
+            if len(payload) > 1:
+                try:
+                    amount = int(payload[1])
+                except Exception:
+                    amount = 500
+
+            if adapter and adapter.scroll(direction=direction, amount=amount):
+                return True, f"OpenClaw adapter scrolled {direction} by {amount}px."
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.scroll(direction=direction, amount=amount)
+                if result.get('success'):
+                    return True, f"Stealth scrolled {direction} by {amount}px."
+            except Exception:
+                pass
+
+            return True, f"Could not scroll {direction}."
+
+        if command.startswith("openclaw extract"):
+            selector = command[len("openclaw extract"):].strip()
+
+            if adapter:
+                text_out = adapter.extract_text(selector=selector or None)
+                if text_out:
+                    return True, text_out[:4000]
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                if selector:
+                    result = browser.execute_js(
+                        "const el=document.querySelector(arguments[0]); return el ? el.innerText : '';",
+                        selector,
+                    )
+                    if result:
+                        return True, str(result)[:4000]
+
+                page = browser.get_page_content()
+                if page.get('success'):
+                    return True, str(page.get('text', ''))[:4000]
+            except Exception:
+                pass
+
+            return True, "Could not extract page content."
+
+        return True, (
+            "OpenClaw compatibility command not recognized. "
+            "Use 'openclaw help' for supported commands."
+        )
+
+    # ── Stealth Browser ─────────────────────────────────────
+
+    def _handle_stealth(self, cmd: str) -> Tuple[bool, str]:
+        if not any(x in cmd for x in ['stealth', 'undetected', 'anti-bot', 'antibot']):
+            return False, ""
+
+        try:
+            from modules.stealth_browser import get_stealth_browser
+            browser = get_stealth_browser()
+        except Exception as e:
+            return True, f"Stealth browser is unavailable: {e}"
+
+        # Navigate/open URL
+        nav_match = re.search(r'(?:go to|navigate to|open)\s+(\S+)', cmd)
+        if nav_match:
+            url = nav_match.group(1).strip()
+            if not url.startswith(('http://', 'https://')):
+                url = f"https://{url}"
+            result = browser.navigate(url)
+            if result.get('success'):
+                return True, f"Stealth navigation successful: {result.get('url', url)}"
+            return True, result.get('error', 'Stealth navigation failed')
+
+        # Click selector
+        click_match = re.search(r'click\s+(.+)$', cmd)
+        if click_match:
+            selector = click_match.group(1).strip()
+            result = browser.click(selector=selector)
+            if result.get('success'):
+                return True, f"Stealth click successful: {selector}"
+            return True, result.get('error', f"Stealth click failed: {selector}")
+
+        # Type text into selector: "type <text> into <selector>"
+        type_match = re.search(r'type\s+(.+?)\s+(?:into|in|to)\s+(.+)$', cmd)
+        if type_match:
+            typed = type_match.group(1).strip().strip('"\'')
+            selector = type_match.group(2).strip()
+            result = browser.type_text(selector=selector, text=typed)
+            if result.get('success'):
+                return True, f"Stealth typed into {selector}"
+            return True, result.get('error', f"Stealth typing failed: {selector}")
+
+        # Scroll
+        if 'scroll' in cmd:
+            direction = 'up' if 'up' in cmd else 'down'
+            amount_match = re.search(r'(\d+)', cmd)
+            amount = int(amount_match.group(1)) if amount_match else 300
+            result = browser.scroll(direction=direction, amount=amount)
+            if result.get('success'):
+                return True, f"Stealth scrolled {direction} by {amount}px"
+            return True, result.get('error', 'Stealth scroll failed')
+
+        # Extract text
+        if any(x in cmd for x in ['extract', 'read page', 'page text', 'content']):
+            page = browser.get_page_content()
+            if page.get('success'):
+                text = str(page.get('text', ''))
+                return True, text[:700] if text else "No text content extracted."
+            return True, page.get('error', 'Stealth extract failed')
+
+        return True, "Stealth mode is ready. Try: 'stealth go to <url>' or 'stealth click <selector>'."
 
     # ── Comet Autonomous Agent ───────────────────────────────
 

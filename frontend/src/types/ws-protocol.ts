@@ -26,17 +26,22 @@ export interface Source {
 
 // ---- Client -> Server Messages --------------------------------------------
 
-export interface ClientChatMessage {
+interface ClientMessageBase {
+  request_id?: string;
+}
+
+export interface ClientChatMessage extends ClientMessageBase {
   type: 'chat';
   id: MessageId;
   data: {
     message: string;
     stream: boolean;
     model?: string;
+    use_web_search?: boolean;
   };
 }
 
-export interface ClientAgentMessage {
+export interface ClientAgentMessage extends ClientMessageBase {
   type: 'agent';
   id: MessageId;
   data: {
@@ -46,7 +51,7 @@ export interface ClientAgentMessage {
   };
 }
 
-export interface ClientSystemMessage {
+export interface ClientSystemMessage extends ClientMessageBase {
   type: 'system';
   id: MessageId;
   data: {
@@ -54,7 +59,7 @@ export interface ClientSystemMessage {
   };
 }
 
-export interface ClientPingMessage {
+export interface ClientPingMessage extends ClientMessageBase {
   type: 'ping';
 }
 
@@ -71,6 +76,7 @@ export interface ServerConnectedMessage {
   type: 'system.connected';
   data: {
     session_id: string;
+    request_id?: string;
   };
 }
 
@@ -83,7 +89,9 @@ export interface ServerModelsMessage {
 
 export interface ServerStatusMessage {
   type: 'system.status';
-  data: Record<string, unknown>;
+  data: Record<string, unknown> & {
+    request_id?: string;
+  };
 }
 
 export interface ServerAckMessage {
@@ -93,6 +101,9 @@ export interface ServerAckMessage {
 export interface ServerChatStartMessage {
   type: 'chat.start';
   id: MessageId;
+  data?: {
+    request_id?: string;
+  };
 }
 
 export interface ServerChatChunkMessage {
@@ -100,6 +111,7 @@ export interface ServerChatChunkMessage {
   id: MessageId;
   data: {
     chunk: string;
+    request_id?: string;
   };
 }
 
@@ -108,6 +120,7 @@ export interface ServerChatSourcesMessage {
   id: MessageId;
   data: {
     sources: Source[];
+    request_id?: string;
   };
 }
 
@@ -116,6 +129,7 @@ export interface ServerChatDoneMessage {
   id: MessageId;
   data: {
     model: string;
+    request_id?: string;
   };
 }
 
@@ -125,6 +139,7 @@ export interface ServerChatResponseMessage {
   data: {
     content: string;
     model: string;
+    request_id?: string;
   };
 }
 
@@ -133,11 +148,15 @@ export interface ServerErrorMessage {
   id: MessageId;
   data: {
     message: string;
+    request_id?: string;
   };
 }
 
 export interface ServerPongMessage {
   type: 'pong';
+  data?: {
+    request_id?: string;
+  };
 }
 
 /** Discriminated union of every message the server can send. */

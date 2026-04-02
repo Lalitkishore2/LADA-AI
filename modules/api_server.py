@@ -54,7 +54,7 @@ class LADAAPIServer:
             return
 
         # Shared server state
-        from modules.api.deps import ServerState
+        from modules.api.deps import ServerState, REQUEST_ID_HEADER, ensure_request_id
         self._state = ServerState()
 
         # Create FastAPI app
@@ -102,19 +102,25 @@ class LADAAPIServer:
         # Session auth middleware
         @self.app.middleware("http")
         async def auth_middleware(request, call_next):
+            request_id = ensure_request_id(request, prefix="http")
+
+            def _with_request_id(response):
+                response.headers[REQUEST_ID_HEADER] = request_id
+                return response
+
             path = request.url.path
             public_paths = [
                 "/auth/login", "/health", "/docs", "/redoc", "/openapi.json",
                 "/app", "/dashboard",
             ]
             if any(path == p or path.startswith(p + "/") for p in public_paths):
-                return await call_next(request)
+                return _with_request_id(await call_next(request))
             if path.startswith("/static"):
-                return await call_next(request)
+                return _with_request_id(await call_next(request))
             if path == "/":
-                return await call_next(request)
+                return _with_request_id(await call_next(request))
             if path.startswith("/v1/"):
-                return await call_next(request)
+                return _with_request_id(await call_next(request))
 
             auth_header = request.headers.get("authorization", "")
             token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
@@ -123,9 +129,9 @@ class LADAAPIServer:
 
             if not self._state.validate_session_token(token):
                 from starlette.responses import JSONResponse as SJR
-                return SJR(status_code=401, content={"detail": "Authentication required"})
+                return _with_request_id(SJR(status_code=401, content={"detail": "Authentication required"}))
 
-            return await call_next(request)
+            return _with_request_id(await call_next(request))
 
         # ── Register routers ─────────────────────────────────
         from modules.api.routers.auth import create_auth_router
@@ -134,6 +140,7 @@ class LADAAPIServer:
         from modules.api.routers.app import create_app_router
         from modules.api.routers.orchestration import create_orchestration_router
         from modules.api.routers.openai_compat import create_openai_compat_router
+        from modules.api.routers.openclaw_compat import create_openclaw_compat_router
         from modules.api.routers.websocket import create_ws_router
 
         self.app.include_router(create_auth_router(self._state))
@@ -142,6 +149,7 @@ class LADAAPIServer:
         self.app.include_router(create_app_router(self._state))
         self.app.include_router(create_orchestration_router(self._state))
         self.app.include_router(create_openai_compat_router(self._state))
+        self.app.include_router(create_openclaw_compat_router(self._state))
         self.app.include_router(create_ws_router(self._state))
 
         # Mount static files

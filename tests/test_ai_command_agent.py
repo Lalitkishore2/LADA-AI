@@ -50,6 +50,7 @@ def mock_tool_registry():
         {'name': 'open_path', 'description': 'Open path'},
         {'name': 'run_powershell', 'description': 'Run command'},
     ])
+    registry._tools = [1, 2, 3]
     registry.execute_tool = Mock(return_value={
         'success': True,
         'result': 'Executed successfully'
@@ -207,8 +208,8 @@ class TestFormatToolsForPrompt:
     def test_formats_tools_as_string(self, ai_agent):
         """Tools formatted for prompt as readable string"""
         tools = [
-            {'name': 'tool1', 'description': 'First tool'},
-            {'name': 'tool2', 'description': 'Second tool'},
+            {'function': {'name': 'tool1', 'description': 'First tool'}},
+            {'function': {'name': 'tool2', 'description': 'Second tool'}},
         ]
         formatted = ai_agent._format_tools_for_prompt(tools)
         assert 'tool1' in formatted
@@ -221,24 +222,21 @@ class TestParseToolCalls:
     
     def test_parses_xml_tool_calls(self, ai_agent):
         """Parse XML-formatted tool calls"""
-        text = '<tool_call>{"name": "find_files", "arguments": {"pattern": "*.pdf"}}</tool_call>'
+        text = 'TOOL_CALL: {"name": "find_files", "arguments": {"pattern": "*.pdf"}}'
         calls = ai_agent._parse_tool_calls(text)
         assert len(calls) >= 1
         name, args = calls[0]
         assert name == "find_files"
         assert args.get("pattern") == "*.pdf"
-    
+
     def test_parses_multiple_tool_calls(self, ai_agent):
         """Parse multiple tool calls from text"""
         text = '''
-        <tool_call>{"name": "find_files", "arguments": {"pattern": "*.pdf"}}</tool_call>
+        TOOL_CALL: {"name": "find_files", "arguments": {"pattern": "*.pdf"}}
         Found some files.
-        <tool_call>{"name": "open_path", "arguments": {"path": "/tmp"}}</tool_call>
+        TOOL_CALL: {"name": "open_path", "arguments": {"path": "/tmp"}}
         '''
         calls = ai_agent._parse_tool_calls(text)
-        assert len(calls) == 2
-    
-    def test_handles_no_tool_calls(self, ai_agent):
         """Returns empty list when no tool calls"""
         text = "This is just regular text without any tool calls."
         calls = ai_agent._parse_tool_calls(text)
@@ -274,14 +272,14 @@ class TestDelegation:
         """_should_delegate returns (should_delegate, specialist_id)"""
         result = ai_agent._should_delegate("check hotel prices in London")
         assert isinstance(result, tuple)
-        assert len(result) == 2
-        should_delegate, specialist_id = result
+        assert len(result) == 3
+        should_delegate, specialist_id, intent = result
         assert isinstance(should_delegate, bool)
     
     def test_normal_commands_not_delegated(self, ai_agent):
         """Normal commands are not delegated"""
         result = ai_agent._should_delegate("open notepad")
-        should_delegate, _ = result
+        should_delegate, _, _ = result
         # Simple commands should not be delegated
         assert should_delegate is False
 

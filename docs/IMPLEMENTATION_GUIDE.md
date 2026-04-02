@@ -1,5 +1,11 @@
 # LADA v10.0 - Implementation Complete & User Guide
 
+> Note: This file contains historical rollout details. For current operational references, use:
+> - `docs/WORKFLOW.md`
+> - `docs/API_WEBSOCKET_REFERENCE.md`
+> - `docs/VALIDATION_PLAYBOOK.md`
+> - `docs/CLEANUP_PLAN.md`
+
 ## What Was Built
 
 All 17 features from the gap analysis comparing LADA to OpenClaw.ai, Perplexity AI, and Comet autonomous agents have been implemented, plus additional enhancements:
@@ -45,10 +51,10 @@ All 17 features from the gap analysis comparing LADA to OpenClaw.ai, Perplexity 
    - Tailored search sources and system prompts per mode
    - Auto-detect mode from query
 
-9. **Task Scheduler** (`modules/task_scheduler.py`)
-   - Interval/daily/weekly/once scheduling
-   - Natural language parsing ("every Monday at 3pm")
-   - Job persistence and execution history
+9. **Event Hooks + Pipelines** (`modules/event_hooks.py`, `modules/workflow_pipelines.py`)
+   - Event-driven scheduling and automation hooks
+   - Deterministic workflow/pipeline execution
+   - Execution history and lifecycle hooks
 
 10. **AI Skill Generator** (`modules/skill_generator.py`)
     - Generate plugins from natural language descriptions
@@ -71,9 +77,9 @@ All 17 features from the gap analysis comparing LADA to OpenClaw.ai, Perplexity 
     - Stability AI and Gemini Imagen backends
     - Save to `data/generated_images/`
 
-17. **ElevenLabs Voice** (`modules/elevenlabs_voice.py`)
-    - Premium neural TTS with voice selection
-    - Fallback to pyttsx3
+17. **Voice Stack Consolidation** (`voice_tamil_free.py`, `voice/`)
+   - Unified free/offline-capable TTS-STT pipeline
+   - Optional premium engines are no longer hard-wired in core runtime
 
 **BONUS:**
 18. **Hot-Reload** (enhanced `modules/lazy_loader.py`)
@@ -227,12 +233,12 @@ Switch modes via the planned model picker dropdown (GUI integration pending):
 - MATH: LaTeX formatting, math resources
 - NEWS: Recent articles, fact-checking
 
-### Task Scheduler
+### Event Hooks and Pipelines
 ```python
-from modules.task_scheduler import get_task_scheduler
-scheduler = get_task_scheduler()
-scheduler.add_task("remind_standup", "Send standup reminder", "every Monday at 9am")
-scheduler.start()
+from modules.event_hooks import get_hook_manager
+
+hooks = get_hook_manager()
+hooks.emit("workflow.triggered", {"name": "standup_reminder"})
 ```
 
 ### Plugins
@@ -399,12 +405,12 @@ modules/
 ├── advanced_planner.py        # Dependency graph planning
 ├── visual_grounding.py        # Gemini Vision for UI analysis
 ├── focus_modes.py             # Mode-specific search/prompts
-├── task_scheduler.py          # Cron-style background tasks
+├── event_hooks.py             # Event dispatch and triggers
 ├── skill_generator.py         # AI-generated plugins
 ├── rate_limiter.py            # Per-provider TokenBucket + CircuitBreaker (273 lines)
 ├── research_spaces.py         # Topic-based knowledge organization
 ├── image_generation.py        # Stability AI / Gemini Imagen
-├── elevenlabs_voice.py        # Premium neural TTS
+├── voice_tamil_free.py        # Primary free/offline voice stack
 ├── demonstration_recorder.py  # Mouse/keyboard recording + replay
 └── messaging/                 # Multi-platform connectors (11 files)
     ├── __init__.py
@@ -488,7 +494,7 @@ logging.basicConfig(level=logging.DEBUG)
 **Test individual modules:**
 ```bash
 python modules/deep_research.py       # Deep research test
-python modules/task_scheduler.py      # Scheduler test
+python modules/event_hooks.py         # Event hook test
 python modules/plugin_system.py       # Plugin discovery test
 ```
 

@@ -121,6 +121,7 @@ You need **at least one AI backend** configured. The fastest option:
 ### REST API
 - **12+ endpoints** via FastAPI: chat, stream, agents, conversations, voice, health, export
 - **WebSocket gateway** at `/ws` for real-time streaming
+- **OpenClaw compatibility routes** at `/openclaw/*` for status, connect, navigate, action, and snapshot
 
 ### OpenClaw-Inspired Systems
 - **Heartbeat**: proactive periodic check-ins with daily memory logs
@@ -128,6 +129,7 @@ You need **at least one AI backend** configured. The fastest option:
 - **Model Failover**: auth profile rotation with cooldown tracking
 - **Workflow Pipelines**: deterministic multi-step execution with approval gates
 - **Event Hooks**: 20 event types, async dispatch, directory-based hook discovery
+- **Native OpenClaw compatibility mode**: `openclaw ...` commands in core browser executor, API compatibility at `/openclaw/*`, and optional gateway adapter via `LADA_OPENCLAW_ADAPTER_ENABLED=true`
 
 ### Safety
 - **Permission system** with enforced permission levels (1,135 lines)
@@ -322,8 +324,8 @@ C:\JarvisAI\
 |   |-- Browser & Web
 |   |   |-- web_search.py            # Web search + citations
 |   |   |-- browser_automation.py    # Selenium browser control
-|   |   |-- browser_control.py       # Basic browser operations
 |   |   |-- browser_tab_controller.py # Multi-tab management
+|   |   |-- multi_tab_orchestrator.py # Multi-tab orchestration
 |   |   |-- page_vision.py           # Page screenshot + OCR
 |   |   |-- page_summarizer.py       # Webpage summarization
 |   |
@@ -338,7 +340,7 @@ C:\JarvisAI\
 |   |-- Task & Workflow
 |   |   |-- task_orchestrator.py     # Parallel execution, DAG scheduling
 |   |   |-- task_planner.py          # Plan decomposition
-|   |   |-- task_scheduler.py        # APScheduler integration
+|   |   |-- event_hooks.py           # Event dispatch and triggers
 |   |   |-- task_automation.py       # Task orchestration
 |   |   |-- workflow_engine.py       # Workflow definition
 |   |   |-- workflow_pipelines.py    # Pipeline composition
@@ -368,7 +370,7 @@ C:\JarvisAI\
 |   |       |-- message_router.py      # Unified message routing
 |   |
 |   |-- Memory & Learning
-|   |   |-- memory_system.py        # Conversation storage
+|   |   |-- lada_memory.py          # Conversation storage
 |   |   |-- vector_memory.py        # Semantic search (ChromaDB)
 |   |   |-- mcp_client.py           # Model Context Protocol
 |   |
@@ -383,7 +385,6 @@ C:\JarvisAI\
 |   |-- Safety & Monitoring
 |   |   |-- safety_controller.py    # Action validation + undo stack
 |   |   |-- safety_gate.py          # Confirmation gates for dangerous operations
-|   |   |-- permission_system.py    # Enforced permission levels (1,135 lines)
 |   |   |-- health_monitor.py       # CPU/RAM/disk monitoring
 |   |   |-- heartbeat_system.py     # Proactive check-ins
 |   |   |-- error_reporter.py       # Error logging

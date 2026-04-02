@@ -157,7 +157,7 @@ class VoiceCommandProcessor:
     
     def _analyze_with_ai(self, command: str) -> Tuple[bool, str]:
         """
-        IRON MAN LEVEL AI - Full JARVIS/FRIDAY Intelligence
+        LADA execution-grade AI command analysis
         
         Analyzes complex commands and breaks them into actionable steps.
         Handles multi-step tasks like "create a file in VS Code" autonomously.
@@ -166,8 +166,8 @@ class VoiceCommandProcessor:
             return False, ""
 
         try:
-            # Build JARVIS-level intelligent prompt
-            prompt = f"""You are JARVIS, an Iron Man level AI assistant with FULL system control.
+            # Build execution-focused LADA prompt
+            prompt = f"""You are LADA, a local desktop execution assistant with system control.
 CRITICAL RULE: YOU MUST ONLY respond with ACTION: lines. NEVER write sentences, explanations, markdown, or any other text.
 If you are unsure of the exact action, use: ACTION: answer | <brief one-line reply>
 

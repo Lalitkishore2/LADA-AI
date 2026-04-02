@@ -266,7 +266,7 @@ class TestCometAgentWithAI:
         actions = agent_with_ai._think("do something", state, [])
         
         # Should have called the AI router
-        mock_ai_router.route_query.assert_called_once()
+        mock_ai_router.query.assert_called_once()
         assert len(actions) >= 1
         
     def test_parse_ai_response_valid(self, agent_with_ai):

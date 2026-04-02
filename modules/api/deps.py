@@ -8,10 +8,57 @@ import os
 import time
 import logging
 import secrets
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+REQUEST_ID_HEADER = "X-Request-ID"
+REQUEST_ID_STATE_KEY = "request_id"
+_REQUEST_ID_ALLOWED_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:")
+
+
+def normalize_request_id(raw_value: Optional[str], *, prefix: str = "req") -> str:
+    """Normalize incoming request IDs and generate safe fallbacks when absent."""
+    candidate = str(raw_value or "").strip()
+    if candidate:
+        sanitized = "".join(ch if ch in _REQUEST_ID_ALLOWED_CHARS else "-" for ch in candidate)[:96]
+        sanitized = sanitized.strip("-_.:")
+        if sanitized:
+            return sanitized
+
+    generated = uuid.uuid4().hex
+    safe_prefix = "".join(ch for ch in str(prefix or "").lower() if ch.isalnum() or ch in {"-", "_"})
+    return f"{safe_prefix}-{generated}" if safe_prefix else generated
+
+
+def ensure_request_id(request: Any, *, prefix: str = "req") -> str:
+    """Return a request correlation ID and persist it on request.state when available."""
+    state = getattr(request, "state", None)
+    if state is not None:
+        existing = getattr(state, REQUEST_ID_STATE_KEY, "")
+        if existing:
+            return str(existing)
+
+    headers = getattr(request, "headers", None)
+    incoming = ""
+    if headers is not None:
+        incoming = headers.get(REQUEST_ID_HEADER, "") or headers.get("x-request-id", "")
+
+    request_id = normalize_request_id(incoming, prefix=prefix)
+    if state is not None:
+        setattr(state, REQUEST_ID_STATE_KEY, request_id)
+    return request_id
+
+
+def set_request_id_header(request: Any, response: Any, *, prefix: str = "req") -> str:
+    """Ensure request correlation ID exists and expose it via response headers."""
+    request_id = ensure_request_id(request, prefix=prefix)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        headers[REQUEST_ID_HEADER] = request_id
+    return request_id
 
 
 class ServerState:
@@ -42,10 +89,26 @@ class ServerState:
         self.jarvis = None
         self.voice_processor = None
         self.agents: Dict[str, Any] = {}
+        self.openclaw_adapter = None
+        self._openclaw_adapter_enabled = os.getenv(
+            "LADA_OPENCLAW_ADAPTER_ENABLED", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
+        # Standalone orchestration (feature-gated)
+        self.command_bus = None
+        self.orchestrator = None
+        self._standalone_orchestrator_enabled = os.getenv(
+            "LADA_STANDALONE_ORCHESTRATOR", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
         # WebSocket state
         self.ws_connections: Dict[str, Any] = {}  # session_id -> websocket
         self.ws_sessions: Dict[str, Dict[str, Any]] = {}  # session_id -> session data
+        self.ws_orchestrator_subscribers = set()
+        self.ws_orchestrator_subscription_filters: Dict[str, Dict[str, Any]] = {}
+        self.ws_orchestrator_bus_subscription_token: Optional[str] = None
+        self.ws_orchestrator_event_loop = None
+        self.ws_orchestrator_event_callback = None
 
     # ── Session Auth ─────────────────────────────────────────
 
@@ -109,6 +172,12 @@ class ServerState:
         if not self.agents:
             self._load_agents()
 
+        if self._openclaw_adapter_enabled and self.openclaw_adapter is None:
+            self._init_openclaw_adapter()
+
+        if self._standalone_orchestrator_enabled:
+            self._init_standalone_orchestrator()
+
     def _load_agents(self):
         """Load available agents."""
         agent_map = {
@@ -128,3 +197,46 @@ class ServerState:
                 logger.info(f"[APIServer] Loaded agent: {agent_name}")
             except Exception as e:
                 logger.warning(f"[APIServer] Failed to load {agent_name}: {e}")
+
+    def _init_standalone_orchestrator(self):
+        """Initialize standalone command bus + orchestrator behind a feature flag."""
+
+        if self.command_bus is None:
+            try:
+                from modules.standalone.command_bus import create_command_bus
+
+                self.command_bus = create_command_bus()
+                logger.info("[APIServer] Standalone command bus initialized")
+            except Exception as e:
+                logger.error(f"[APIServer] Failed to initialize command bus: {e}")
+                self.command_bus = None
+                return
+
+        if self.orchestrator is None and self.command_bus is not None:
+            try:
+                from modules.standalone.orchestrator import create_orchestrator
+
+                self.orchestrator = create_orchestrator(
+                    command_bus=self.command_bus,
+                    jarvis_getter=lambda: self.jarvis,
+                    ai_router_getter=lambda: self.ai_router,
+                    autostart=True,
+                )
+                logger.info("[APIServer] Standalone orchestrator initialized")
+            except Exception as e:
+                logger.error(f"[APIServer] Failed to initialize orchestrator: {e}")
+                self.orchestrator = None
+
+    def _init_openclaw_adapter(self):
+        """Initialize OpenClaw adapter when compatibility mode is enabled."""
+        try:
+            from integrations.openclaw_adapter import get_openclaw_adapter
+
+            self.openclaw_adapter = get_openclaw_adapter()
+            if self.openclaw_adapter is not None:
+                logger.info("[APIServer] OpenClaw adapter initialized")
+            else:
+                logger.info("[APIServer] OpenClaw adapter disabled by feature flag")
+        except Exception as e:
+            logger.warning(f"[APIServer] OpenClaw adapter initialization failed: {e}")
+            self.openclaw_adapter = None

@@ -5,7 +5,8 @@ LADA API — Auth routes (/auth/*)
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Body, Header
+from fastapi import APIRouter, HTTPException, Body, Header, Request, Response, Depends
+from modules.api.deps import set_request_id_header
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,10 @@ router = APIRouter(tags=["auth"])
 
 def create_auth_router(state):
     """Create auth router bound to server state."""
-    r = APIRouter(tags=["auth"])
+    async def _trace_request(request: Request, response: Response):
+        set_request_id_header(request, response, prefix="auth")
+
+    r = APIRouter(tags=["auth"], dependencies=[Depends(_trace_request)])
 
     @r.post("/auth/login")
     async def auth_login(body: dict = Body(default={})):

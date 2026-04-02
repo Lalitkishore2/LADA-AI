@@ -19,7 +19,7 @@ function StatusDot({ active }: { active: boolean }) {
     <span
       className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
         active
-          ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]'
+          ? 'bg-[var(--accent-hover)] shadow-[0_0_6px_rgba(25,187,147,0.5)]'
           : 'bg-red-400 shadow-[0_0_6px_rgba(248,113,113,0.4)]'
       }`}
     />
@@ -38,16 +38,16 @@ export default function ProviderStatus({
     : null;
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 text-xs">
       {/* Connection status */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 rounded-full border border-[var(--border-color)] bg-[var(--surface-2)]/70 px-2.5 py-1">
         <StatusDot active={connected} />
-        <span className="text-xs text-gray-300 whitespace-nowrap">
+        <span className="text-[var(--text-dim)] whitespace-nowrap">
           {connected ? (
             <>
               Connected
               {truncatedSession && (
-                <span className="text-gray-500 ml-1" title={sessionId}>
+                <span className="text-[var(--text-faint)] ml-1" title={sessionId}>
                   ({truncatedSession})
                 </span>
               )}
@@ -61,18 +61,18 @@ export default function ProviderStatus({
       {/* Provider list */}
       {providers && providers.length > 0 && (
         <>
-          <div className="w-px h-4 bg-gray-700" />
+          <div className="w-px h-4 bg-[var(--border-color)]" />
           <div className="flex items-center gap-2 overflow-x-auto">
             {providers.map((provider) => (
               <div
                 key={provider.name}
-                className="flex items-center gap-1 whitespace-nowrap"
+                className="flex items-center gap-1 whitespace-nowrap rounded-full border border-[var(--border-color)] bg-[var(--surface)]/75 px-2.5 py-1"
                 title={`${provider.name}: ${provider.status}`}
               >
                 <StatusDot active={provider.available} />
                 <span
                   className={`text-xs ${
-                    provider.available ? 'text-gray-300' : 'text-gray-500'
+                    provider.available ? 'text-[var(--text-dim)]' : 'text-[var(--text-faint)]'
                   }`}
                 >
                   {provider.name}

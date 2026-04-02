@@ -6,26 +6,54 @@ Security: Uses error sanitization to prevent internal details from leaking.
 
 import os
 import json
+import asyncio
 import logging
 import threading
 import concurrent.futures
 from typing import Optional, Dict
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query, Body, Header
+from fastapi import APIRouter, HTTPException, Query, Body, Header, Request, Response, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from modules.api.models import (
     ChatRequest, ChatResponse, AgentRequest, AgentResponse, HealthResponse
 )
-from modules.error_sanitizer import safe_error_response, SafeErrorResponse
+from modules.api.deps import REQUEST_ID_HEADER, ensure_request_id, set_request_id_header
+from modules.error_sanitizer import safe_error_response, SafeErrorResponse, ErrorCategory
 
 logger = logging.getLogger(__name__)
 
 
 def create_chat_router(state):
     """Create core chat/conversation/agent router."""
-    r = APIRouter(tags=["chat"])
+    async def _trace_request(request: Request, response: Response):
+        set_request_id_header(request, response, prefix="http")
+
+    r = APIRouter(tags=["chat"], dependencies=[Depends(_trace_request)])
+
+    def _chat_timeout_seconds() -> float:
+        raw_value = os.getenv("LADA_API_CHAT_TIMEOUT_SEC", "90").strip()
+        try:
+            parsed = float(raw_value)
+        except ValueError:
+            parsed = 90.0
+        return max(1.0, min(parsed, 600.0))
+
+    async def _run_query_with_timeout(query_fn, timeout_message: str):
+        loop = asyncio.get_event_loop()
+        timeout_seconds = _chat_timeout_seconds()
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, query_fn),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise SafeErrorResponse(
+                timeout_message,
+                status_code=504,
+                category=ErrorCategory.TIMEOUT,
+            ) from exc
 
     @r.get("/", response_class=JSONResponse)
     async def root():
@@ -41,10 +69,16 @@ def create_chat_router(state):
         )
 
     @r.post("/chat", response_model=ChatResponse)
-    async def chat(request: ChatRequest):
+    async def chat(request: ChatRequest, http_request: Request, response: Response):
+        request_id = ensure_request_id(http_request, prefix="http")
+        response.headers[REQUEST_ID_HEADER] = request_id
         state.load_components()
         if not state.ai_router:
-            raise HTTPException(status_code=500, detail="AI Router not available")
+            raise HTTPException(
+                status_code=500,
+                detail="AI Router not available",
+                headers={REQUEST_ID_HEADER: request_id},
+            )
         try:
             if request.conversation_id and state.chat_manager:
                 conversation = state.chat_manager.load_conversation(request.conversation_id)
@@ -52,57 +86,116 @@ def create_chat_router(state):
                 conversation = None
 
             effective_model = request.model if request.model and request.model != 'auto' else None
-            response = state.ai_router.query(
-                request.message, model=effective_model, use_web_search=request.use_web_search,
+            ai_response = await _run_query_with_timeout(
+                lambda: state.ai_router.query(
+                    request.message,
+                    model=effective_model,
+                    use_web_search=request.use_web_search,
+                ),
+                "Chat request timed out. Please try again.",
             )
             conv_id = request.conversation_id or datetime.now().strftime("%Y%m%d_%H%M%S")
             if state.chat_manager:
                 state.chat_manager.add_message(conv_id, "user", request.message)
-                state.chat_manager.add_message(conv_id, "assistant", response)
+                state.chat_manager.add_message(conv_id, "assistant", ai_response)
             return ChatResponse(
-                success=True, response=response, conversation_id=conv_id,
+                success=True, response=ai_response, conversation_id=conv_id,
                 model=state.ai_router.current_model or "unknown", sources=[],
                 timestamp=datetime.now().isoformat(),
             )
         except SafeErrorResponse as e:
             # Pre-sanitized error with specific status code
-            raise HTTPException(status_code=e.status_code, detail=e.message)
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.message,
+                headers={REQUEST_ID_HEADER: request_id},
+            )
         except Exception as e:
             # Sanitize error before exposing to client
             error_info = safe_error_response(e, operation="chat_query")
-            logger.error(f"[APIServer] Chat error: {type(e).__name__}")  # Don't log full message
+            logger.error(f"[APIServer] Chat error ({request_id}): {type(e).__name__}")  # Don't log full message
             raise HTTPException(
                 status_code=error_info["status_code"],
-                detail=error_info["error"]
+                detail=error_info["error"],
+                headers={REQUEST_ID_HEADER: request_id},
             )
 
     @r.post("/chat/stream")
-    async def chat_stream(request: ChatRequest):
+    async def chat_stream(request: ChatRequest, http_request: Request):
+        request_id = ensure_request_id(http_request, prefix="http")
         state.load_components()
         if not state.ai_router:
-            raise HTTPException(status_code=500, detail="AI Router not available")
+            raise HTTPException(
+                status_code=500,
+                detail="AI Router not available",
+                headers={REQUEST_ID_HEADER: request_id},
+            )
 
         async def generate():
             try:
                 if hasattr(state.ai_router, 'stream_query'):
-                    for chunk in state.ai_router.stream_query(request.message):
-                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-                else:
-                    response = state.ai_router.query(request.message)
-                    yield f"data: {json.dumps({'chunk': response})}\n\n"
-                yield f"data: {json.dumps({'done': True})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    q = asyncio.Queue()
+                    loop = asyncio.get_event_loop()
 
-        return StreamingResponse(generate(), media_type="text/event-stream")
+                    def _stream_worker():
+                        try:
+                            for chunk in state.ai_router.stream_query(request.message):
+                                asyncio.run_coroutine_threadsafe(q.put(chunk), loop)
+                        except Exception as stream_exc:
+                            asyncio.run_coroutine_threadsafe(q.put(stream_exc), loop)
+                        finally:
+                            asyncio.run_coroutine_threadsafe(q.put(None), loop)
+
+                    loop.run_in_executor(None, _stream_worker)
+
+                    while True:
+                        try:
+                            item = await asyncio.wait_for(q.get(), timeout=_chat_timeout_seconds())
+                        except asyncio.TimeoutError as exc:
+                            raise SafeErrorResponse(
+                                "Streaming request timed out. Please try again.",
+                                status_code=504,
+                                category=ErrorCategory.TIMEOUT,
+                            ) from exc
+
+                        if item is None:
+                            break
+                        if isinstance(item, Exception):
+                            raise item
+
+                        yield f"data: {json.dumps({'chunk': item})}\n\n"
+                else:
+                    response = await _run_query_with_timeout(
+                        lambda: state.ai_router.query(request.message),
+                        "Streaming request timed out. Please try again.",
+                    )
+                    yield f"data: {json.dumps({'chunk': response})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'request_id': request_id})}\n\n"
+            except SafeErrorResponse as e:
+                yield f"data: {json.dumps({'error': e.message, 'status_code': e.status_code, 'request_id': request_id})}\n\n"
+            except Exception as e:
+                error_info = safe_error_response(e, operation="chat_stream")
+                logger.error(f"[APIServer] Chat stream error ({request_id}): {type(e).__name__}")
+                yield f"data: {json.dumps({'error': error_info['error'], 'status_code': error_info['status_code'], 'request_id': request_id})}\n\n"
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={REQUEST_ID_HEADER: request_id},
+        )
 
     @r.post("/agent", response_model=AgentResponse)
-    async def execute_agent(request: AgentRequest):
+    async def execute_agent(request: AgentRequest, http_request: Request, response: Response):
+        request_id = ensure_request_id(http_request, prefix="http")
+        response.headers[REQUEST_ID_HEADER] = request_id
         state.load_components()
         agent_name = request.agent.lower()
         if agent_name not in state.agents:
-            raise HTTPException(status_code=404,
-                detail=f"Agent '{agent_name}' not found. Available: {list(state.agents.keys())}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_name}' not found. Available: {list(state.agents.keys())}",
+                headers={REQUEST_ID_HEADER: request_id},
+            )
         agent = state.agents[agent_name]
         action = request.action.lower()
         try:
@@ -111,15 +204,31 @@ def create_chat_router(state):
             elif hasattr(agent, 'process'):
                 result = agent.process(request.params.get('query', request.action))
             else:
-                raise HTTPException(status_code=400,
-                    detail=f"Action '{action}' not supported by {agent_name}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Action '{action}' not supported by {agent_name}",
+                    headers={REQUEST_ID_HEADER: request_id},
+                )
             return AgentResponse(
                 success=True, agent=agent_name, action=action, result=result,
                 timestamp=datetime.now().isoformat(),
             )
+        except HTTPException as e:
+            merged_headers = dict(e.headers or {})
+            merged_headers.setdefault(REQUEST_ID_HEADER, request_id)
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers=merged_headers,
+            ) from e
         except Exception as e:
-            logger.error(f"[APIServer] Agent error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            error_info = safe_error_response(e, operation="agent_execute")
+            logger.error(f"[APIServer] Agent error ({request_id}): {type(e).__name__}")
+            raise HTTPException(
+                status_code=error_info["status_code"],
+                detail=error_info["error"],
+                headers={REQUEST_ID_HEADER: request_id},
+            )
 
     @r.get("/agents")
     async def list_agents():
@@ -204,7 +313,8 @@ def create_chat_router(state):
             export_path = exporter.export_conversation(conversation, format)
             return {'success': True, 'format': format, 'path': str(export_path)}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            error_info = safe_error_response(e, operation="export_conversation")
+            raise HTTPException(status_code=error_info["status_code"], detail=error_info["error"])
 
     @r.post("/voice/listen")
     async def voice_listen():
@@ -215,7 +325,8 @@ def create_chat_router(state):
                 return {'success': True, 'text': text}
             return {'success': False, 'text': '', 'error': 'No speech detected'}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            error_info = safe_error_response(e, operation="voice_listen")
+            raise HTTPException(status_code=error_info["status_code"], detail=error_info["error"])
 
     @r.post("/api/voice/direct")
     async def voice_direct(request: Dict = Body(...), authorization: Optional[str] = Header(None)):
@@ -368,8 +479,11 @@ def create_chat_router(state):
                 response = state.ai_router.query(command)
                 return {"success": True, "voice_response": response,
                         "timestamp": datetime.now().isoformat()}
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.error(f"[APIServer] Error processing direct command: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            error_info = safe_error_response(e, operation="voice_direct")
+            logger.error(f"[APIServer] Error processing direct command: {type(e).__name__}")
+            raise HTTPException(status_code=error_info["status_code"], detail=error_info["error"])
 
     return r

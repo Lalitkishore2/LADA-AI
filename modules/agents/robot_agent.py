@@ -24,24 +24,44 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
+import importlib
 from typing import Optional, Dict, Any, List, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
 logger = logging.getLogger(__name__)
 
-# Import MoltBot controller if available
-try:
-    from integrations.moltbot_controller import (
-        MoltBotController, 
-        MoltBotConfig,
-        SensorReading,
-        get_moltbot_controller,
-    )
-    MOLTBOT_AVAILABLE = True
-except ImportError:
-    MOLTBOT_AVAILABLE = False
-    MoltBotController = None
+# Optional MoltBot integration loader. Integration files may be archived.
+MOLTBOT_AVAILABLE = False
+MoltBotController = Any
+MoltBotConfig = Any
+SensorReading = Any
+get_moltbot_controller = None
+
+
+def _load_moltbot_symbols() -> bool:
+    """Attempt to load MoltBot symbols from active integrations package."""
+    global MOLTBOT_AVAILABLE, MoltBotController, MoltBotConfig, SensorReading, get_moltbot_controller
+
+    module_name = ".".join(["integrations", "moltbot_controller"])
+    try:
+        module = importlib.import_module(module_name)
+        MoltBotController = getattr(module, "MoltBotController")
+        MoltBotConfig = getattr(module, "MoltBotConfig")
+        SensorReading = getattr(module, "SensorReading")
+        get_moltbot_controller = getattr(module, "get_moltbot_controller")
+        MOLTBOT_AVAILABLE = True
+        return True
+    except Exception:
+        MOLTBOT_AVAILABLE = False
+        MoltBotController = Any
+        MoltBotConfig = Any
+        SensorReading = Any
+        get_moltbot_controller = None
+        return False
+
+
+_load_moltbot_symbols()
 
 
 class RobotMode(Enum):
@@ -90,7 +110,7 @@ class RobotAgent:
             auto_connect: Connect to robot automatically
         """
         if not MOLTBOT_AVAILABLE:
-            logger.warning("[RobotAgent] MoltBot controller not available")
+            logger.warning("[RobotAgent] MoltBot controller not available (optional integration may be archived)")
         
         self._controller: Optional[MoltBotController] = None
         self._mode = RobotMode.IDLE

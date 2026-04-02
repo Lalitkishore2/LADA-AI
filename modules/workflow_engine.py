@@ -275,28 +275,6 @@ class WorkflowEngine:
             self.action_handlers['proactive_status'] = pa.get_status
             self.action_handlers['proactive_stats'] = pa.get_stats
         
-        # ============ v9.0 Permission System (Week 4) ============
-        if hasattr(self.jarvis, 'permission_system'):
-            ps = self.jarvis.permission_system
-            self.action_handlers['check_permission'] = ps.check_permission
-            self.action_handlers['set_permission_level'] = ps.set_permission_level
-            self.action_handlers['get_permission_level'] = ps.get_permission_level
-            self.action_handlers['add_whitelist'] = ps.add_to_whitelist
-            self.action_handlers['remove_whitelist'] = ps.remove_from_whitelist
-            self.action_handlers['add_blacklist'] = ps.add_to_blacklist
-            self.action_handlers['remove_blacklist'] = ps.remove_from_blacklist
-            self.action_handlers['get_permission_lists'] = ps.get_lists
-            self.action_handlers['emergency_lock'] = ps.emergency_lock
-            self.action_handlers['emergency_unlock'] = ps.emergency_unlock
-            self.action_handlers['add_permission_rule'] = ps.add_rule
-            self.action_handlers['remove_permission_rule'] = ps.remove_rule
-            self.action_handlers['list_permission_rules'] = ps.list_rules
-            self.action_handlers['get_audit_log'] = ps.get_audit_log
-            self.action_handlers['get_audit_stats'] = ps.get_audit_stats
-            self.action_handlers['set_rate_limit'] = ps.set_rate_limit
-            self.action_handlers['get_rate_limits'] = ps.get_rate_limits
-            self.action_handlers['permission_status'] = ps.get_status
-        
         logger.info(f"📋 Registered {len(self.action_handlers)} action handlers")
     
     def register_workflow(self, name: str, steps: List[Dict[str, Any]]) -> bool:
@@ -491,7 +469,7 @@ MORNING_ROUTINE = [
     {'action': 'set_volume', 'module': 'system_control', 'params': {'level': 50}},
     {'action': 'set_brightness', 'module': 'system_control', 'params': {'level': 80}},
     {'action': 'check_calendar', 'module': 'agents', 'params': {'days': 1}},
-    {'action': 'open_url', 'module': 'browser_control', 'params': {'url': 'https://gmail.com'}},
+    {'action': 'open_url', 'module': 'browser_automation', 'params': {'url': 'https://gmail.com'}},
 ]
 
 EVENING_ROUTINE = [
@@ -501,8 +479,8 @@ EVENING_ROUTINE = [
 ]
 
 RESEARCH_WORKFLOW = [
-    {'action': 'google_search', 'module': 'browser_control', 'params': {'query': '$search_query'}},
-    {'action': 'extract_text', 'module': 'browser_control', 'params': {}},
+    {'action': 'google_search', 'module': 'browser_automation', 'params': {'query': '$search_query'}},
+    {'action': 'extract_text', 'module': 'browser_automation', 'params': {}},
     {'action': 'create_file', 'module': 'file_operations', 'params': {'path': '$output_file', 'content': '$step_2_result'}},
 ]
 

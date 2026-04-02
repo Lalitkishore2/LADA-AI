@@ -384,10 +384,10 @@ def test_security():
         record_test("Safety Controller", None, "Not found")
         
     try:
-        from modules.permission_system import PermissionSystem
-        record_test("Permission System", True, "Import successful")
+        from modules.safety_gate import SafetyGate
+        record_test("Safety Gate", True, "Import successful")
     except ImportError:
-        record_test("Permission System", None, "Not found")
+        record_test("Safety Gate", None, "Not found")
         
     # Backup
     try:

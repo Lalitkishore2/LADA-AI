@@ -9,6 +9,7 @@ import type {
   ServerMessageByType,
   MessageId,
 } from '@/types/ws-protocol';
+import { createRequestId, getApiBaseUrl, getStoredAuthToken } from '@/lib/lada-api';
 
 // ---- Types ----------------------------------------------------------------
 
@@ -17,14 +18,18 @@ type ConnectHandler = () => void;
 type DisconnectHandler = (ev: CloseEvent) => void;
 
 export interface WSClientOptions {
-  /** Full WebSocket URL. Defaults to ws://127.0.0.1:5000/ws */
+  /** Full WebSocket URL. Defaults to API_BASE/ws or current host */
   url?: string;
+  /** Auth token string or token provider callback used as ?token=... */
+  authToken?: string | (() => string);
   /** Delay in ms before attempting reconnect. Default 3000 */
   reconnectDelay?: number;
   /** Interval in ms between keep-alive pings. Default 30000 */
   pingInterval?: number;
   /** Whether to reconnect automatically. Default true */
   autoReconnect?: boolean;
+  /** Prefix for generated request IDs. Default ws */
+  requestIdPrefix?: string;
 }
 
 // ---- Helpers --------------------------------------------------------------
@@ -37,13 +42,32 @@ export function generateId(): MessageId {
   return `${Date.now()}-${_idCounter}`;
 }
 
+function toWsUrl(base: string): string {
+  if (base.startsWith('ws://') || base.startsWith('wss://')) return base;
+  if (base.startsWith('http://')) return `ws://${base.slice('http://'.length)}`;
+  if (base.startsWith('https://')) return `wss://${base.slice('https://'.length)}`;
+  return base;
+}
+
+function defaultWsUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_LADA_WS_URL;
+  if (explicit && explicit.trim()) {
+    return explicit.trim();
+  }
+
+  const apiBase = getApiBaseUrl();
+  return `${toWsUrl(apiBase)}/ws`;
+}
+
 // ---- WSClient class -------------------------------------------------------
 
 export class WSClient {
   // Config
   private readonly url: string;
+  private readonly authTokenProvider: () => string;
   private readonly reconnectDelay: number;
   private readonly pingInterval: number;
+  private readonly requestIdPrefix: string;
   private autoReconnect: boolean;
 
   // State
@@ -59,10 +83,15 @@ export class WSClient {
   private disconnectHandlers: Set<DisconnectHandler> = new Set();
 
   constructor(options: WSClientOptions = {}) {
-    this.url = options.url ?? 'ws://127.0.0.1:5000/ws';
+    this.url = options.url ?? defaultWsUrl();
+    this.authTokenProvider =
+      typeof options.authToken === 'function'
+        ? options.authToken
+        : () => (typeof options.authToken === 'string' ? options.authToken : getStoredAuthToken());
     this.reconnectDelay = options.reconnectDelay ?? 3000;
     this.pingInterval = options.pingInterval ?? 30000;
     this.autoReconnect = options.autoReconnect ?? true;
+    this.requestIdPrefix = options.requestIdPrefix ?? 'ws';
   }
 
   // ---- Public getters -----------------------------------------------------
@@ -84,8 +113,11 @@ export class WSClient {
     // Clean up any previous socket
     this.cleanup();
 
+    const token = this.authTokenProvider();
+    const wsUrl = this.withAuthToken(this.url, token);
+
     try {
-      this.ws = new WebSocket(this.url);
+      this.ws = new WebSocket(wsUrl);
     } catch {
       this.scheduleReconnect();
       return;
@@ -100,6 +132,12 @@ export class WSClient {
         type: 'system',
         id: generateId(),
         data: { action: 'models' },
+      });
+
+      this.send({
+        type: 'system',
+        id: generateId(),
+        data: { action: 'status' },
       });
 
       this.connectHandlers.forEach((h) => h());
@@ -126,6 +164,10 @@ export class WSClient {
       this._connected = false;
       this.stopPing();
       this.disconnectHandlers.forEach((h) => h(ev));
+      if (ev.code === 4001) {
+        this._sessionId = null;
+        this.autoReconnect = false;
+      }
       this.scheduleReconnect();
     };
 
@@ -149,16 +191,33 @@ export class WSClient {
       console.warn('[WSClient] Cannot send -- socket is not open');
       return;
     }
-    this.ws.send(JSON.stringify(msg));
+
+    const payload = {
+      ...msg,
+      request_id:
+        (msg as ClientMessage & { request_id?: string }).request_id ??
+        this.nextRequestId(),
+    };
+    this.ws.send(JSON.stringify(payload));
   }
 
   /** Convenience: send a chat message and return its id. */
-  sendChat(message: string, stream = true, model?: string): MessageId {
+  sendChat(
+    message: string,
+    stream = true,
+    model?: string,
+    options?: { useWebSearch?: boolean },
+  ): MessageId {
     const id = generateId();
     this.send({
       type: 'chat',
       id,
-      data: { message, stream, model },
+      data: {
+        message,
+        stream,
+        model,
+        use_web_search: options?.useWebSearch,
+      },
     });
     return id;
   }
@@ -231,6 +290,16 @@ export class WSClient {
     }
 
     this._connected = false;
+  }
+
+  private withAuthToken(url: string, token: string): string {
+    if (!token) return url;
+    if (url.includes('token=')) return url;
+    return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  }
+
+  private nextRequestId(): string {
+    return createRequestId(this.requestIdPrefix);
   }
 
   private startPing(): void {

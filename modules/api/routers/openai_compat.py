@@ -10,17 +10,31 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Request, Response, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 
+from modules.api.deps import set_request_id_header
 from modules.api.models import OpenAIChatRequest
+from modules.error_sanitizer import safe_error_response
 
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_provider_error_detail(raw_error: Optional[str]) -> str:
+    """Return a client-safe provider error message."""
+    if not raw_error:
+        return "Unable to reach the upstream service. Please try again later."
+
+    error_info = safe_error_response(RuntimeError(raw_error), operation="openai_provider")
+    return error_info.get("error") or "Unable to reach the upstream service. Please try again later."
+
+
 def create_openai_compat_router(state):
     """Create OpenAI-compatible /v1 router."""
-    r = APIRouter(tags=["openai-compat"])
+    async def _trace_request(request: Request, response: Response):
+        set_request_id_header(request, response, prefix="openai")
+
+    r = APIRouter(tags=["openai-compat"], dependencies=[Depends(_trace_request)])
 
     def _verify_api_key(authorization: Optional[str]):
         expected = os.getenv("LADA_API_KEY", "")
@@ -36,23 +50,53 @@ def create_openai_compat_router(state):
 
         created = int(state.start_time.timestamp())
         models_list = [{"id": "auto", "object": "model", "created": created, "owned_by": "lada"}]
+        seen_ids = {"auto"}
+
+        discovered = []
 
         pm = getattr(state.ai_router, 'provider_manager', None) if state.ai_router else None
         if pm and getattr(pm, 'model_registry', None):
-            for entry in pm.model_registry.list_available_models():
-                if entry.provider == "ollama-local":
-                    continue
-                models_list.append({
-                    "id": entry.id, "object": "model", "created": created, "owned_by": entry.provider,
-                })
-        elif state.ai_router and hasattr(state.ai_router, 'get_provider_dropdown_items'):
-            for item in state.ai_router.get_provider_dropdown_items():
-                if item.get('value') == 'auto':
-                    continue
-                models_list.append({
-                    "id": item['value'], "object": "model", "created": created,
-                    "owned_by": item.get('provider', 'lada'),
-                })
+            try:
+                for entry in pm.model_registry.list_available_models():
+                    if entry.provider == "ollama-local":
+                        continue
+                    discovered.append({
+                        "id": entry.id,
+                        "provider": entry.provider,
+                    })
+            except Exception as e:
+                logger.warning(f"[OpenAI-compat] model registry list failed: {e}")
+
+        # Fallback path: use dropdown metadata when registry list is empty.
+        if (not discovered) and state.ai_router and hasattr(state.ai_router, 'get_provider_dropdown_items'):
+            try:
+                for item in state.ai_router.get_provider_dropdown_items() or []:
+                    mid = str(item.get('value', '')).strip()
+                    if not mid or mid == 'auto':
+                        continue
+
+                    label = str(item.get('label', ''))
+                    if '(offline)' in label.lower():
+                        continue
+
+                    discovered.append({
+                        "id": mid,
+                        "provider": item.get('provider', 'lada'),
+                    })
+            except Exception as e:
+                logger.warning(f"[OpenAI-compat] provider dropdown fallback failed: {e}")
+
+        for row in discovered:
+            model_id = row.get('id')
+            if not model_id or model_id in seen_ids:
+                continue
+            seen_ids.add(model_id)
+            models_list.append({
+                "id": model_id,
+                "object": "model",
+                "created": created,
+                "owned_by": row.get('provider', 'lada'),
+            })
 
         return {"object": "list", "data": models_list}
 
@@ -117,7 +161,7 @@ async def _complete(state, messages, model_id, last_user_msg, temperature, max_t
             else:
                 pm._rate_limiter.record_failure(provider.provider_id)
         if not response.success:
-            raise HTTPException(status_code=502, detail=response.error or "Provider error")
+            raise HTTPException(status_code=502, detail=_sanitize_provider_error_detail(response.error))
         used_model = model_id
 
     elif pm:
@@ -139,7 +183,7 @@ async def _complete(state, messages, model_id, last_user_msg, temperature, max_t
             else:
                 pm._rate_limiter.record_failure(provider.provider_id)
         if not response.success:
-            raise HTTPException(status_code=502, detail=response.error or "Provider error")
+            raise HTTPException(status_code=502, detail=_sanitize_provider_error_detail(response.error))
         used_model = auto_model
 
     else:

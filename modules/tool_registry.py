@@ -15,11 +15,21 @@ Inspired by OpenClaw's tool-display.json architecture.
 """
 
 import logging
+import os
 from typing import Optional, Dict, Any, List, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+def _major_from_version(version_text: str) -> int:
+    """Extract semantic major version from a version string."""
+    token = str(version_text or "").strip().split(".")[0]
+    try:
+        return int(token)
+    except (TypeError, ValueError):
+        return 0
 
 
 class ToolCategory(Enum):
@@ -66,6 +76,7 @@ class ToolDefinition:
     keywords: List[str] = field(default_factory=list)  # trigger words for NLU matching
     examples: List[str] = field(default_factory=list)   # example queries
     enabled: bool = True
+    required_contract_major: int = 1
 
     def matches_keywords(self, text: str) -> float:
         """
@@ -113,6 +124,7 @@ class ToolDefinition:
             'keywords': self.keywords,
             'examples': self.examples,
             'enabled': self.enabled,
+            'required_contract_major': self.required_contract_major,
         }
 
 
@@ -138,13 +150,26 @@ class ToolRegistry:
     - Tool discovery for AI agent tool-use
     """
 
-    def __init__(self):
+    def __init__(self, contract_version: Optional[str] = None):
         self._tools: Dict[str, ToolDefinition] = {}
         self._category_index: Dict[ToolCategory, List[str]] = {}
+        self.contract_version = (contract_version or os.getenv("LADA_TOOL_CONTRACT_VERSION", "1.0")).strip() or "1.0"
+        self.contract_major = _major_from_version(self.contract_version)
         logger.info("[ToolRegistry] Initialized")
+
+    def is_contract_compatible(self, required_major: int) -> bool:
+        """Return True when required major matches active registry contract major."""
+        return int(required_major) == self.contract_major
 
     def register(self, tool: ToolDefinition) -> None:
         """Register a tool"""
+        if not self.is_contract_compatible(tool.required_contract_major):
+            raise ValueError(
+                f"Tool contract mismatch for '{tool.name}': "
+                f"requires major {tool.required_contract_major}, "
+                f"registry is {self.contract_major} ({self.contract_version})"
+            )
+
         self._tools[tool.name] = tool
 
         # Update category index
@@ -263,6 +288,8 @@ class ToolRegistry:
                 'function': {
                     'name': tool.name,
                     'description': tool.description,
+                    'x_contract_version': self.contract_version,
+                    'x_required_contract_major': tool.required_contract_major,
                     'parameters': {
                         'type': 'object',
                         'properties': {
@@ -284,10 +311,20 @@ class ToolRegistry:
         return {
             'total_tools': len(self._tools),
             'enabled': sum(1 for t in self._tools.values() if t.enabled),
+            'contract_version': self.contract_version,
+            'contract_major': self.contract_major,
             'categories': {
                 cat.value: len(names)
                 for cat, names in self._category_index.items()
             },
+        }
+
+    def get_contract_info(self) -> Dict[str, Any]:
+        """Expose registry contract metadata for diagnostics and compatibility checks."""
+        return {
+            'version': self.contract_version,
+            'major': self.contract_major,
+            'tool_count': len(self._tools),
         }
 
 
@@ -343,6 +380,44 @@ def create_system_tools() -> List[ToolDefinition]:
         parameters=[],
         keywords=["screenshot", "screen capture", "capture screen", "take screenshot", "take a screenshot", "print screen", "snap screen"],
         examples=["take a screenshot", "capture screen", "screenshot"],
+        permission=PermissionLevel.SAFE,
+    ))
+
+    # Camera photo
+    tools.append(ToolDefinition(
+        name="take_camera_photo",
+        description="Take a photo using the system webcam",
+        category=ToolCategory.SYSTEM,
+        parameters=[],
+        keywords=["photo", "webcam", "camera", "take photo", "take a picture", "capture webcam"],
+        examples=["take a photo", "capture webcam", "snap a picture"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    # Push Notification
+    tools.append(ToolDefinition(
+        name="send_notification",
+        description="Send a push/toast notification to the user's desktop",
+        category=ToolCategory.SYSTEM,
+        parameters=[
+            ToolParameter("title", "string", "Notification title", required=True),
+            ToolParameter("message", "string", "Notification message body", required=True),
+        ],
+        keywords=["notification", "notify", "toast", "alert", "push notification"],
+        examples=["send a notification", "notify me when done"],
+        permission=PermissionLevel.SAFE,
+    ))
+
+    # Screen record
+    tools.append(ToolDefinition(
+        name="record_screen",
+        description="Record a short video clip of the desktop screen",
+        category=ToolCategory.SYSTEM,
+        parameters=[
+            ToolParameter("duration_seconds", "integer", "Recording duration in seconds (default 5, max 30)"),
+        ],
+        keywords=["record screen", "screen record", "capture video", "record desktop"],
+        examples=["record the screen for 5 seconds", "screen record", "take a video of my screen"],
         permission=PermissionLevel.SAFE,
     ))
 
@@ -809,106 +884,70 @@ def create_agent_tools() -> List[ToolDefinition]:
         permission=PermissionLevel.MODERATE,
     ))
 
-    # ─────────────────────────────────────────────────────────────────
-    # MoltBot Robot Tools
-    # ─────────────────────────────────────────────────────────────────
-    
+    # Stealth browser automation (OpenClaw-level anti-bot parity)
     tools.append(ToolDefinition(
-        name="moltbot_move",
-        description="Move the MoltBot robot forward or backward by a specified distance.",
-        category=ToolCategory.AUTOMATION,
+        name="stealth_navigate",
+        description="Navigate to a URL using stealth browser mode to reduce bot detection.",
+        category=ToolCategory.BROWSER,
         parameters=[
-            ToolParameter("direction", "string", "Direction to move", required=True,
-                         enum=["forward", "backward"]),
-            ToolParameter("distance", "float", "Distance in centimeters", required=True),
+            ToolParameter("url", "string", "Target URL to open", required=True),
         ],
-        keywords=["move robot", "robot forward", "robot backward", "move moltbot", "drive robot"],
-        examples=["move robot forward 10 cm", "move moltbot backward 20 centimeters"],
+        keywords=["stealth navigate", "undetected browser", "anti-bot", "open stealth browser", "stealth mode"],
+        examples=["open stealth browser and go to example.com", "navigate with anti-bot mode"],
         permission=PermissionLevel.MODERATE,
     ))
-    
+
     tools.append(ToolDefinition(
-        name="moltbot_turn",
-        description="Turn the MoltBot robot left or right by a specified angle.",
-        category=ToolCategory.AUTOMATION,
+        name="stealth_click",
+        description="Click an element in stealth browser mode.",
+        category=ToolCategory.BROWSER,
         parameters=[
-            ToolParameter("direction", "string", "Direction to turn", required=True,
-                         enum=["left", "right"]),
-            ToolParameter("angle", "float", "Angle in degrees", default=90),
+            ToolParameter("selector", "string", "Element selector (CSS/XPath/etc)", required=True),
+            ToolParameter("by", "string", "Selector type: css, xpath, id, name", default="css"),
         ],
-        keywords=["turn robot", "rotate robot", "robot turn", "spin robot", "moltbot turn"],
-        examples=["turn robot left 90 degrees", "rotate moltbot right"],
+        keywords=["stealth click", "undetected click", "click in stealth browser"],
+        examples=["stealth click #login", "click xpath element in anti-bot mode"],
         permission=PermissionLevel.MODERATE,
     ))
-    
+
     tools.append(ToolDefinition(
-        name="moltbot_claw",
-        description="Open or close the MoltBot robot's claw/gripper.",
-        category=ToolCategory.AUTOMATION,
+        name="stealth_type",
+        description="Type text with human-like delays in stealth browser mode.",
+        category=ToolCategory.BROWSER,
         parameters=[
-            ToolParameter("action", "string", "Claw action", required=True,
-                         enum=["open", "close"]),
+            ToolParameter("selector", "string", "Input selector", required=True),
+            ToolParameter("text", "string", "Text to type", required=True),
+            ToolParameter("by", "string", "Selector type: css, xpath, id, name", default="css"),
+            ToolParameter("clear_first", "boolean", "Clear input before typing", default=True),
         ],
-        keywords=["robot claw", "gripper", "open claw", "close claw", "grab", "release"],
-        examples=["open robot claw", "close gripper", "robot grab"],
+        keywords=["stealth type", "type in stealth browser", "undetected typing", "human typing"],
+        examples=["stealth type email into #email", "type password in anti-bot mode"],
+        permission=PermissionLevel.MODERATE,
+    ))
+
+    tools.append(ToolDefinition(
+        name="stealth_scroll",
+        description="Scroll in stealth browser mode using human-like behavior.",
+        category=ToolCategory.BROWSER,
+        parameters=[
+            ToolParameter("direction", "string", "Scroll direction", default="down", enum=["up", "down"]),
+            ToolParameter("amount", "integer", "Scroll amount in pixels", default=300),
+        ],
+        keywords=["stealth scroll", "undetected scroll", "scroll anti-bot browser"],
+        examples=["scroll down in stealth browser", "stealth scroll up 500"],
         permission=PermissionLevel.SAFE,
     ))
-    
+
     tools.append(ToolDefinition(
-        name="moltbot_arm",
-        description="Set MoltBot arm joint position or move to home.",
-        category=ToolCategory.AUTOMATION,
+        name="stealth_extract",
+        description="Extract visible page text or selected element text in stealth browser mode.",
+        category=ToolCategory.BROWSER,
         parameters=[
-            ToolParameter("joint", "string", "Arm joint to control",
-                         enum=["base", "shoulder", "elbow", "wrist", "home"]),
-            ToolParameter("angle", "integer", "Joint angle (0-180, ignored for home)", default=90),
+            ToolParameter("selector", "string", "Optional CSS selector to extract from", default=""),
         ],
-        keywords=["robot arm", "arm position", "move arm", "arm joint", "arm home"],
-        examples=["move robot arm shoulder to 45", "robot arm home position"],
-        permission=PermissionLevel.MODERATE,
-    ))
-    
-    tools.append(ToolDefinition(
-        name="moltbot_sensor",
-        description="Read a sensor from the MoltBot robot.",
-        category=ToolCategory.AUTOMATION,
-        parameters=[
-            ToolParameter("sensor", "string", "Sensor type", required=True,
-                         enum=["ultrasonic", "temperature", "light", "battery"]),
-        ],
-        keywords=["robot sensor", "read sensor", "distance sensor", "robot battery", "robot temperature"],
-        examples=["read robot distance sensor", "check moltbot battery", "robot temperature"],
+        keywords=["stealth extract", "extract page text", "read stealth page", "get page content stealth"],
+        examples=["extract text from stealth browser", "stealth extract #results"],
         permission=PermissionLevel.SAFE,
-    ))
-    
-    tools.append(ToolDefinition(
-        name="moltbot_camera",
-        description="Trigger the MoltBot camera to capture an image.",
-        category=ToolCategory.AUTOMATION,
-        parameters=[],
-        keywords=["robot camera", "capture image", "take photo", "robot photo"],
-        examples=["take robot photo", "capture image from moltbot"],
-        permission=PermissionLevel.SAFE,
-    ))
-    
-    tools.append(ToolDefinition(
-        name="moltbot_pickup",
-        description="Execute a pick-up sequence: lower arm, close claw, raise arm.",
-        category=ToolCategory.AUTOMATION,
-        parameters=[],
-        keywords=["robot pickup", "grab object", "pick up", "grasp"],
-        examples=["robot pick up object", "grab item with robot"],
-        permission=PermissionLevel.MODERATE,
-    ))
-    
-    tools.append(ToolDefinition(
-        name="moltbot_putdown",
-        description="Execute a put-down sequence: lower arm, open claw, raise arm.",
-        category=ToolCategory.AUTOMATION,
-        parameters=[],
-        keywords=["robot putdown", "drop object", "put down", "release object"],
-        examples=["robot put down object", "drop item"],
-        permission=PermissionLevel.MODERATE,
     ))
 
     return tools
@@ -1091,5 +1130,4 @@ def get_tool_registry() -> ToolRegistry:
         for tool in create_messaging_tools():
             _registry.register(tool)
         logger.info(f"[ToolRegistry] {len(_registry._tools)} tools registered")
-    return _registry
     return _registry

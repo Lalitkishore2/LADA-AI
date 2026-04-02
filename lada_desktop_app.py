@@ -258,7 +258,9 @@ class SettingsDialog(QDialog):
         self.voice = voice
         self.sys = SystemController() if SYS_OK else None
         self.setWindowTitle("LADA Settings")
-        self.setFixedSize(520, 640)
+        # Keep settings responsive on smaller displays.
+        self.setMinimumSize(500, 600)
+        self.resize(520, 640)
         # Minimal override - GLOBAL_QSS handles most styling
         self.setStyleSheet(f"""
             QDialog {{ background: {BG_SURFACE}; }}
@@ -367,7 +369,7 @@ class SettingsDialog(QDialog):
         self.personality_combo.addItems([
             "JARVIS - Sophisticated & Proactive",
             "Friday - Modern & Efficient", 
-            "Copilot - Technical & Precise",
+            "Karen - Warm & Supportive",
             "Casual - Friendly & Relaxed"
         ])
         self.personality_combo.setStyleSheet(f"""
@@ -385,14 +387,31 @@ class SettingsDialog(QDialog):
             }}
         """)
         # Load saved personality mode
+        default_mode = 2
+        if JARVIS_OK and LadaPersonality:
+            mode_to_index = {
+                "jarvis": 0,
+                "friday": 1,
+                "karen": 2,
+                "casual": 3,
+            }
+            try:
+                default_mode = mode_to_index.get(str(LadaPersonality.get_mode()).lower(), default_mode)
+            except Exception:
+                pass
+
         try:
             settings_file = Path("config/app_settings.json")
             if settings_file.exists():
                 saved = json.loads(settings_file.read_text())
-                saved_mode = saved.get('personality_mode', 0)
+                saved_mode = int(saved.get('personality_mode', default_mode))
+                if saved_mode < 0 or saved_mode >= self.personality_combo.count():
+                    saved_mode = default_mode
                 self.personality_combo.setCurrentIndex(saved_mode)
+            else:
+                self.personality_combo.setCurrentIndex(default_mode)
         except:
-            pass
+            self.personality_combo.setCurrentIndex(default_mode)
         pers_row.addWidget(self.personality_combo, 1)
         pers_lay.addLayout(pers_row)
         
@@ -735,6 +754,10 @@ logger = logging.getLogger(__name__)
 from theme import (
     BG_MAIN, BG_SIDE, BG_INPUT, BG_HOVER, BG_CARD, BG_SURFACE,
     TEXT, TEXT_DIM, GREEN, ACCENT, ACCENT_GRADIENT_END, ACCENT_DARK, BLUE, RED, BORDER, FONT_FAMILY, FONT_HEADING, FONT_SIZE_SM, FONT_SIZE_MD, SUCCESS, WARNING, GLOBAL_QSS,
+    SPACING_XS, SPACING_SM, SPACING_MD, SPACING_LG, SPACING_XL,
+    CONTROL_ICON_SIZE, CONTROL_TOOLBAR_BUTTON_SIZE,
+    APP_COLUMN_MAX_WIDTH, APP_INPUT_MAX_WIDTH, APP_WELCOME_GRID_MAX_WIDTH,
+    APP_SUGGESTION_CARD_MIN_HEIGHT, APP_ASSISTANT_TEXT_MAX_WIDTH, APP_USER_TEXT_MAX_WIDTH,
 )
 
 
@@ -1181,16 +1204,20 @@ class Sidebar(QFrame):
     def __init__(self):
         super().__init__()
         self._collapsed = False
-        self._full_width = 260
+        self._full_width = 272
         self._mini_width = 60
         self.setFixedWidth(self._full_width)
-        self.setStyleSheet(f"background: {BG_SIDE}; border-right: 1px solid {BORDER};")
+        self.setStyleSheet(
+            f"background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 rgba(18,25,35,245), stop:1 rgba(15,21,30,245));"
+            f" border-right: 1px solid {BORDER};"
+        )
         self._build()
         self._load()
 
     def _build(self):
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 16, 12, 12)
+        lay.setContentsMargins(14, 14, 14, 12)
         lay.setSpacing(4)
 
         # ── Top row: collapse button, logo, title ──
@@ -1241,12 +1268,13 @@ class Sidebar(QFrame):
         self._new_chat_btn.setCursor(Qt.PointingHandCursor)
         self._new_chat_btn.setStyleSheet(f"""
             QPushButton {{
-                background: transparent; color: {TEXT};
-                border: 1px solid {BORDER}; border-radius: 10px;
-                padding: 10px 14px; font-size: {FONT_SIZE_MD}px;
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_DARK});
+                color: white;
+                border: 1px solid rgba(255,255,255,0.05); border-radius: 10px;
+                padding: 10px 14px; font-size: {FONT_SIZE_MD}px; font-weight: 600;
                 text-align: left;
             }}
-            QPushButton:hover {{ background: {BG_HOVER}; border-color: {TEXT_DIM}; }}
+            QPushButton:hover {{ border-color: rgba(255,255,255,0.2); }}
         """)
         self._new_chat_btn.clicked.connect(lambda: self.new_chat.emit())
         lay.addWidget(self._new_chat_btn)
@@ -1259,8 +1287,8 @@ class Sidebar(QFrame):
         self.search_input.setFixedHeight(34)
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
-                background: {BG_SURFACE}; color: {TEXT};
-                border: 1px solid transparent; border-radius: 8px;
+                background: rgba(18,25,35,0.88); color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 8px;
                 padding: 7px 12px; font-size: 13px;
             }}
             QLineEdit:focus {{ border-color: {ACCENT}; }}
@@ -1713,14 +1741,33 @@ class Msg(QFrame):
 
         # Message content area
         msg_frame = QFrame()
-        msg_frame.setStyleSheet("background: transparent;")
+        if is_ai:
+            msg_frame.setStyleSheet(
+                "background: rgba(17,25,35,160);"
+                "border-top: 1px solid rgba(255,255,255,0.04);"
+                "border-bottom: 1px solid rgba(255,255,255,0.04);"
+            )
+        else:
+            msg_frame.setStyleSheet("background: transparent;")
         msg_lay = QHBoxLayout(msg_frame)
-        msg_lay.setContentsMargins(40, 12, 40, 12)
-        msg_lay.setSpacing(12)
+        msg_lay.setContentsMargins(0, 0, 0, 0)
+        msg_lay.setSpacing(0)
+
+        # Keep message content in a centered readable column instead of full-bleed text.
+        center_wrap = QFrame()
+        center_wrap.setStyleSheet("background: transparent; border: none;")
+        center_wrap.setMaximumWidth(APP_COLUMN_MAX_WIDTH)
+        center_lay = QHBoxLayout(center_wrap)
+        center_lay.setContentsMargins(SPACING_LG, SPACING_MD, SPACING_LG, SPACING_MD)
+        center_lay.setSpacing(SPACING_MD)
+
+        msg_lay.addStretch(1)
+        msg_lay.addWidget(center_wrap, 0)
+        msg_lay.addStretch(1)
 
         # Avatar
         av = QLabel()
-        av.setFixedSize(28, 28)
+        av.setFixedSize(26, 26)
         av.setAlignment(Qt.AlignCenter)
         if is_ai:
             logo_path = Path("assets/lada_logo.png")
@@ -1738,39 +1785,56 @@ class Msg(QFrame):
         else:
             av.setText("U")
             av.setStyleSheet(f"""
-                background: {BLUE}; color: white;
+                background: #233447; color: #dce9ff;
                 border-radius: 6px; font-size: 12px; font-weight: bold;
             """)
-        msg_lay.addWidget(av, 0, Qt.AlignTop)
+        center_lay.addWidget(av, 0, Qt.AlignTop)
 
         # Content column
         content_col = QVBoxLayout()
         content_col.setContentsMargins(0, 0, 0, 0)
         content_col.setSpacing(4)
+        if not is_ai:
+            content_col.setAlignment(Qt.AlignRight)
 
         # Role label
         name_label = QLabel("LADA" if is_ai else "You")
-        name_label.setStyleSheet(f"color: {TEXT}; font-size: 13px; font-weight: 600;")
+        name_label.setStyleSheet(
+            f"color: {TEXT_DIM if is_ai else '#b8d6ff'};"
+            " font-size: 12px; font-weight: 600;"
+        )
+        name_label.setAlignment(Qt.AlignLeft if is_ai else Qt.AlignRight)
         content_col.addWidget(name_label)
 
         if is_ai:
             self.content = RichTextLabel(text, is_ai=True)
+            self.content.setMaximumWidth(APP_ASSISTANT_TEXT_MAX_WIDTH)
             content_col.addWidget(self.content)
         else:
             lbl = QLabel(text)
             lbl.setWordWrap(True)
             lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            lbl.setStyleSheet(f"color: {TEXT}; font-size: {RichTextLabel.font_size}px; line-height: 1.6;")
+            lbl.setMaximumWidth(APP_USER_TEXT_MAX_WIDTH)
+            lbl.setStyleSheet(
+                f"color: #dce9ff;"
+                f" background: #233447;"
+                " border: 1px solid rgba(255,255,255,0.1);"
+                " border-radius: 12px;"
+                " padding: 10px 12px;"
+                f" font-size: {RichTextLabel.font_size}px;"
+                " line-height: 1.6;"
+            )
             content_col.addWidget(lbl)
 
         # Toolbar (hidden by default, shown on hover)
         if show_toolbar and is_ai:
             self._toolbar = QWidget()
             self._toolbar.setStyleSheet("background: transparent;")
-            self._toolbar.setVisible(False)
+            self._toolbar.setFixedHeight(CONTROL_TOOLBAR_BUTTON_SIZE + SPACING_SM)
             tb_lay = QHBoxLayout(self._toolbar)
-            tb_lay.setContentsMargins(0, 4, 0, 0)
-            tb_lay.setSpacing(4)
+            tb_lay.setContentsMargins(0, SPACING_XS, 0, 0)
+            tb_lay.setSpacing(SPACING_XS)
+            self._toolbar_buttons = []
 
             _tb_style = f"""
                 QPushButton {{
@@ -1788,10 +1852,12 @@ class Msg(QFrame):
                 btn = QPushButton(icon)
                 btn.setToolTip(tip)
                 btn.setCursor(Qt.PointingHandCursor)
-                btn.setFixedSize(26, 26)
+                btn.setFixedSize(CONTROL_TOOLBAR_BUTTON_SIZE, CONTROL_TOOLBAR_BUTTON_SIZE)
                 btn.setStyleSheet(_tb_style)
                 btn.clicked.connect(handler)
+                btn.setVisible(False)
                 tb_lay.addWidget(btn)
+                self._toolbar_buttons.append(btn)
                 if tip == "Good response":
                     self.up_btn = btn
                 elif tip == "Bad response":
@@ -1800,25 +1866,28 @@ class Msg(QFrame):
             tb_lay.addStretch()
             content_col.addWidget(self._toolbar)
 
-        msg_lay.addLayout(content_col, 1)
+        center_lay.addLayout(content_col, 1)
         outer.addWidget(msg_frame)
 
-        # Subtle separator line
-        sep = QFrame()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background: rgba(255,255,255,0.04);")
-        outer.addWidget(sep)
+        # Keep separators only for assistant rows to reduce visual noise.
+        if is_ai:
+            sep = QFrame()
+            sep.setFixedHeight(1)
+            sep.setStyleSheet("background: rgba(255,255,255,0.03);")
+            outer.addWidget(sep)
 
     def enterEvent(self, event):
         """Show toolbar on hover."""
-        if hasattr(self, '_toolbar'):
-            self._toolbar.setVisible(True)
+        if hasattr(self, '_toolbar_buttons'):
+            for btn in self._toolbar_buttons:
+                btn.setVisible(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         """Hide toolbar on leave."""
-        if hasattr(self, '_toolbar'):
-            self._toolbar.setVisible(False)
+        if hasattr(self, '_toolbar_buttons'):
+            for btn in self._toolbar_buttons:
+                btn.setVisible(False)
         super().leaveEvent(event)
 
     def _on_copy(self):
@@ -1869,12 +1938,21 @@ class ChatArea(QScrollArea):
         super().__init__()
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setStyleSheet(f"QScrollArea {{ background: {BG_MAIN}; border: none; }}")
+        self.setStyleSheet(
+            f"QScrollArea {{"
+            f" background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 #0e141c, stop:0.45 #0c1118, stop:1 #0a0f14);"
+            f" border: none; }}"
+        )
         self.box = QWidget()
-        self.box.setStyleSheet(f"background: {BG_MAIN};")
+        self.box.setStyleSheet(
+            "background: qradialgradient(cx:0.5, cy:0.0, radius:1.1,"
+            " fx:0.5, fy:0.0,"
+            " stop:0 rgba(255,255,255,12), stop:1 rgba(0,0,0,0));"
+        )
         self.lay = QVBoxLayout(self.box)
-        self.lay.setContentsMargins(0, 0, 0, 0)
-        self.lay.setSpacing(0)
+        self.lay.setContentsMargins(0, SPACING_SM, 0, SPACING_MD)
+        self.lay.setSpacing(2)
 
         # Welcome widget (modern centered hero with 2x2 suggestion cards)
         self.welcome = QWidget()
@@ -1882,7 +1960,7 @@ class ChatArea(QScrollArea):
         welcome_lay.setAlignment(Qt.AlignCenter)
         welcome_lay.setSpacing(16)
 
-        welcome_lay.addSpacing(40)
+        welcome_lay.addSpacing(26)
 
         # Large logo in accent-colored rounded square
         logo_container = QLabel()
@@ -1923,22 +2001,63 @@ class ChatArea(QScrollArea):
         welcome_lay.addWidget(subtitle)
 
         # 2x2 suggestion cards
-        welcome_lay.addSpacing(32)
+        welcome_lay.addSpacing(SPACING_XL)
         self._suggestion_chips = []
-        suggestions = [
+        self._suggestion_items = [
             ("Search the web", "Find latest news and information", "search the web for latest AI news"),
             ("System info", "Check your system status", "show me system information"),
             ("Take screenshot", "Capture your screen", "take a screenshot"),
             ("Battery status", "Check power and battery", "battery status"),
         ]
-        card_grid = QGridLayout()
-        card_grid.setSpacing(12)
-        card_grid.setContentsMargins(60, 0, 60, 0)
-        for idx, (label, desc, cmd) in enumerate(suggestions):
+        self._card_grid = QGridLayout()
+        self._card_grid.setSpacing(SPACING_SM)
+        self._card_grid.setContentsMargins(SPACING_SM, 0, SPACING_SM, 0)
+
+        grid_container = QHBoxLayout()
+        grid_container.addStretch()
+        self._grid_widget = QWidget()
+        self._grid_widget.setMaximumWidth(APP_WELCOME_GRID_MAX_WIDTH)
+        self._grid_widget.setLayout(self._card_grid)
+        grid_container.addWidget(self._grid_widget)
+        grid_container.addStretch()
+        welcome_lay.addLayout(grid_container)
+
+        self._suggestion_columns = 0
+        self._rebuild_suggestion_cards(columns=2)
+
+        self.lay.addWidget(self.welcome, 1)
+        self.lay.addStretch()
+        self.setWidget(self.box)
+        
+        self._has_messages = False
+        self._streaming_msg = None  # Track current streaming message
+        self._typing_step = 0
+        self._typing_timer = QTimer()
+
+        QTimer.singleShot(0, self._apply_responsive_suggestion_layout)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+    def _rebuild_suggestion_cards(self, columns: int):
+        columns = max(1, int(columns))
+        self._suggestion_columns = columns
+        self._clear_layout(self._card_grid)
+        self._suggestion_chips.clear()
+
+        target_width = self._grid_widget.maximumWidth() if hasattr(self, '_grid_widget') else APP_WELCOME_GRID_MAX_WIDTH
+        card_min_width = 220 if columns > 1 else max(220, target_width - 40)
+
+        for idx, (label, desc, cmd) in enumerate(self._suggestion_items):
             card = QPushButton()
             card.setCursor(Qt.PointingHandCursor)
             card.setProperty("chip_cmd", cmd)
-            card.setMinimumSize(200, 72)
+            card.setMinimumWidth(card_min_width)
+            card.setMinimumHeight(APP_SUGGESTION_CARD_MIN_HEIGHT)
             card.setStyleSheet(f"""
                 QPushButton {{
                     background: {BG_CARD}; color: {TEXT};
@@ -1949,10 +2068,10 @@ class ChatArea(QScrollArea):
                     background: {BG_HOVER}; border-color: {ACCENT};
                 }}
             """)
-            # Card content: title + description
+
             card_content = QVBoxLayout(card)
             card_content.setContentsMargins(0, 0, 0, 0)
-            card_content.setSpacing(4)
+            card_content.setSpacing(SPACING_XS)
             title_lbl = QLabel(label)
             title_lbl.setStyleSheet(f"color: {TEXT}; font-size: 13px; font-weight: 600; background: transparent;")
             title_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -1961,27 +2080,28 @@ class ChatArea(QScrollArea):
             desc_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
             card_content.addWidget(title_lbl)
             card_content.addWidget(desc_lbl)
+
             card.clicked.connect(lambda _, c=cmd: self._on_suggestion_click(c))
-            card_grid.addWidget(card, idx // 2, idx % 2)
+
+            row = idx // columns
+            col = idx % columns
+            self._card_grid.addWidget(card, row, col)
             self._suggestion_chips.append(card)
 
-        grid_container = QHBoxLayout()
-        grid_container.addStretch()
-        grid_w = QWidget()
-        grid_w.setMaximumWidth(500)
-        grid_w.setLayout(card_grid)
-        grid_container.addWidget(grid_w)
-        grid_container.addStretch()
-        welcome_lay.addLayout(grid_container)
+    def _apply_responsive_suggestion_layout(self):
+        viewport_width = self.viewport().width() if self.viewport() else 0
+        if viewport_width <= 0 or not hasattr(self, '_grid_widget'):
+            return
 
-        self.lay.addWidget(self.welcome, 1)
-        self.lay.addStretch()
-        self.setWidget(self.box)
-        
-        self._has_messages = False
-        self._streaming_msg = None  # Track current streaming message
-        self._typing_step = 0
-        self._typing_timer = QTimer()
+        target_width = min(APP_WELCOME_GRID_MAX_WIDTH, max(340, viewport_width - 120))
+        self._grid_widget.setMaximumWidth(target_width)
+        columns = 2 if target_width >= 560 else 1
+        if columns != self._suggestion_columns:
+            self._rebuild_suggestion_cards(columns=columns)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_responsive_suggestion_layout()
 
     def add(self, role, text, show_toolbar=True):
         """Add a message to the chat area."""
@@ -2077,6 +2197,7 @@ class QuickActionsPopup(QFrame):
     action_selected = pyqtSignal(str)
 
     ACTIONS = [
+        ("Stack health", "stack health"),
         ("Volume up", "increase volume by 20"),
         ("Volume down", "decrease volume by 20"),
         ("Mute", "mute"),
@@ -2170,18 +2291,22 @@ class InputBar(QFrame):
     def __init__(self):
         super().__init__()
         self.files = []
-        self.setStyleSheet(f"background: {BG_MAIN}; border: none;")
+        self.setStyleSheet(
+            "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            " stop:0 rgba(18,25,35,194), stop:1 rgba(18,25,35,232));"
+            f" border-top: 1px solid {BORDER};"
+        )
         self._build()
 
     def _build(self):
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 14)
+        lay.setContentsMargins(0, 0, 0, 10)
         lay.setSpacing(6)
 
         # Files row
         self.file_row = QHBoxLayout()
         fc = QWidget()
-        fc.setMaximumWidth(860)
+        fc.setMaximumWidth(APP_INPUT_MAX_WIDTH)
         fc.setLayout(self.file_row)
         fr = QHBoxLayout()
         fr.addStretch()
@@ -2193,7 +2318,7 @@ class InputBar(QFrame):
         self.model_selector = QComboBox()
         self.model_selector.setMinimumWidth(140)
         self.model_selector.setMaximumWidth(280)
-        self.model_selector.setFixedHeight(30)
+        self.model_selector.setFixedHeight(CONTROL_ICON_SIZE)
         self.model_selector.setMaxVisibleItems(15)
         self.model_selector.setStyleSheet(f"""
             QComboBox {{
@@ -2221,19 +2346,19 @@ class InputBar(QFrame):
 
         # Input row
         box = QFrame()
-        box.setMaximumWidth(860)
+        box.setMaximumWidth(APP_INPUT_MAX_WIDTH)
         box.setStyleSheet(f"""
             QFrame {{
-                background: {BG_INPUT}; border: 1px solid {BORDER};
-                border-radius: 28px;
+                background: rgba(26,36,49,220); border: 1px solid {BORDER};
+                border-radius: 16px;
             }}
         """)
         row = QHBoxLayout(box)
-        row.setContentsMargins(12, 8, 8, 8)
+        row.setContentsMargins(10, 7, 7, 7)
         row.setSpacing(6)
 
         att = QPushButton("+")
-        att.setFixedSize(34, 34)
+        att.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
         att.setCursor(Qt.PointingHandCursor)
         att.setStyleSheet(f"""
             QPushButton {{
@@ -2250,7 +2375,7 @@ class InputBar(QFrame):
 
         # Quick actions button (slash commands)
         self.qa_btn = QPushButton("/")
-        self.qa_btn.setFixedSize(34, 34)
+        self.qa_btn.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
         self.qa_btn.setCursor(Qt.PointingHandCursor)
         self.qa_btn.setToolTip("Quick Actions")
         self.qa_btn.setStyleSheet(f"""
@@ -2266,23 +2391,35 @@ class InputBar(QFrame):
         row.addWidget(self.qa_btn)
 
         self.inp = QTextEdit()
-        self.inp.setPlaceholderText("Message LADA...")
+        self.inp.setPlaceholderText("Ask LADA anything...")
         self.inp.setMaximumHeight(100)
         self.inp.setFont(QFont(FONT_FAMILY, 13))
-        self.inp.setStyleSheet(f"background: transparent; color: {TEXT}; border: none; padding: 4px;")
+        self.inp.setStyleSheet(f"""
+            QTextEdit {{
+                background: transparent;
+                color: {TEXT};
+                border: 1px solid transparent;
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QTextEdit:focus {{
+                border: 1px solid rgba(16,163,127,0.55);
+                background: rgba(16,163,127,0.06);
+            }}
+        """)
         self.inp.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.inp.installEventFilter(self)
         row.addWidget(self.inp, 1)
 
         # Send button
         self.sbtn = QPushButton("↑")
-        self.sbtn.setFixedSize(38, 38)
+        self.sbtn.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
         self.sbtn.setCursor(Qt.PointingHandCursor)
         self.sbtn.setStyleSheet(f"""
             QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_DARK});
                 color: white;
-                border: none; border-radius: 19px; font-size: 18px; font-weight: bold;
+                border: none; border-radius: 10px; font-size: 16px; font-weight: bold;
             }}
             QPushButton:hover {{ background: {ACCENT_DARK}; }}
         """)
@@ -2291,12 +2428,12 @@ class InputBar(QFrame):
         
         # Stop button (hidden by default)
         self.stop_btn = QPushButton("■")
-        self.stop_btn.setFixedSize(38, 38)
+        self.stop_btn.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
         self.stop_btn.setCursor(Qt.PointingHandCursor)
         self.stop_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {RED}; color: white;
-                border: none; border-radius: 19px; font-size: 14px; font-weight: bold;
+                border: none; border-radius: 10px; font-size: 14px; font-weight: bold;
             }}
             QPushButton:hover {{ background: #dc2626; }}
         """)
@@ -2327,7 +2464,7 @@ class InputBar(QFrame):
             }}
             QPushButton:hover {{ border-color: {ACCENT}; color: {TEXT}; }}
             QPushButton:checked {{
-                background: rgba(124, 58, 237, 0.15); color: {ACCENT};
+                background: rgba(16,163,127,0.16); color: #c8f9eb;
                 border-color: {ACCENT};
             }}
         """)
@@ -3172,13 +3309,25 @@ class LadaApp(QMainWindow):
         self.sys_ctrl = None
         self.jarvis = None
         self.voice_nlu = None
+        self.ai_agent = None
         self.flight_agent = None
         self.product_agent = None
         self.safety_gate = None
+        self._optional_init_complete = False
         self._cost_tracker = None
         self._last_prompt = ""
         self._wakeup_active = False
         self._voice_enabled = True  # Master voice on/off flag (starts ON)
+
+        # Standalone bus/orchestrator (feature-gated)
+        self._standalone_orchestrator_enabled = os.getenv(
+            "LADA_STANDALONE_ORCHESTRATOR", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.standalone_command_bus = None
+        self.standalone_orchestrator = None
+
+        # Apply saved personality mode before first UI greeting.
+        self._apply_saved_personality_mode()
 
         # Build UI immediately so window appears right away
         self._build()
@@ -3186,17 +3335,48 @@ class LadaApp(QMainWindow):
 
         # Defer all heavy module loading so window is visible first
         QTimer.singleShot(200, self._deferred_heavy_init)
+
+    @staticmethod
+    def _personality_mode_from_index(index: int) -> str:
+        """Map personality combo index to personality mode key."""
+        mapping = {
+            0: "jarvis",
+            1: "friday",
+            2: "karen",
+            3: "casual",
+        }
+        return mapping.get(int(index), "karen")
+
+    def _apply_saved_personality_mode(self):
+        """Load and apply persisted personality mode for consistent runtime tone."""
+        if not (JARVIS_OK and LadaPersonality):
+            return
+
+        mode_index = 2  # Default to KAREN tone when no config is present.
+        try:
+            settings_file = Path("config/app_settings.json")
+            if settings_file.exists():
+                saved = json.loads(settings_file.read_text(encoding="utf-8"))
+                mode_index = int(saved.get("personality_mode", mode_index))
+        except Exception as e:
+            logger.debug(f"[LADA] Could not load saved personality mode: {e}")
+
+        mode_name = self._personality_mode_from_index(mode_index)
+        try:
+            LadaPersonality.set_mode(mode_name)
+        except Exception as e:
+            logger.warning(f"[LADA] Could not apply personality mode '{mode_name}': {e}")
     
     def _deferred_heavy_init(self):
-        """Load all heavy modules after the window is visible.
+        """Initialize core runtime quickly, then defer optional modules.
 
-        Called via QTimer.singleShot(200) from __init__ so the window
-        appears immediately and modules load in the background.
+        This first stage keeps startup responsive so chat UI is usable while
+        heavier optional features are initialized in a second phase.
         """
         # Auto-start Ollama if not running
         self._start_ollama()
 
-        # AI Router
+        # Core router
         if LADA_OK:
             try:
                 self.router = HybridAIRouter()
@@ -3205,6 +3385,111 @@ class LadaApp(QMainWindow):
                 logger.error(f"Router init: {e}")
                 print(f"[LADA] Router init error: {e}")
 
+        # Core system services
+        self.sys_ctrl = SystemController() if SYS_OK else None
+
+        # Core command path
+        self.jarvis = JarvisCommandProcessor(ai_router=self.router) if JARVIS_OK else None
+        if self.jarvis:
+            print("[LADA] JARVIS command processor initialized")
+
+        # Voice NLU for command routing
+        self.voice_nlu = VoiceCommandProcessor(ai_router=self.router) if VOICE_NLU_OK else None
+        if self.voice_nlu:
+            print("[LADA] Voice NLU initialized")
+
+        # Refresh model/status UI once the router is up.
+        try:
+            self._load_models()
+            self._update_status()
+            self._update_header_status()
+            self._show_startup_runtime_health()
+        except Exception as e:
+            print(f"[LADA] Core post-init UI refresh error: {e}")
+
+    def _collect_runtime_health(self):
+        """Collect startup health details for model/provider readiness messaging."""
+        summary = {
+            "router_ready": bool(self.router),
+            "providers_total": 0,
+            "providers_available": 0,
+            "missing_keys": [],
+        }
+
+        if not self.router:
+            return summary
+
+        status = {}
+        try:
+            status = self.router.get_status() if hasattr(self.router, 'get_status') else {}
+        except Exception as e:
+            logger.warning(f"[LADA] Could not read provider status: {e}")
+
+        if isinstance(status, dict):
+            summary["providers_total"] = len(status)
+            summary["providers_available"] = sum(
+                1 for info in status.values() if isinstance(info, dict) and info.get('available')
+            )
+
+        provider_manager = getattr(self.router, 'provider_manager', None)
+        model_registry = getattr(provider_manager, 'model_registry', None) or getattr(self.router, 'model_registry', None)
+        if model_registry and hasattr(model_registry, 'providers') and hasattr(model_registry, 'get_available_providers'):
+            try:
+                availability = model_registry.get_available_providers()
+                missing = set()
+                for provider_id, is_ready in availability.items():
+                    if is_ready:
+                        continue
+                    provider = model_registry.providers.get(provider_id)
+                    for key in getattr(provider, 'config_keys', []):
+                        if not os.getenv(str(key), '').strip():
+                            missing.add(str(key))
+                summary["missing_keys"] = sorted(missing)
+            except Exception as e:
+                logger.debug(f"[LADA] Could not collect missing provider keys: {e}")
+
+        return summary
+
+    def _show_startup_runtime_health(self):
+        """Show concise startup health guidance for common model/backend issues."""
+        summary = self._collect_runtime_health()
+
+        if not summary.get("router_ready"):
+            message = "AI router failed to initialize. Check logs for provider setup errors."
+        elif summary.get("providers_total", 0) == 0:
+            message = "No AI providers loaded. Check models.json and provider configuration."
+        elif summary.get("providers_available", 0) == 0:
+            missing = summary.get("missing_keys", [])
+            if missing:
+                hint = ", ".join(missing[:3])
+                if len(missing) > 3:
+                    hint += ", ..."
+                message = f"No AI backends are ready. Missing API keys: {hint}"
+            else:
+                message = "No AI backends are ready. Check API keys and local model services."
+        else:
+            message = (
+                f"AI backends ready: {summary.get('providers_available', 0)}"
+                f"/{summary.get('providers_total', 0)}"
+            )
+
+        try:
+            if hasattr(self, 'statusbar') and self.statusbar:
+                self.statusbar.showMessage(message, 12000)
+        except Exception:
+            pass
+        logger.info(f"[LADA] Startup health: {message}")
+
+        # Defer optional modules to keep first-render snappy.
+        try:
+            optional_delay_ms = int(os.getenv("LADA_OPTIONAL_INIT_DELAY_MS", "450"))
+        except Exception:
+            optional_delay_ms = 450
+        optional_delay_ms = max(100, optional_delay_ms)
+        QTimer.singleShot(optional_delay_ms, self._deferred_optional_init)
+
+    def _deferred_optional_init(self):
+        """Initialize optional features after core startup is complete."""
         # Voice engine
         if VOICE_OK and FreeNaturalVoice:
             try:
@@ -3213,19 +3498,6 @@ class LadaApp(QMainWindow):
             except Exception as e:
                 logger.error(f"Voice init: {e}")
                 print(f"[LADA] Voice init error: {e}")
-
-        # System controller
-        self.sys_ctrl = SystemController() if SYS_OK else None
-
-        # JARVIS command processor
-        self.jarvis = JarvisCommandProcessor(ai_router=self.router) if JARVIS_OK else None
-        if self.jarvis:
-            print("[LADA] JARVIS command processor initialized")
-
-        # Voice NLU
-        self.voice_nlu = VoiceCommandProcessor(ai_router=self.router) if VOICE_NLU_OK else None
-        if self.voice_nlu:
-            print("[LADA] Voice NLU initialized")
 
         # Agents
         if AGENTS_OK and self.router:
@@ -3254,6 +3526,10 @@ class LadaApp(QMainWindow):
         except Exception as e:
             logger.warning(f"[LADA] AI Command Agent not available: {e}")
 
+        # Standalone orchestrator bridge (opt-in)
+        if self._standalone_orchestrator_enabled:
+            self._init_standalone_orchestrator()
+
         # Advanced modules (continuous listener, calendar, weather, face, etc.)
         self._init_advanced_modules()
 
@@ -3275,22 +3551,320 @@ class LadaApp(QMainWindow):
             except Exception as e:
                 logger.warning(f"[LADA] Proactive Agent init failed: {e}")
 
+        self._optional_init_complete = True
         print("[LADA] Ready.")
-
-        # Refresh model/status UI after heavy components are initialized.
-        # The initial _build() happens before router init and can only show Auto.
-        try:
-            self._load_models()
-            self._update_status()
-            self._update_header_status()
-        except Exception as e:
-            print(f"[LADA] Post-init UI refresh error: {e}")
 
         # Start wake word detection
         QTimer.singleShot(800, self._start_wake_detection)
 
         # Morning briefing
         QTimer.singleShot(1800, self._check_morning_briefing)
+
+    def _init_standalone_orchestrator(self):
+        """Initialize standalone command bus + orchestrator for desktop dispatch."""
+        if self.standalone_orchestrator is not None:
+            return
+
+        try:
+            from modules.standalone.command_bus import create_command_bus
+            from modules.standalone.orchestrator import create_orchestrator
+
+            self.standalone_command_bus = create_command_bus()
+            self.standalone_orchestrator = create_orchestrator(
+                command_bus=self.standalone_command_bus,
+                jarvis_getter=lambda: self.jarvis,
+                ai_router_getter=lambda: self.router,
+                autostart=True,
+            )
+            print("[LADA] Standalone orchestrator enabled")
+        except Exception as e:
+            logger.warning(f"[LADA] Standalone orchestrator init failed: {e}")
+            self.standalone_orchestrator = None
+            if self.standalone_command_bus is not None:
+                try:
+                    self.standalone_command_bus.stop()
+                except Exception:
+                    pass
+                self.standalone_command_bus = None
+
+    def _stop_standalone_orchestrator(self):
+        """Stop standalone orchestrator and command bus if initialized."""
+        if self.standalone_orchestrator is not None:
+            try:
+                self.standalone_orchestrator.stop()
+            except Exception:
+                pass
+            self.standalone_orchestrator = None
+
+        if self.standalone_command_bus is not None:
+            try:
+                self.standalone_command_bus.stop()
+            except Exception:
+                pass
+            self.standalone_command_bus = None
+
+    def _dispatch_system_command(self, text: str) -> tuple:
+        """Dispatch system commands via standalone orchestrator when enabled, fallback to Jarvis."""
+        if not text:
+            return False, ""
+
+        if self._standalone_orchestrator_enabled and self.standalone_orchestrator is not None:
+            try:
+                from modules.standalone.contracts import CommandEnvelope
+
+                timeout_ms = int(os.getenv("LADA_STANDALONE_TIMEOUT_MS", "60000"))
+                timeout_ms = max(1000, timeout_ms)
+
+                envelope = CommandEnvelope.from_dict({
+                    "source": "desktop",
+                    "target": "system",
+                    "action": "execute",
+                    "payload": {"command": text},
+                    "timeout_ms": timeout_ms,
+                    "metadata": {
+                        "channel": "desktop_app",
+                    },
+                })
+
+                event = self.standalone_orchestrator.submit(
+                    envelope,
+                    wait_for_result=True,
+                    timeout_ms=timeout_ms,
+                )
+
+                if event is not None:
+                    payload = event.payload or {}
+                    message = str(payload.get("message", ""))
+                    error = str(payload.get("error", ""))
+
+                    if event.status == "completed":
+                        return True, message
+
+                    # Not handled should continue through existing fallback chain.
+                    if error == "not_handled":
+                        return False, message
+            except Exception as e:
+                logger.warning(f"[LADA] Standalone system dispatch failed, using fallback: {e}")
+
+        if self.jarvis:
+            try:
+                return self.jarvis.process(text)
+            except Exception as e:
+                logger.warning(f"[LADA] Jarvis system dispatch failed: {e}")
+
+        return False, ""
+
+    def _handle_openclaw_alias_command(self, text: str) -> tuple:
+        """Handle OpenClaw-prefixed commands as native LADA aliases.
+
+        This keeps user continuity while enforcing native-only runtime behavior.
+        """
+        command = text.strip()
+        lc = command.lower()
+
+        adapter = None
+        try:
+            from integrations.openclaw_adapter import get_openclaw_adapter
+            adapter = get_openclaw_adapter()
+        except Exception as e:
+            logger.debug(f"[LADA] OpenClaw adapter unavailable: {e}")
+
+        if lc in {"openclaw", "openclaw help"}:
+            return True, (
+                "OpenClaw compatibility commands:\n"
+                "- openclaw status\n"
+                "- openclaw connect\n"
+                "- openclaw disconnect\n"
+                "- openclaw navigate <url>\n"
+                "- openclaw snapshot\n"
+                "- openclaw click <selector>\n"
+                "- openclaw type <selector> :: <text>\n"
+                "- openclaw scroll <up|down> [pixels]\n"
+                "- openclaw extract [selector]"
+            )
+
+        if lc == "openclaw status":
+            lines = ["OpenClaw compatibility status:"]
+            if adapter:
+                status = adapter.status()
+                lines.append(f"- adapter enabled: {status.get('enabled', False)}")
+                lines.append(f"- adapter state: {status.get('state', 'unknown')}")
+                lines.append(f"- adapter connected: {status.get('connected', False)}")
+                if status.get('url'):
+                    lines.append(f"- gateway: {status.get('url')}")
+            else:
+                lines.append("- adapter: disabled (set LADA_OPENCLAW_ADAPTER_ENABLED=true to enable gateway mode)")
+            handled, backend = self._handle_backend_status()
+            if handled:
+                lines.append("")
+                lines.append(backend)
+            return True, "\n".join(lines)
+
+        if lc == "openclaw connect":
+            if not adapter:
+                return True, "OpenClaw adapter is disabled. Set LADA_OPENCLAW_ADAPTER_ENABLED=true and restart."
+            ok = adapter.connect()
+            return True, "OpenClaw adapter connected." if ok else "OpenClaw adapter connection failed."
+
+        if lc == "openclaw disconnect":
+            if not adapter:
+                return True, "OpenClaw adapter is not active."
+            adapter.disconnect()
+            return True, "OpenClaw adapter disconnected."
+
+        if lc.startswith("openclaw navigate "):
+            url = command[len("openclaw navigate "):].strip()
+            if not url:
+                return True, "Usage: openclaw navigate <url>"
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+
+            if adapter and adapter.navigate(url):
+                return True, f"OpenClaw adapter navigated to {url}."
+
+            handled, response = self._dispatch_system_command(f"open {url}")
+            if handled:
+                return True, response
+            if self.voice_nlu:
+                handled, response = self.voice_nlu.process(f"open url {url}")
+                if handled:
+                    return True, response
+            return True, f"Tried native navigation to {url}, but could not complete it."
+
+        if lc == "openclaw snapshot":
+            if adapter:
+                snapshot = adapter.snapshot_summary()
+                if snapshot:
+                    return True, (
+                        "OpenClaw snapshot summary:\n"
+                        f"- URL: {snapshot.get('url', '')}\n"
+                        f"- Title: {snapshot.get('title', '')}\n"
+                        f"- Interactive elements: {snapshot.get('interactive_elements', 0)}\n"
+                        f"- Text chars: {snapshot.get('text_chars', 0)}"
+                    )
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                page = browser.get_page_content()
+                if page.get('success'):
+                    shot = browser.screenshot()
+                    msg = (
+                        "Native snapshot summary:\n"
+                        f"- URL: {page.get('url', '')}\n"
+                        f"- Title: {page.get('title', '')}\n"
+                        f"- Text chars: {len(str(page.get('text', '')))}"
+                    )
+                    if shot.get('success'):
+                        msg += f"\n- Screenshot: {shot.get('path', '')}"
+                    return True, msg
+            except Exception:
+                pass
+
+            handled, response = self._dispatch_system_command("take a screenshot")
+            if handled:
+                return True, response
+            return True, "Native screenshot command is currently unavailable."
+
+        if lc.startswith("openclaw click "):
+            selector = command[len("openclaw click "):].strip()
+            if not selector:
+                return True, "Usage: openclaw click <selector>"
+
+            if adapter and adapter.click(selector):
+                return True, f"OpenClaw adapter clicked: {selector}"
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.click(selector)
+                if result.get('success'):
+                    return True, f"Stealth click successful: {selector}"
+            except Exception:
+                pass
+
+            return True, f"Could not click selector: {selector}"
+
+        if lc.startswith("openclaw type "):
+            payload = command[len("openclaw type "):].strip()
+            separator = "::" if "::" in payload else "|" if "|" in payload else ""
+            if not separator:
+                return True, "Usage: openclaw type <selector> :: <text>"
+
+            selector, typed = [p.strip() for p in payload.split(separator, 1)]
+            if not selector:
+                return True, "Usage: openclaw type <selector> :: <text>"
+
+            if adapter and adapter.type_text(selector, typed):
+                return True, f"OpenClaw adapter typed into {selector}."
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.type_text(selector=selector, text=typed)
+                if result.get('success'):
+                    return True, f"Stealth typed into {selector}."
+            except Exception:
+                pass
+
+            return True, f"Could not type into selector: {selector}"
+
+        if lc.startswith("openclaw scroll "):
+            payload = command[len("openclaw scroll "):].strip().split()
+            direction = payload[0].lower() if payload else "down"
+            if direction not in {"up", "down"}:
+                direction = "down"
+            amount = 500
+            if len(payload) > 1:
+                try:
+                    amount = int(payload[1])
+                except Exception:
+                    amount = 500
+
+            if adapter and adapter.scroll(direction=direction, amount=amount):
+                return True, f"OpenClaw adapter scrolled {direction} by {amount}px."
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.scroll(direction=direction, amount=amount)
+                if result.get('success'):
+                    return True, f"Stealth scrolled {direction} by {amount}px."
+            except Exception:
+                pass
+
+            return True, f"Could not scroll {direction}."
+
+        if lc.startswith("openclaw extract"):
+            selector = command[len("openclaw extract"):].strip()
+
+            if adapter:
+                text_out = adapter.extract_text(selector=selector or None)
+                if text_out:
+                    return True, text_out[:4000]
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                if selector:
+                    result = browser.execute_js(
+                        "const el=document.querySelector(arguments[0]); return el ? el.innerText : '';",
+                        selector,
+                    )
+                    if result:
+                        return True, str(result)[:4000]
+                page = browser.get_page_content()
+                if page.get('success'):
+                    return True, str(page.get('text', ''))[:4000]
+            except Exception:
+                pass
+
+            return True, "Could not extract page content."
+
+        return True, (
+            "OpenClaw compatibility command not recognized. "
+            "Use 'openclaw help' for supported commands."
+        )
 
     def _start_ollama(self):
         """Auto-start Ollama in background if not running"""
@@ -3367,112 +3941,113 @@ class LadaApp(QMainWindow):
         self._start_alexa_services()
     
     def _start_alexa_services(self):
-        """Start Alexa integration services in background (no CMD windows)"""
+        """Start Alexa integration services in background (feature-flagged)."""
+        enabled = os.getenv("LADA_ALEXA_AUTOSTART", "0").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if not enabled:
+            print("[LADA] Alexa autostart disabled (set LADA_ALEXA_AUTOSTART=1 to enable)")
+            return
+
+        import socket
         import sys
-        
+        import time
+
         # Track background processes for cleanup
         self.alexa_processes = []
-        
-        base_dir = Path(__file__).parent.parent if "__file__" in dir() else Path(".")
-        if not base_dir.exists():
-            base_dir = Path("c:/JarvisAI")
-        
-        python_exe = sys.executable
-        pythonw_exe = python_exe.replace("python.exe", "pythonw.exe")
-        if not Path(pythonw_exe).exists():
-            pythonw_exe = python_exe
-        
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        
-        # Check if services are already running
-        try:
-            import socket
-            def port_in_use(port):
+
+        def _port_in_use(port: int) -> bool:
+            try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     return s.connect_ex(('localhost', port)) == 0
-            
-            api_running = port_in_use(5000)
-            alexa_running = port_in_use(5001)
-        except:
-            api_running = False
-            alexa_running = False
-        
-        # 1. Start API Server (port 5000) if not running
-        if not api_running:
+            except Exception:
+                return False
+
+        def _worker():
+            base_dir = Path(__file__).parent if "__file__" in dir() else Path(".")
+            if not base_dir.exists():
+                base_dir = Path("c:/lada ai")
+
+            python_exe = sys.executable
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+
+            api_running = _port_in_use(5000)
+            alexa_running = _port_in_use(5001)
+
+            # 1. Start API Server (port 5000) if not running
+            if not api_running:
+                try:
+                    api_server_path = base_dir / "modules" / "api_server.py"
+                    if api_server_path.exists():
+                        proc = subprocess.Popen(
+                            [python_exe, str(api_server_path)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=creationflags,
+                            cwd=str(base_dir)
+                        )
+                        self.alexa_processes.append(proc)
+                        print("[LADA] API Server started (port 5000) - hidden")
+                except Exception as e:
+                    print(f"[LADA] API Server start error: {e}")
+            else:
+                print("[LADA] API Server already running on port 5000")
+
+            # 2. Start Alexa Bridge (port 5001) if not running
+            if not alexa_running:
+                try:
+                    alexa_server_path = base_dir / "integrations" / "alexa_server.py"
+                    if alexa_server_path.exists():
+                        proc = subprocess.Popen(
+                            [python_exe, str(alexa_server_path)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=creationflags,
+                            cwd=str(base_dir)
+                        )
+                        self.alexa_processes.append(proc)
+                        print("[LADA] Alexa Bridge started (port 5001) - hidden")
+                except Exception as e:
+                    print(f"[LADA] Alexa Bridge start error: {e}")
+            else:
+                print("[LADA] Alexa Bridge already running on port 5001")
+
+            # 3. Start ngrok tunnel (if ngrok is installed)
             try:
-                api_server_path = base_dir / "modules" / "api_server.py"
-                if api_server_path.exists():
-                    proc = subprocess.Popen(
-                        [python_exe, str(api_server_path)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        creationflags=creationflags,
-                        cwd=str(base_dir)
-                    )
-                    self.alexa_processes.append(proc)
-                    print("[LADA] 🔌 API Server started (port 5000) - hidden")
+                try:
+                    resp = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2)
+                    tunnels = resp.json().get("tunnels", [])
+                    if tunnels:
+                        print(f"[LADA] ngrok already running: {tunnels[0].get('public_url', 'active')}")
+                        return
+                except Exception:
+                    pass
+
+                proc = subprocess.Popen(
+                    ["ngrok", "http", "5001", "--log=stdout"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags
+                )
+                self.alexa_processes.append(proc)
+                print("[LADA] ngrok tunnel started (5001 -> HTTPS) - hidden")
+
+                time.sleep(2)
+                try:
+                    resp = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=3)
+                    tunnels = resp.json().get("tunnels", [])
+                    if tunnels:
+                        ngrok_url = tunnels[0].get("public_url", "")
+                        print(f"[LADA] Alexa endpoint: {ngrok_url}/")
+                except Exception:
+                    print("[LADA] ngrok running (check http://127.0.0.1:4040 for URL)")
+
+            except FileNotFoundError:
+                print("[LADA] ngrok not installed - Alexa works on local network only")
             except Exception as e:
-                print(f"[LADA] API Server start error: {e}")
-        else:
-            print("[LADA] 🔌 API Server already running on port 5000")
-        
-        # 2. Start Alexa Bridge (port 5001) if not running
-        if not alexa_running:
-            try:
-                alexa_server_path = base_dir / "alexa_server.py"
-                if alexa_server_path.exists():
-                    proc = subprocess.Popen(
-                        [python_exe, str(alexa_server_path)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        creationflags=creationflags,
-                        cwd=str(base_dir)
-                    )
-                    self.alexa_processes.append(proc)
-                    print("[LADA] 🎤 Alexa Bridge started (port 5001) - hidden")
-            except Exception as e:
-                print(f"[LADA] Alexa Bridge start error: {e}")
-        else:
-            print("[LADA] 🎤 Alexa Bridge already running on port 5001")
-        
-        # 3. Start ngrok tunnel (if ngrok is installed)
-        try:
-            # Check if ngrok tunnel already exists
-            try:
-                resp = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2)
-                tunnels = resp.json().get("tunnels", [])
-                if tunnels:
-                    print(f"[LADA] 🌐 ngrok already running: {tunnels[0].get('public_url', 'active')}")
-                    return
-            except:
-                pass
-            
-            # Start ngrok for Alexa bridge
-            proc = subprocess.Popen(
-                ["ngrok", "http", "5001", "--log=stdout"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=creationflags
-            )
-            self.alexa_processes.append(proc)
-            print("[LADA] 🌐 ngrok tunnel started (5001 → HTTPS) - hidden")
-            
-            # Wait a moment and get the URL
-            import time
-            time.sleep(2)
-            try:
-                resp = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=3)
-                tunnels = resp.json().get("tunnels", [])
-                if tunnels:
-                    ngrok_url = tunnels[0].get("public_url", "")
-                    print(f"[LADA] 📡 Alexa endpoint: {ngrok_url}/")
-            except:
-                print("[LADA] 📡 ngrok running (check http://127.0.0.1:4040 for URL)")
-                
-        except FileNotFoundError:
-            print("[LADA] ⚠️ ngrok not installed - Alexa will only work on local network")
-        except Exception as e:
-            print(f"[LADA] ngrok start error: {e}")
+                print(f"[LADA] ngrok start error: {e}")
+
+        threading.Thread(target=_worker, daemon=True, name="LADA-AlexaAutostart").start()
     
     def _on_system_alert(self, alert):
         """Handle system alerts from continuous monitor"""
@@ -3977,6 +4552,10 @@ class LadaApp(QMainWindow):
         """
         t = text.lower().strip()
 
+        # Native-only runtime: OpenClaw-prefixed commands map to native aliases.
+        if t.startswith("openclaw"):
+            return self._handle_openclaw_alias_command(text)
+
         # === SYSTEM COMMAND KEYWORDS - always try JARVIS first for these ===
         system_keywords = [
             'volume', 'brightness', 'mute', 'unmute', 'screenshot',
@@ -4020,10 +4599,9 @@ class LadaApp(QMainWindow):
 
         # If it looks like a system command, try JARVIS/NLU first
         if is_system_cmd:
-            if self.jarvis:
-                handled, response = self.jarvis.process(text)
-                if handled:
-                    return True, response
+            handled, response = self._dispatch_system_command(text)
+            if handled:
+                return True, response
             if self.voice_nlu:
                 handled, response = self.voice_nlu.process(text)
                 if handled:
@@ -4056,17 +4634,15 @@ class LadaApp(QMainWindow):
 
         # If user explicitly wants browser, let JARVIS handle it
         if any(x in t for x in ['open browser', 'open google', 'google it', 'in browser', 'in the browser']):
-            if hasattr(self, 'jarvis') and self.jarvis:
-                handled, response = self.jarvis.process(text)
-                if handled:
-                    return True, response
+            handled, response = self._dispatch_system_command(text)
+            if handled:
+                return True, response
 
         # Action commands always go to JARVIS
         if is_action_command:
-            if hasattr(self, 'jarvis') and self.jarvis:
-                handled, response = self.jarvis.process(text)
-                if handled:
-                    return True, response
+            handled, response = self._dispatch_system_command(text)
+            if handled:
+                return True, response
 
         # === SEARCH QUERY DETECTION ===
         search_indicators = [
@@ -4086,6 +4662,9 @@ class LadaApp(QMainWindow):
         # === COMET-STYLE SELF-AWARENESS COMMANDS ===
         if any(x in t for x in ['which model', 'what model', 'what ai', 'who are you', 'what are you running']):
             return self._handle_self_awareness(t)
+
+        if any(x in t for x in ['stack health', 'stack status', 'language stack', 'tech stack', 'architecture health', 'language suitability']):
+            return self._handle_stack_health()
         
         if any(x in t for x in ['backend status', 'ai status', 'system status', 'what backends']):
             return self._handle_backend_status()
@@ -4102,10 +4681,9 @@ class LadaApp(QMainWindow):
         
         # Try JARVIS first for typed commands (better local execution behavior),
         # then fall back to Voice NLU.
-        if self.jarvis:
-            handled, response = self.jarvis.process(text)
-            if handled:
-                return True, response
+        handled, response = self._dispatch_system_command(text)
+        if handled:
+            return True, response
 
         if self.voice_nlu:
             handled, response = self.voice_nlu.process(text)
@@ -4266,13 +4844,76 @@ class LadaApp(QMainWindow):
             return True, "AI router is not initialized."
         
         status = self.router.get_status()
-        lines = ["**AI Backend Status:**\n"]
+        lines = ["**AI Backend Status:**", ""]
+        total = len(status)
+        available_count = 0
         for key, info in status.items():
             icon = "✅" if info.get('available') else "❌"
             name = info.get('name', key)
             rt = info.get('response_time', 'N/A')
+            if info.get('available'):
+                available_count += 1
             lines.append(f"{icon} {name}: {rt}")
+
+        if total == 0:
+            lines.append("⚠️ No providers loaded. Check models.json and provider initialization.")
+            return True, "\n".join(lines)
+
+        lines.extend(["", f"Ready backends: {available_count}/{total}"])
+
+        if available_count == 0:
+            health = self._collect_runtime_health()
+            missing_keys = health.get("missing_keys", [])
+            if missing_keys:
+                preview = ", ".join(missing_keys[:3])
+                if len(missing_keys) > 3:
+                    preview += ", ..."
+                lines.append(f"Missing API keys: {preview}")
+            else:
+                lines.append("No backend is currently ready. Check local model services and provider settings.")
         
+        return True, "\n".join(lines)
+
+    def _handle_stack_health(self) -> tuple:
+        """Return a concise runtime stack health report and language-fit guidance."""
+        lines = ["**LADA Stack Health:**", ""]
+
+        py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        lines.append(f"✅ Python runtime: {py_ver} (core desktop/orchestration)")
+
+        if self.router:
+            try:
+                status = self.router.get_status()
+                total = len(status)
+                available = sum(1 for info in status.values() if info.get('available'))
+                lines.append(f"✅ AI provider layer: {available}/{total} backends available")
+            except Exception as e:
+                lines.append(f"⚠️ AI provider layer: status unavailable ({e})")
+        else:
+            lines.append("⚠️ AI provider layer: router not initialized yet")
+
+        frontend_pkg = Path("frontend/package.json")
+        if frontend_pkg.exists():
+            try:
+                pkg = json.loads(frontend_pkg.read_text(encoding="utf-8"))
+                deps = pkg.get("dependencies", {})
+                dev_deps = pkg.get("devDependencies", {})
+                next_v = deps.get("next", "unknown")
+                ts_v = dev_deps.get("typescript", "unknown")
+                lines.append(f"✅ Web stack: Next.js {next_v}, TypeScript {ts_v}, Tailwind CSS")
+            except Exception as e:
+                lines.append(f"⚠️ Web stack: could not read package metadata ({e})")
+        else:
+            lines.append("⚠️ Web stack: frontend/package.json not found")
+
+        lines.extend([
+            "",
+            "**Language fit recommendation:**",
+            "- Keep Python as the core for voice, system automation, and agent orchestration.",
+            "- Keep TypeScript + CSS for web/frontend surfaces.",
+            "- Avoid full rewrites now; prioritize capability parity and reliability.",
+        ])
+
         return True, "\n".join(lines)
 
     def _build(self):
@@ -4334,6 +4975,20 @@ class LadaApp(QMainWindow):
         hdr_logo.setStyleSheet(f"color: {TEXT};")
         hl.addWidget(hdr_logo)
 
+        # Visible active-model pill, similar to modern chat apps.
+        self._active_model_label = QLabel("Model: Auto")
+        self._active_model_label.setStyleSheet(f"""
+            QLabel {{
+                color: {TEXT};
+                background: rgba(26,36,49,220);
+                border: 1px solid {BORDER};
+                border-radius: 12px;
+                font-size: 11px;
+                padding: 3px 10px;
+            }}
+        """)
+        hl.addWidget(self._active_model_label)
+
         hl.addStretch()
 
         # System status indicators
@@ -4392,6 +5047,7 @@ class LadaApp(QMainWindow):
         self.model = self.inp.model_selector
         self.model.currentIndexChanged.connect(self._on_model_selector_changed)
         self._load_models()
+        self._update_header_model_label()
 
         main.addWidget(content, 1)
 
@@ -4571,6 +5227,9 @@ class LadaApp(QMainWindow):
         """Actually quit the application"""
         self._save()
         self._close_voice()
+
+        # Stop standalone command bus/orchestrator if enabled
+        self._stop_standalone_orchestrator()
         
         # Stop wake word detection
         if hasattr(self, 'wake_detector') and self.wake_detector:
@@ -4663,7 +5322,16 @@ class LadaApp(QMainWindow):
             for k, v in status.items():
                 if v.get('available'):
                     parts.append(v.get('name', k))
-            base = " | ".join(parts) if parts else "No backends available"
+            if parts:
+                base = " | ".join(parts)
+            else:
+                health = self._collect_runtime_health()
+                missing_keys = health.get("missing_keys", [])
+                if missing_keys:
+                    preview = ", ".join(missing_keys[:2])
+                    base = f"No backends available - add API keys ({preview})"
+                else:
+                    base = "No backends available - check provider services"
             self.statusbar.showMessage(f"{prefix}  |  {base}" if prefix else base)
         else:
             self.statusbar.showMessage(f"{prefix}  |  AI Router not initialized" if prefix else "AI Router not initialized")
@@ -4671,6 +5339,15 @@ class LadaApp(QMainWindow):
     def _update_header_status(self):
         """Update header status bar with battery, time, and connection info."""
         parts = []
+        try:
+            if self.router:
+                status = self.router.get_status()
+                total = len(status)
+                available = sum(1 for v in status.values() if v.get('available'))
+                if total > 0:
+                    parts.append(f"AI: {available}/{total} ready")
+        except Exception:
+            pass
         try:
             import psutil
             batt = psutil.sensors_battery()
@@ -4687,6 +5364,31 @@ class LadaApp(QMainWindow):
             pass
         if parts:
             self._status_label.setText("  |  ".join(parts))
+        else:
+            self._status_label.setText("")
+
+    def _get_selected_model_label(self):
+        """Return a clean display label for the currently selected model."""
+        if not hasattr(self, 'model'):
+            return "Auto"
+
+        idx = self.model.currentIndex()
+        if idx < 0:
+            return "Auto"
+
+        model_data = self.model.itemData(idx)
+        model_text = (self.model.itemText(idx) or "").strip()
+
+        if isinstance(model_data, str) and model_data == "auto":
+            return "Auto"
+        if not model_text or model_text.startswith("──"):
+            return "Auto"
+        return model_text
+
+    def _update_header_model_label(self):
+        """Sync the header model pill with the input model selector."""
+        if hasattr(self, '_active_model_label'):
+            self._active_model_label.setText(f"Model: {self._get_selected_model_label()}")
 
     def _open_settings(self):
         """Open settings dialog"""
@@ -4803,57 +5505,131 @@ class LadaApp(QMainWindow):
         
         # Apply browser search preference
         self.browser_search_mode = settings.get('browser_search', False)
+
+        # Apply personality mode immediately so tone changes at runtime.
+        personality_mode_index = int(settings.get('personality_mode', 2))
+        personality_mode_name = self._personality_mode_from_index(personality_mode_index)
+        if JARVIS_OK and LadaPersonality:
+            try:
+                LadaPersonality.set_mode(personality_mode_name)
+            except Exception as e:
+                logger.warning(f"[LADA] Could not set personality mode '{personality_mode_name}': {e}")
         
         # Store settings for later
         self.current_settings = settings
         
         # Show confirmation
         mode = "🔒 Private" if settings.get('privacy_mode') else "🌐 Public"
-        self.statusbar.showMessage(f"Settings applied. Mode: {mode} | Font: {new_font_size}px", 3000)
+        self.statusbar.showMessage(
+            f"Settings applied. Mode: {mode} | Personality: {personality_mode_name.title()} | Font: {new_font_size}px",
+            3000,
+        )
 
     def _load_models(self):
         self.model.clear()
         self.model.addItem("Auto (Best Available)", "auto")
-        if self.router:
-            phase2_models = []
-            if hasattr(self.router, 'get_all_available_models'):
-                try:
-                    phase2_models = self.router.get_all_available_models()
-                except Exception as e:
-                    print(f"[LADA] get_all_available_models error: {e}")
-
-            if phase2_models:
-                current_provider = None
-                added = 0
-                for m in phase2_models:
-                    if not m.get('available', False):
-                        continue  # Skip offline models
-
-                    provider = m.get('provider', '')
-                    model_id = m.get('id', '')
-                    name = m.get('name', model_id).replace(' (offline)', '')
-
-                    # Add provider group header when provider changes
-                    if provider != current_provider:
-                        current_provider = provider
-                        provider_label = m.get('provider_name', provider)
-                        sep = f"\u2500\u2500 {provider_label} \u2500\u2500"
-                        self.model.addItem(sep, "")
-                        idx = self.model.count() - 1
-                        self.model.setItemData(idx, 0, Qt.UserRole - 1)  # Non-selectable
-
-                    self.model.addItem(f"  {name}", model_id)
-                    added += 1
-                print(f"[LADA] Model dropdown: {added} available models loaded")
-            else:
-                print("[LADA] No models available from registry")
-        else:
+        if not self.router:
             print("[LADA] Router not available - no models to display")
+            self._update_header_model_label()
+            return
+
+        normalized = []
+        if hasattr(self.router, 'get_all_available_models'):
+            try:
+                for model in (self.router.get_all_available_models() or []):
+                    model_id = str(model.get('id', '')).strip()
+                    if not model_id:
+                        continue
+                    normalized.append({
+                        'id': model_id,
+                        'provider': str(model.get('provider', '')).strip(),
+                        'provider_name': str(model.get('provider_name', model.get('provider', 'Provider'))).strip(),
+                        'name': str(model.get('name', model_id)).replace(' (offline)', '').strip(),
+                        'available': bool(model.get('available', True)),
+                    })
+            except Exception as e:
+                print(f"[LADA] get_all_available_models error: {e}")
+
+        # Fallback for cases where registry entries are empty but provider dropdown exists.
+        if not normalized and hasattr(self.router, 'get_provider_dropdown_items'):
+            try:
+                for item in (self.router.get_provider_dropdown_items() or []):
+                    model_id = str(item.get('value', '')).strip()
+                    if not model_id or model_id == 'auto':
+                        continue
+
+                    label = str(item.get('label', model_id)).strip()
+                    is_available = bool(item.get('available', True)) and '(offline)' not in label.lower()
+                    normalized.append({
+                        'id': model_id,
+                        'provider': str(item.get('provider', 'lada')).strip(),
+                        'provider_name': str(item.get('provider', 'lada')).strip(),
+                        'name': label.replace(' (offline)', '').strip(),
+                        'available': is_available,
+                    })
+            except Exception as e:
+                print(f"[LADA] get_provider_dropdown_items error: {e}")
+
+        if not normalized:
+            self.model.addItem("No models available", "")
+            idx = self.model.count() - 1
+            self.model.setItemData(idx, 0, Qt.UserRole - 1)
+            print("[LADA] Model dropdown: no models found")
+            self.model.setCurrentIndex(0)
+            self._update_header_model_label()
+            return
+
+        current_provider = None
+        added = 0
+        any_available = any(m.get('available', False) for m in normalized)
+
+        for model in normalized:
+            # If at least one model is available, suppress offline rows to reduce confusion.
+            if any_available and not model.get('available', False):
+                continue
+
+            provider = model.get('provider', '')
+            if provider != current_provider:
+                current_provider = provider
+                provider_label = model.get('provider_name', provider) or provider or 'Provider'
+                sep = f"\u2500\u2500 {provider_label} \u2500\u2500"
+                self.model.addItem(sep, "")
+                idx = self.model.count() - 1
+                self.model.setItemData(idx, 0, Qt.UserRole - 1)
+
+            display_name = model.get('name', model.get('id', ''))
+            if not model.get('available', False) and '(offline)' not in display_name.lower():
+                display_name = f"{display_name} (offline)"
+
+            self.model.addItem(f"  {display_name}", model.get('id', ''))
+            idx = self.model.count() - 1
+            if not model.get('available', False):
+                self.model.setItemData(idx, 0, Qt.UserRole - 1)
+            added += 1
+
+        print(f"[LADA] Model dropdown: {added} models loaded")
         self.model.setCurrentIndex(0)
+        self._update_header_model_label()
 
     def _on_model_selector_changed(self, index):
         """Handle model selector change."""
-        pass  # Model is read directly from combobox when sending
+        if not hasattr(self, 'model'):
+            return
+
+        # Skip provider separator rows if selected accidentally.
+        text = (self.model.itemText(index) or "").strip()
+        data = self.model.itemData(index)
+        if text.startswith("──") or not isinstance(data, str) or not data or '(offline)' in text.lower():
+            for i in range(index + 1, self.model.count()):
+                next_data = self.model.itemData(i)
+                next_text = (self.model.itemText(i) or "").strip().lower()
+                if isinstance(next_data, str) and next_data and '(offline)' not in next_text:
+                    self.model.setCurrentIndex(i)
+                    return
+            self.model.setCurrentIndex(0)
+            return
+
+        self._update_header_model_label()
 
     def _wire(self):
         self.side.new_chat.connect(self._new)

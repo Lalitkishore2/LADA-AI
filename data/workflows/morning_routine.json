@@ -1,7 +1,6 @@
 {
   "name": "morning_routine",
-  "created": "2026-03-28T13:52:21.546479",
-  "modified": "2026-03-28T19:00:00.000000",
+  "created": "2026-04-01T00:53:53.643163",
   "steps": [
     {
       "action": "set_volume",
@@ -26,7 +25,7 @@
     },
     {
       "action": "open_url",
-      "module": "browser_control",
+      "module": "browser_automation",
       "params": {
         "url": "https://gmail.com"
       }

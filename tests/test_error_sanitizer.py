@@ -210,7 +210,7 @@ class TestSanitizeError:
         assert result["success"] is False
         assert "app.py" not in result["error"]
         assert "admin" not in result["error"]
-        assert result["status_code"] == 400
+        assert result["status_code"] == 500
     
     def test_sanitize_includes_category(self):
         """Test that category is included"""
@@ -267,14 +267,14 @@ class TestLogErrorWithContext:
         """Test that context is redacted in logs"""
         error = ValueError("test error")
         context = {
-            "api_key": "sk-secret123",
+            "api_key": "sk-1234567890abcdefghijklmnopqrstuvwxyz1234567890AB",
             "user_id": "user_123"
         }
         
         log_error_with_context(error, context, severity=ErrorSeverity.MEDIUM)
         
         # Check that API key is redacted
-        assert "sk-secret123" not in caplog.text
+        assert "sk-1234567890abcdefghijklmnopqrstuvwxyz1234567890AB" not in caplog.text
         assert "[API_KEY_REDACTED]" in caplog.text or "user_123" in caplog.text
 
 

@@ -1,0 +1,47 @@
+name: Remote Security Contract Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "modules/api/routers/**"
+      - "modules/remote_audit.py"
+      - "tests/test_remote_app_router.py"
+      - "tests/test_api_contract_auth_chat_ws.py"
+      - ".github/workflows/remote-security-contract-gate.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "modules/api/routers/**"
+      - "modules/remote_audit.py"
+      - "tests/test_remote_app_router.py"
+      - "tests/test_api_contract_auth_chat_ws.py"
+      - ".github/workflows/remote-security-contract-gate.yml"
+
+jobs:
+  remote-security-gate:
+    name: Remote Security and API Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest fastapi "pydantic>=2,<3" starlette uvicorn httpx
+
+      - name: Run remote security and contract tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest tests/test_remote_app_router.py tests/test_api_contract_auth_chat_ws.py -q -o "addopts="

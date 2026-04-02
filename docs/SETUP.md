@@ -287,8 +287,15 @@ Access LADA from anywhere on the internet — free, no port forwarding, automati
 
 4. **Enable in LADA** — in `.env`:
    ```env
+   LADA_ROLLOUT_STAGE=canary
    LADA_TAILSCALE_FUNNEL=true
    ```
+
+   Rollout stages:
+   - `local`: local only
+   - `internal`: LAN sharing
+   - `canary`: limited public testing
+   - `public`: full public exposure
 
 5. **Start LADA WebUI**:
    ```powershell
@@ -301,6 +308,12 @@ Access LADA from anywhere on the internet — free, no port forwarding, automati
    ```
 
 This URL is permanent — it never changes. Open it from your phone, tablet, any device. Password-protected via `LADA_WEB_PASSWORD`.
+
+Optional readiness check (after API starts):
+
+```powershell
+curl "http://localhost:5000/rollout/status?deep_check=true"
+```
 
 ---
 

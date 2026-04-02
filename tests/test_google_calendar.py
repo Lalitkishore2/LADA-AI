@@ -53,7 +53,7 @@ class TestGoogleCalendar:
 
         gc = GoogleCalendar()
         assert gc.credentials_path == Path("config/credentials.json")
-        assert gc.token_path == Path("config/calendar_token.pickle")
+        assert gc.token_path == Path("config/calendar_token.json")
         assert gc.service is None
         assert gc.initialized is False
 

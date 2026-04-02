@@ -25,7 +25,7 @@ class TokenBucket:
         self.rpd = requests_per_day
         self._minute_window: deque = deque()
         self._day_window: deque = deque()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def acquire(self) -> Tuple[bool, float]:
         """
@@ -40,6 +40,11 @@ class TokenBucket:
                 self._minute_window.popleft()
             while self._day_window and now - self._day_window[0] >= 86400:
                 self._day_window.popleft()
+
+            if self.rpm <= 0:
+                return False, 60.0
+            if self.rpd <= 0:
+                return False, 86400.0
 
             # Check per-minute limit
             if len(self._minute_window) >= self.rpm:
@@ -96,24 +101,32 @@ class CircuitBreaker:
         self.backoff_seconds = backoff_seconds
         self._failures = 0
         self._opened_at: Optional[float] = None
-        self._lock = threading.Lock()
+        self._half_open_probe_in_progress = False
+        self._lock = threading.RLock()
 
     def record_success(self):
         """Reset failure count and close the circuit."""
         with self._lock:
             self._failures = 0
             self._opened_at = None
+            self._half_open_probe_in_progress = False
 
     def record_failure(self):
         """Increment failure count; open circuit if threshold reached."""
         with self._lock:
             self._failures += 1
+            self._half_open_probe_in_progress = False
             if self._failures >= self.threshold:
                 self._opened_at = time.monotonic()
                 logger.warning(
                     f"Circuit breaker opened after {self._failures} failures "
                     f"(backoff: {self.backoff_seconds}s)"
                 )
+
+    def release_probe(self):
+        """Release an in-flight HALF_OPEN probe when request never reached provider."""
+        with self._lock:
+            self._half_open_probe_in_progress = False
 
     def is_open(self) -> bool:
         """
@@ -127,7 +140,10 @@ class CircuitBreaker:
             elapsed = time.monotonic() - self._opened_at
             if elapsed < self.backoff_seconds:
                 return True   # OPEN — skip this provider
-            # Backoff expired: transition to HALF_OPEN (let one probe through)
+            # Backoff expired: HALF_OPEN allows a single probe at a time.
+            if self._half_open_probe_in_progress:
+                return True
+            self._half_open_probe_in_progress = True
             return False
 
     @property
@@ -154,6 +170,7 @@ class CircuitBreaker:
             "threshold": self.threshold,
             "backoff_seconds": self.backoff_seconds,
             "backoff_remaining": round(remaining, 1),
+            "probe_in_progress": self._half_open_probe_in_progress,
         }
 
 
@@ -169,7 +186,7 @@ class ProviderRateLimiter:
     def __init__(self):
         self._buckets: Dict[str, TokenBucket] = {}
         self._breakers: Dict[str, CircuitBreaker] = {}
-        self._registry_lock = threading.Lock()
+        self._registry_lock = threading.RLock()
 
     @classmethod
     def get_instance(cls) -> 'ProviderRateLimiter':
@@ -228,6 +245,8 @@ class ProviderRateLimiter:
         # Check rate bucket
         allowed, retry_after = self._buckets[provider_id].acquire()
         if not allowed:
+            # The probe did not reach provider execution; release HALF_OPEN lock.
+            self._breakers[provider_id].release_probe()
             logger.debug(
                 f"Rate limit hit for {provider_id} — retry after {retry_after:.1f}s"
             )

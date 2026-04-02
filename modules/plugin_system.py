@@ -12,17 +12,24 @@ Features:
 """
 
 import os
+import re
 import time
 import sys
+import asyncio
+import inspect
+import threading
 import importlib
 import logging
 import json
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Tuple
 from dataclasses import dataclass, field
 from pathlib import Path
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_LADA_RUNTIME_VERSION = "8.0.0"
+DEFAULT_PLUGIN_API_VERSION = "1"
 
 # Try to import YAML; fall back to JSON manifests
 try:
@@ -124,12 +131,15 @@ class PluginManifest:
     # Each capability: {'intent': str, 'keywords': List[str], 'handler': str}
     dependencies: List[str] = field(default_factory=list)  # pip packages
     permissions: List[str] = field(default_factory=list)  # Required permissions
+    plugin_api_version: str = DEFAULT_PLUGIN_API_VERSION
     min_lada_version: str = ""
+    max_lada_version: str = ""
     enabled: bool = True
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'PluginManifest':
         """Create manifest from dictionary (parsed YAML/JSON)."""
+        plugin_api_version = data.get('plugin_api_version', data.get('api_version', DEFAULT_PLUGIN_API_VERSION))
         return cls(
             name=data.get('name', 'unnamed'),
             version=data.get('version', '1.0.0'),
@@ -140,7 +150,9 @@ class PluginManifest:
             capabilities=data.get('capabilities', []),
             dependencies=data.get('dependencies', []),
             permissions=data.get('permissions', []),
+            plugin_api_version=str(plugin_api_version or DEFAULT_PLUGIN_API_VERSION),
             min_lada_version=data.get('min_lada_version', ''),
+            max_lada_version=data.get('max_lada_version', ''),
             enabled=data.get('enabled', True),
         )
 
@@ -156,7 +168,9 @@ class PluginManifest:
             'capabilities': self.capabilities,
             'dependencies': self.dependencies,
             'permissions': self.permissions,
+            'plugin_api_version': self.plugin_api_version,
             'min_lada_version': self.min_lada_version,
+            'max_lada_version': self.max_lada_version,
             'enabled': self.enabled,
         }
 
@@ -186,7 +200,7 @@ class PluginRegistry:
         ...
     """
 
-    MANIFEST_FILES = ['plugin.yaml', 'plugin.yml', 'plugin.json']
+    MANIFEST_FILES = ['plugin.yaml', 'plugin.yml', 'plugin.json', 'SKILL.md']
 
     def __init__(self, plugins_dir: Optional[str] = None):
         """
@@ -227,6 +241,12 @@ class PluginRegistry:
                 continue
 
             manifest = self._load_manifest(item)
+            if manifest is None:
+                # OpenClaw SKILL.md compatibility: support custom *.skill.md naming too.
+                skill_candidates = sorted(item.glob('*.skill.md'))
+                if skill_candidates:
+                    manifest = self._load_skill_manifest(skill_candidates[0], item)
+
             if manifest:
                 self.plugins[manifest.name] = LoadedPlugin(
                     manifest=manifest,
@@ -245,6 +265,9 @@ class PluginRegistry:
             manifest_path = plugin_dir / manifest_file
             if manifest_path.exists():
                 try:
+                    if manifest_file.lower().endswith('.md'):
+                        return self._load_skill_manifest(manifest_path, plugin_dir)
+
                     with open(manifest_path, 'r', encoding='utf-8') as f:
                         if manifest_file.endswith('.json'):
                             data = json.load(f)
@@ -259,6 +282,95 @@ class PluginRegistry:
                     logger.error(f"[PluginSystem] Error loading manifest {manifest_path}: {e}")
 
         return None
+
+    def _load_skill_manifest(self, skill_path: Path, plugin_dir: Path) -> Optional[PluginManifest]:
+        """Parse OpenClaw-style SKILL.md and adapt it to PluginManifest."""
+        try:
+            content = skill_path.read_text(encoding='utf-8')
+
+            fm_match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+            if not fm_match:
+                logger.warning(f"[PluginSystem] SKILL.md frontmatter missing: {skill_path}")
+                return None
+
+            fm_text = fm_match.group(1)
+            frontmatter: Dict[str, Any]
+            if YAML_OK:
+                frontmatter = yaml.safe_load(fm_text) or {}
+            else:
+                # Fallback parser when PyYAML is unavailable.
+                frontmatter = {}
+                for line in fm_text.splitlines():
+                    line = line.strip()
+                    if not line or ':' not in line:
+                        continue
+                    key, value = line.split(':', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if value.startswith('[') and value.endswith(']'):
+                        try:
+                            frontmatter[key] = json.loads(value.replace("'", '"'))
+                        except Exception:
+                            frontmatter[key] = [value]
+                    else:
+                        frontmatter[key] = value
+
+            body = content[fm_match.end():]
+
+            desc_match = re.search(r'^#[^\n]+\n+([^\n#]+)', body, re.MULTILINE)
+            description = desc_match.group(1).strip() if desc_match else ""
+
+            actions = []
+            action_pattern = r'^###\s+([A-Za-z_][\w]*)\(([^)]*)\)\s*\n([^\n#]*)'
+            for match in re.finditer(action_pattern, body, re.MULTILINE):
+                action_name = match.group(1).strip()
+                action_desc = match.group(3).strip()
+                actions.append((action_name, action_desc))
+
+            triggers_raw = frontmatter.get('triggers', [])
+            if isinstance(triggers_raw, str):
+                triggers = [triggers_raw]
+            elif isinstance(triggers_raw, list):
+                triggers = [str(t) for t in triggers_raw]
+            else:
+                triggers = []
+
+            capabilities = []
+            for action_name, action_desc in actions:
+                action_keywords = list(triggers) if triggers else [action_name.replace('_', ' ')]
+                capabilities.append({
+                    'intent': action_name,
+                    'keywords': action_keywords,
+                    'handler': action_name,
+                    'description': action_desc,
+                })
+
+            # Choose the most likely python entry point for SKILL handlers.
+            entry_point = 'skill.py'
+            if not (plugin_dir / entry_point).exists():
+                if (plugin_dir / 'plugin.py').exists():
+                    entry_point = 'plugin.py'
+                elif (plugin_dir / 'main.py').exists():
+                    entry_point = 'main.py'
+
+            return PluginManifest(
+                name=str(frontmatter.get('name', plugin_dir.name)),
+                version=str(frontmatter.get('version', '1.0.0')),
+                description=description or str(frontmatter.get('description', '')),
+                author=str(frontmatter.get('author', 'unknown')),
+                entry_point=entry_point,
+                class_name=str(frontmatter.get('class_name', '')),
+                capabilities=capabilities,
+                dependencies=list(frontmatter.get('dependencies', [])) if isinstance(frontmatter.get('dependencies', []), list) else [],
+                permissions=list(frontmatter.get('permissions', [])) if isinstance(frontmatter.get('permissions', []), list) else [],
+                plugin_api_version=str(frontmatter.get('plugin_api_version', frontmatter.get('api_version', DEFAULT_PLUGIN_API_VERSION))),
+                min_lada_version=str(frontmatter.get('min_lada_version', '')),
+                max_lada_version=str(frontmatter.get('max_lada_version', '')),
+                enabled=bool(frontmatter.get('enabled', True)),
+            )
+        except Exception as e:
+            logger.error(f"[PluginSystem] Failed to parse SKILL manifest {skill_path}: {e}")
+            return None
 
     def load_plugin(self, name: str) -> bool:
         """
@@ -278,6 +390,13 @@ class PluginRegistry:
             return False
 
         try:
+            compatible, incompat_reason = self._check_lada_compatibility(manifest)
+            if not compatible:
+                plugin.state = PluginState.ERROR
+                plugin.error = incompat_reason
+                logger.warning(f"[PluginSystem] Skipping incompatible plugin {name}: {incompat_reason}")
+                return False
+
             # Check dependencies
             if not self._check_dependencies(manifest.dependencies):
                 plugin.state = PluginState.ERROR
@@ -305,22 +424,30 @@ class PluginRegistry:
 
             plugin.module = module
 
-            # Instantiate the main class if specified
+            # Instantiate class-based plugin if specified.
             if manifest.class_name and hasattr(module, manifest.class_name):
                 cls = getattr(module, manifest.class_name)
                 plugin.instance = cls()
 
-                # Register capability handlers
-                for cap in manifest.capabilities:
-                    handler_name = cap.get('handler', '')
-                    intent = cap.get('intent', '')
-                    if handler_name and hasattr(plugin.instance, handler_name):
-                        plugin.handlers[intent] = getattr(plugin.instance, handler_name)
-                        # Register keywords for intent routing
-                        for keyword in cap.get('keywords', []):
-                            kw = keyword.lower()
-                            if kw not in self.capability_map:
-                                self.capability_map[kw] = []
+            # Register capability handlers from class instance or module-level functions.
+            for cap in manifest.capabilities:
+                handler_name = cap.get('handler', '')
+                intent = cap.get('intent', '')
+                handler_fn = None
+
+                if plugin.instance and handler_name and hasattr(plugin.instance, handler_name):
+                    handler_fn = getattr(plugin.instance, handler_name)
+                elif handler_name and hasattr(module, handler_name):
+                    handler_fn = getattr(module, handler_name)
+
+                if handler_fn:
+                    plugin.handlers[intent] = handler_fn
+
+                    for keyword in cap.get('keywords', []):
+                        kw = str(keyword).lower()
+                        if kw not in self.capability_map:
+                            self.capability_map[kw] = []
+                        if name not in self.capability_map[kw]:
                             self.capability_map[kw].append(name)
 
             plugin.state = PluginState.LOADED
@@ -450,11 +577,54 @@ class PluginRegistry:
         pname, intent, handler = match
         try:
             logger.info(f"[PluginSystem] Executing {pname}.{intent}")
-            result = handler(query)
+            result = self._invoke_handler(handler, query)
+
+            if inspect.isawaitable(result):
+                try:
+                    result = asyncio.run(result)
+                except RuntimeError:
+                    out = {}
+                    err = {}
+
+                    def _run_async():
+                        try:
+                            out['result'] = asyncio.run(result)
+                        except Exception as ex:
+                            err['error'] = ex
+
+                    t = threading.Thread(target=_run_async, daemon=True)
+                    t.start()
+                    t.join(timeout=30)
+                    if 'error' in err:
+                        raise err['error']
+                    result = out.get('result')
+
             return str(result) if result is not None else None
         except Exception as e:
             logger.error(f"[PluginSystem] Handler error ({pname}.{intent}): {e}")
             return None
+
+    def _invoke_handler(self, handler: Callable, query: str) -> Any:
+        """Invoke plugin handler with flexible signatures for compatibility."""
+        try:
+            sig = inspect.signature(handler)
+            params = list(sig.parameters.values())
+            if not params:
+                return handler()
+
+            if len(params) == 1:
+                p = params[0]
+                if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                    return handler(query)
+                return handler(query=query)
+
+            return handler(query=query)
+        except TypeError:
+            # Fallback for handlers with strict signatures.
+            try:
+                return handler(query)
+            except TypeError:
+                return handler()
 
     def get_plugin_list(self) -> List[Dict[str, Any]]:
         """Get plugin list with status for UI display."""
@@ -466,11 +636,89 @@ class PluginRegistry:
                 'author': p.manifest.author,
                 'state': p.state.value,
                 'error': p.error,
+                'plugin_api_version': p.manifest.plugin_api_version,
+                'min_lada_version': p.manifest.min_lada_version,
+                'max_lada_version': p.manifest.max_lada_version,
                 'capabilities': len(p.manifest.capabilities),
                 'handlers': len(p.handlers),
             }
             for p in self.plugins.values()
         ]
+
+    def _check_lada_compatibility(self, manifest: PluginManifest) -> Tuple[bool, str]:
+        """Validate runtime and plugin API compatibility for a manifest."""
+        runtime_version = os.getenv('LADA_VERSION', DEFAULT_LADA_RUNTIME_VERSION)
+        plugin_api_version = os.getenv('LADA_PLUGIN_API_VERSION', DEFAULT_PLUGIN_API_VERSION)
+
+        required_api_major = self._parse_api_major(manifest.plugin_api_version)
+        runtime_api_major = self._parse_api_major(plugin_api_version)
+        if required_api_major is None:
+            return False, f"Invalid plugin_api_version '{manifest.plugin_api_version}'"
+        if runtime_api_major is None:
+            return False, f"Invalid runtime plugin API version '{plugin_api_version}'"
+        if required_api_major != runtime_api_major:
+            return (
+                False,
+                (
+                    f"Plugin API mismatch: requires API {required_api_major}, "
+                    f"runtime is API {runtime_api_major}"
+                ),
+            )
+
+        runtime_semver = self._parse_semver(runtime_version)
+        if runtime_semver is None:
+            return False, f"Invalid runtime version '{runtime_version}'"
+
+        if manifest.min_lada_version:
+            min_semver = self._parse_semver(manifest.min_lada_version)
+            if min_semver is None:
+                return False, f"Invalid min_lada_version '{manifest.min_lada_version}'"
+            if runtime_semver < min_semver:
+                return (
+                    False,
+                    (
+                        f"Requires LADA >= {manifest.min_lada_version}, "
+                        f"current runtime is {runtime_version}"
+                    ),
+                )
+
+        if manifest.max_lada_version:
+            max_semver = self._parse_semver(manifest.max_lada_version)
+            if max_semver is None:
+                return False, f"Invalid max_lada_version '{manifest.max_lada_version}'"
+            if runtime_semver > max_semver:
+                return (
+                    False,
+                    (
+                        f"Requires LADA <= {manifest.max_lada_version}, "
+                        f"current runtime is {runtime_version}"
+                    ),
+                )
+
+        return True, ""
+
+    def _parse_api_major(self, version: str) -> Optional[int]:
+        """Parse plugin API version into a major integer."""
+        raw = str(version or "").strip()
+        if not raw:
+            return int(DEFAULT_PLUGIN_API_VERSION)
+
+        match = re.match(r'^v?(\d+)', raw)
+        if not match:
+            return None
+        return int(match.group(1))
+
+    def _parse_semver(self, version: str) -> Optional[Tuple[int, int, int]]:
+        """Parse semantic version string into comparable tuple."""
+        raw = str(version or "").strip()
+        match = re.match(r'^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?', raw)
+        if not match:
+            return None
+
+        major = int(match.group(1))
+        minor = int(match.group(2) or 0)
+        patch = int(match.group(3) or 0)
+        return (major, minor, patch)
 
     def _check_dependencies(self, dependencies: List[str]) -> bool:
         """Check if required pip packages are installed."""

@@ -2,11 +2,17 @@
 
 Technical reference for the internal design, data flows, and module interactions in LADA.
 
+Current canonical operational references:
+- `docs/WORKFLOW.md`
+- `docs/API_WEBSOCKET_REFERENCE.md`
+- `docs/VALIDATION_PLAYBOOK.md`
+- `docs/CLEANUP_PLAN.md`
+
 ---
 
 ## System Overview
 
-LADA is structured as a layered desktop application with multiple interface modes (GUI, voice, text, web dashboard, Next.js frontend, 9 messaging connectors) sharing a common AI routing engine, command processor, and memory system. AI queries pass through a two-layer routing system: a config-driven Provider Manager (Phase 2) with tier-based model selection across 35 models and 12 providers, falling back to the legacy 5-backend sequential failover chain. Per-provider rate limiting (TokenBucket + CircuitBreaker) protects against API quota exhaustion.
+LADA is structured as a layered desktop application with multiple interface modes (GUI, voice, text, web dashboard, Next.js frontend, 9 messaging connectors) sharing a common AI routing engine, command processor, and memory system. AI queries pass through the ProviderManager routing system with tier-based model selection and fallback. Per-provider rate limiting (TokenBucket + CircuitBreaker) protects against API quota exhaustion.
 
 ```
                         User
@@ -246,7 +252,7 @@ process(command)
 | Module | Import Flag | Purpose |
 |--------|------------|---------|
 | SystemController | SYSTEM_OK | Volume, brightness, WiFi, power |
-| BrowserControl | BROWSER_OK | Open URLs, search |
+| CometBrowserAgent | BROWSER_OK | Browser automation and web actions |
 | FileSystemController | FILE_OK | File search, create, move |
 | NLUEngine | NLU_OK | Intent + entity extraction (spaCy) |
 | SafetyController | SAFETY_OK | Confirmation gates, undo |
@@ -262,7 +268,6 @@ process(command)
 | TaskOrchestrator | TASK_ORCHESTRATOR_OK | Parallel task execution |
 | PatternLearner | PATTERN_LEARNER_OK | User behavior learning |
 | ProactiveAgent | PROACTIVE_AGENT_OK | Background alerts |
-| PermissionSystem | PERMISSION_SYSTEM_OK | Permission management |
 | FlightAgent | FLIGHT_AGENT_OK | Flight booking |
 | HotelAgent | HOTEL_AGENT_OK | Hotel search |
 | ProductAgent | PRODUCT_AGENT_OK | Product research |
@@ -536,8 +541,8 @@ All modules live in `modules/` and follow a consistent pattern:
 #### Browser & Web (6 modules)
 - `web_search.py` -- DuckDuckGo search with result formatting
 - `browser_automation.py` -- Selenium-based browser control
-- `browser_control.py` -- Basic browser open/search operations
 - `browser_tab_controller.py` -- Multi-tab management
+- `multi_tab_orchestrator.py` -- Multi-tab orchestration
 - `page_vision.py` -- Page screenshot + OCR analysis
 - `page_summarizer.py` -- Webpage content summarization
 
@@ -551,7 +556,7 @@ All modules live in `modules/` and follow a consistent pattern:
 
 #### Task & Workflow (6 modules)
 - `task_orchestrator.py` -- Parallel execution, DAG scheduling
-- `task_scheduler.py` -- APScheduler cron-style scheduling
+- `event_hooks.py` -- Event dispatch and automation hooks
 - `task_automation.py` -- Task choreography
 - `workflow_engine.py` -- Workflow definition and execution
 - `workflow_pipelines.py` -- Pipeline composition with approval gates
@@ -567,7 +572,7 @@ All modules live in `modules/` and follow a consistent pattern:
 - `youtube_summarizer.py` -- YouTube transcript summarization
 
 #### Memory & Learning (4 modules)
-- `memory_system.py` -- Conversation history storage
+- `lada_memory.py` -- Conversation history storage
 - `vector_memory.py` -- Semantic search with ChromaDB embeddings
 - `mcp_client.py` -- Model Context Protocol client
 - `pattern_learning.py` -- User behavior pattern learning
@@ -583,7 +588,6 @@ All modules live in `modules/` and follow a consistent pattern:
 #### Safety & Monitoring (6 modules)
 - `safety_controller.py` -- Action validation + undo stack
 - `safety_gate.py` -- Confirmation gates for dangerous actions
-- `permission_system.py` -- Permission levels and risk assessment
 - `health_monitor.py` -- CPU/RAM/disk monitoring
 - `heartbeat_system.py` -- Proactive periodic check-ins
 - `error_reporter.py` -- Error logging and reporting

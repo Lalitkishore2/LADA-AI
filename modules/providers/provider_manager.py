@@ -363,37 +363,67 @@ class ProviderManager:
                 provider="none", error="No providers available"
             )
 
-        # Query with retry
-        if self._rate_limiter:
-            allowed, reason = self._rate_limiter.check(provider.provider_id)
-            if not allowed:
-                # Try next available provider
-                for fallback in self.get_available_providers():
-                    if fallback.provider_id == provider.provider_id:
-                        continue
-                    fb_allowed, _ = self._rate_limiter.check(fallback.provider_id)
-                    if fb_allowed:
-                        provider = fallback
-                        if self.model_registry:
-                            fb_models = self.model_registry.get_models_by_provider(provider.provider_id)
-                            model_id = fb_models[0].id if fb_models else model_id
-                        break
+        # Query with retry + provider fallback rotation for non-stream requests.
+        providers_to_try = [provider]
+        for fallback in self.get_available_providers():
+            if fallback.provider_id != provider.provider_id and fallback not in providers_to_try:
+                providers_to_try.append(fallback)
+
+        response = None
+        providers_tried: List[str] = []
+        rate_limited: Dict[str, str] = {}
+        last_failed_response = None
+
+        for candidate in providers_to_try:
+            providers_tried.append(candidate.provider_id)
+
+            target_model = model_id
+            if candidate.provider_id != provider.provider_id and self.model_registry:
+                fallback_models = self.model_registry.get_models_by_provider(candidate.provider_id)
+                target_model = fallback_models[0].id if fallback_models else target_model
+
+            if self._rate_limiter:
+                allowed, reason = self._rate_limiter.check(candidate.provider_id)
+                if not allowed:
+                    rate_limited[candidate.provider_id] = reason or "rate_limited"
+                    continue
+
+            candidate_response = candidate.complete_with_retry(
+                messages, target_model, temperature, max_tokens, **kwargs
+            )
+
+            if self._rate_limiter:
+                if candidate_response.success:
+                    self._rate_limiter.record_success(candidate.provider_id)
                 else:
-                    return ProviderResponse(
-                        content=f"Rate limited ({reason}). All providers at capacity.",
-                        provider=provider.provider_id, error=reason
-                    )
+                    self._rate_limiter.record_failure(candidate.provider_id)
 
-        response = provider.complete_with_retry(
-            messages, model_id, temperature, max_tokens, **kwargs
-        )
+            if candidate_response.success:
+                response = candidate_response
+                provider = candidate
+                model_id = target_model
+                break
 
-        # Record rate limiter outcome
-        if self._rate_limiter:
-            if response.success:
-                self._rate_limiter.record_success(provider.provider_id)
+            last_failed_response = candidate_response
+
+        if response is None:
+            if last_failed_response is not None:
+                if not last_failed_response.provider:
+                    last_failed_response.provider = provider.provider_id
+                last_failed_response.metadata.setdefault("providers_tried", providers_tried)
+                if rate_limited:
+                    last_failed_response.metadata.setdefault("rate_limited", rate_limited)
+                response = last_failed_response
             else:
-                self._rate_limiter.record_failure(provider.provider_id)
+                response = ProviderResponse(
+                    content="",
+                    provider=provider.provider_id,
+                    error="All providers unavailable or rate limited.",
+                    metadata={
+                        "providers_tried": providers_tried,
+                        "rate_limited": rate_limited,
+                    },
+                )
 
         # Track cost
         if self.cost_tracker and response.success:

@@ -78,7 +78,7 @@ export default function ModelSelector({
       <select
         value={selectedModel}
         onChange={(e) => onSelect(e.target.value)}
-        className="appearance-none w-full bg-gray-800 text-gray-200 text-sm border border-gray-700 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 hover:border-gray-600 transition-colors cursor-pointer"
+        className="appearance-none w-full bg-[var(--surface-2)] text-[var(--text)] text-sm border border-[var(--border-color)] rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/40 focus:border-[var(--accent)]/60 hover:border-[var(--accent)]/40 transition-colors cursor-pointer"
       >
         {/* Auto option always first */}
         <option value="auto">Auto (Best Available)</option>
@@ -128,7 +128,7 @@ export default function ModelSelector({
       {/* Custom dropdown arrow */}
       <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2">
         <svg
-          className="h-4 w-4 text-gray-400"
+          className="h-4 w-4 text-[var(--text-dim)]"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"

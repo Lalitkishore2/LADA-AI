@@ -24,6 +24,15 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
+HANDLER_CONTRACT_VERSION = os.getenv("LADA_TOOL_HANDLER_CONTRACT_VERSION", "1.0")
+
+
+def _major_from_version(version_text: str) -> int:
+    token = str(version_text or "").strip().split(".")[0]
+    try:
+        return int(token)
+    except (TypeError, ValueError):
+        return 0
 
 # Try imports
 try:
@@ -92,6 +101,81 @@ def _handle_screenshot() -> ToolResult:
     except Exception as e:
         return ToolResult(success=False, output="", error=f"Screenshot failed: {e}")
 
+def _handle_take_camera_photo() -> ToolResult:
+    try:
+        import cv2
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            return ToolResult(success=False, output="", error="No camera device found or access denied")
+        
+        # Discard couple of frames to let camera auto-adjust exposure
+        for _ in range(5):
+            cap.read()
+            
+        ret, frame = cap.read()
+        cap.release()
+        
+        if not ret:
+            return ToolResult(success=False, output="", error="Failed to capture image from camera")
+            
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = Path.home() / "Pictures" / "Camera Roll"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        filepath = save_dir / f"photo_{ts}.png"
+        cv2.imwrite(str(filepath), frame)
+        return ToolResult(success=True, output=f"Photo saved to {filepath}", data={"path": str(filepath)})
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Camera capture failed: {e}")
+
+def _handle_send_notification(title: str = "LADA", message: str = "") -> ToolResult:
+    if not message:
+        return ToolResult(success=False, output="", error="No message provided")
+    try:
+        import subprocess
+        # Use PowerShell to show a Toast Notification
+        ps_script = f"""
+        [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+        $objNotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+        $objNotifyIcon.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("shell32.dll")
+        $objNotifyIcon.BalloonTipTitle = "{title.replace('"', '')}"
+        $objNotifyIcon.BalloonTipText = "{message.replace('"', '')}"
+        $objNotifyIcon.Visible = $True
+        $objNotifyIcon.ShowBalloonTip(10000)
+        """
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], creationflags=subprocess.CREATE_NO_WINDOW)
+        return ToolResult(success=True, output=f"Notification sent: '{title}: {message}'")
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Failed to send notification: {e}")
+
+def _handle_record_screen(duration_seconds: int = 5) -> ToolResult:
+    try:
+        import pyautogui
+        import cv2
+        import numpy as np
+        
+        duration = min(max(1, int(duration_seconds)), 30)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = Path.home() / "Videos" / "Captures"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        filepath = save_dir / f"screen_record_{ts}.avi"
+        
+        # Get screen size
+        screen_size = pyautogui.size()
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        out = cv2.VideoWriter(str(filepath), fourcc, 10.0, (screen_size.width, screen_size.height))
+        
+        frames = duration * 10
+        for _ in range(frames):
+            img = pyautogui.screenshot()
+            frame = np.array(img)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            out.write(frame)
+            time.sleep(0.1)  # Approximate 10 fps target
+            
+        out.release()
+        return ToolResult(success=True, output=f"Recorded {duration}s of screen to {filepath}", data={"path": str(filepath)})
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Screen recording failed: {e}")
 
 def _handle_open_app(app_name: str = "") -> ToolResult:
     if not app_name:
@@ -1156,6 +1240,104 @@ def _handle_database_query(database: str = "", query: str = "") -> ToolResult:
         return ToolResult(success=False, output="", error=str(e))
 
 
+def _get_stealth_browser():
+    """Lazily load stealth browser singleton to avoid hard startup dependency."""
+    from modules.stealth_browser import get_stealth_browser
+    return get_stealth_browser()
+
+
+def _handle_stealth_navigate(url: str = "") -> ToolResult:
+    if not url:
+        return ToolResult(success=False, output="", error="URL is required")
+
+    try:
+        browser = _get_stealth_browser()
+        result = browser.navigate(url)
+        if result.get('success'):
+            title = result.get('title', '')
+            opened_url = result.get('url', url)
+            msg = f"Stealth navigation successful: {opened_url}"
+            if title:
+                msg += f"\nTitle: {title}"
+            return ToolResult(success=True, output=msg, data=result)
+        return ToolResult(success=False, output="", error=result.get('error', 'Stealth navigation failed'))
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Stealth navigation failed: {e}")
+
+
+def _handle_stealth_click(selector: str = "", by: str = "css") -> ToolResult:
+    if not selector:
+        return ToolResult(success=False, output="", error="Selector is required")
+
+    try:
+        browser = _get_stealth_browser()
+        result = browser.click(selector=selector, by=by)
+        if result.get('success'):
+            return ToolResult(success=True, output=f"Stealth click successful on {selector}", data=result)
+        return ToolResult(success=False, output="", error=result.get('error', 'Stealth click failed'))
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Stealth click failed: {e}")
+
+
+def _handle_stealth_type(selector: str = "", text: str = "", by: str = "css", clear_first: bool = True) -> ToolResult:
+    if not selector:
+        return ToolResult(success=False, output="", error="Selector is required")
+    if text is None:
+        return ToolResult(success=False, output="", error="Text is required")
+
+    try:
+        browser = _get_stealth_browser()
+        result = browser.type_text(selector=selector, text=text, by=by, clear_first=clear_first)
+        if result.get('success'):
+            return ToolResult(success=True, output=f"Stealth typed into {selector}", data=result)
+        return ToolResult(success=False, output="", error=result.get('error', 'Stealth type failed'))
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Stealth type failed: {e}")
+
+
+def _handle_stealth_scroll(direction: str = "down", amount: int = 300) -> ToolResult:
+    try:
+        browser = _get_stealth_browser()
+        result = browser.scroll(direction=direction, amount=amount)
+        if result.get('success'):
+            return ToolResult(success=True, output=f"Stealth scrolled {direction} by {amount}px", data=result)
+        return ToolResult(success=False, output="", error=result.get('error', 'Stealth scroll failed'))
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Stealth scroll failed: {e}")
+
+
+def _handle_stealth_extract(selector: str = "") -> ToolResult:
+    try:
+        browser = _get_stealth_browser()
+        if selector:
+            text = browser.execute_js(
+                "const el=document.querySelector(arguments[0]); return el ? el.innerText : null;",
+                selector,
+            )
+            if text is None:
+                return ToolResult(success=False, output="", error=f"Element not found for selector: {selector}")
+            content = str(text)
+            return ToolResult(success=True, output=content[:4000], data={"selector": selector, "length": len(content)})
+
+        result = browser.get_page_content()
+        if not result.get('success'):
+            return ToolResult(success=False, output="", error=result.get('error', 'Stealth extract failed'))
+
+        text = str(result.get('text', ''))
+        preview = text[:4000] if text else ""
+        return ToolResult(
+            success=True,
+            output=preview,
+            data={
+                "url": result.get('url', ''),
+                "title": result.get('title', ''),
+                "length": len(text),
+            },
+        )
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Stealth extract failed: {e}")
+
+
 # ============================================================
 # Main wiring function
 # ============================================================
@@ -1165,12 +1347,25 @@ def wire_tool_handlers(registry: ToolRegistry) -> int:
     Wire handler functions to all registered tools.
     Returns count of successfully wired handlers.
     """
+    registry_major = getattr(registry, "contract_major", 1)
+    handler_major = _major_from_version(HANDLER_CONTRACT_VERSION)
+    if registry_major != handler_major:
+        logger.error(
+            "[ToolHandlers] Contract mismatch: registry major=%s, handler major=%s. Skipping handler wiring.",
+            registry_major,
+            handler_major,
+        )
+        return 0
+
     handler_map = {
         # Existing tools
         'set_volume': _handle_set_volume,
         'mute': _handle_mute,
         'set_brightness': _handle_set_brightness,
         'screenshot': _handle_screenshot,
+        'take_camera_photo': _handle_take_camera_photo,
+        'send_notification': _handle_send_notification,
+        'record_screen': _handle_record_screen,
         'open_app': _handle_open_app,
         'close_app': _handle_close_app,
         'shutdown': _handle_shutdown,
@@ -1208,6 +1403,12 @@ def wire_tool_handlers(registry: ToolRegistry) -> int:
         'git': _handle_git,
         'http_request': _handle_http_request,
         'database_query': _handle_database_query,
+        # Stealth browser tools
+        'stealth_navigate': _handle_stealth_navigate,
+        'stealth_click': _handle_stealth_click,
+        'stealth_type': _handle_stealth_type,
+        'stealth_scroll': _handle_stealth_scroll,
+        'stealth_extract': _handle_stealth_extract,
     }
 
     wired = 0

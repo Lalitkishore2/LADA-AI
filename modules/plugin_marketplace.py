@@ -449,10 +449,12 @@ class PluginMarketplace:
                 # Validate: must contain a manifest file
                 has_manifest = any(
                     (source_dir / mf).exists()
-                    for mf in ('plugin.yaml', 'plugin.yml', 'plugin.json')
+                    for mf in ('plugin.yaml', 'plugin.yml', 'plugin.json', 'SKILL.md')
                 )
                 if not has_manifest:
-                    logger.error("[Marketplace] Downloaded plugin has no manifest (plugin.yaml/json)")
+                    has_manifest = any(source_dir.glob('*.skill.md'))
+                if not has_manifest:
+                    logger.error("[Marketplace] Downloaded plugin has no manifest (plugin.yaml/json or SKILL.md)")
                     return False
 
                 # Move to destination
