@@ -1,6 +1,7 @@
 """Tests for secure remote control and file access endpoints in app router."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -71,6 +72,140 @@ def test_sessions_list_propagates_request_id_header():
     assert response.status_code == 200
     assert response.headers["x-request-id"] == request_id
     assert isinstance(response.json().get("sessions"), list)
+
+
+def test_sessions_new_rejects_invalid_name():
+    client = _build_client(_FakeState())
+
+    response = client.post("/sessions/new", json={"name": "../escape"})
+
+    assert response.status_code == 400
+    assert "Invalid session name" in str(response.json().get("detail", ""))
+
+
+def test_sessions_save_rejects_non_list_messages():
+    client = _build_client(_FakeState())
+
+    response = client.post(
+        "/sessions/save",
+        json={"name": "safe-session", "messages": {"role": "user", "content": "hi"}},
+    )
+
+    assert response.status_code == 400
+    assert "Messages must be a list" in str(response.json().get("detail", ""))
+
+
+def test_sessions_save_rejects_non_object_message_items():
+    client = _build_client(_FakeState())
+
+    response = client.post(
+        "/sessions/save",
+        json={"name": "safe-session", "messages": ["hello"]},
+    )
+
+    assert response.status_code == 400
+    assert "Each message must be an object" in str(response.json().get("detail", ""))
+
+
+def test_sessions_switch_rejects_corrupted_json():
+    client = _build_client(_FakeState())
+    session_name = "corrupted-session"
+    session_path = Path("data") / "sessions" / f"{session_name}.json"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text("{not valid json", encoding="utf-8")
+
+    try:
+        response = client.post("/sessions/switch", json={"name": session_name})
+        assert response.status_code == 400
+        assert "Session data is corrupted" in str(response.json().get("detail", ""))
+    finally:
+        if session_path.exists():
+            session_path.unlink()
+
+
+def test_sessions_switch_normalizes_non_list_messages():
+    client = _build_client(_FakeState())
+    session_name = "non-list-session"
+    session_path = Path("data") / "sessions" / f"{session_name}.json"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps({"session_name": session_name, "messages": {"bad": "shape"}}),
+        encoding="utf-8",
+    )
+
+    try:
+        response = client.post("/sessions/switch", json={"name": session_name})
+        assert response.status_code == 200
+        assert response.json()["messages"] == []
+    finally:
+        if session_path.exists():
+            session_path.unlink()
+
+
+def test_app_route_legacy_mode_serves_embedded_html(monkeypatch):
+    monkeypatch.setenv("LADA_WEB_UI_MODE", "legacy")
+
+    client = _build_client(_FakeState())
+    response = client.get("/app", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "location" not in response.headers
+
+
+def test_app_route_modern_mode_redirects(monkeypatch):
+    monkeypatch.setenv("LADA_WEB_UI_MODE", "modern")
+    monkeypatch.setenv("LADA_MODERN_WEB_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("LADA_MODERN_WEB_PATH", "/")
+
+    client = _build_client(_FakeState())
+    response = client.get("/app?from=test", follow_redirects=False)
+
+    assert response.status_code == 307
+    location = response.headers["location"]
+    assert location.startswith("http://127.0.0.1:3000/")
+    assert "from=test" in location
+
+
+def test_app_route_auto_mode_falls_back_when_modern_unreachable(monkeypatch):
+    monkeypatch.setenv("LADA_WEB_UI_MODE", "auto")
+    monkeypatch.setenv("LADA_MODERN_WEB_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("LADA_MODERN_WEB_PATH", "/")
+
+    def _fail_connection(*_args, **_kwargs):
+        raise OSError("frontend offline")
+
+    monkeypatch.setattr("modules.api.routers.app.socket.create_connection", _fail_connection)
+
+    client = _build_client(_FakeState())
+    response = client.get("/app", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "location" not in response.headers
+
+
+def test_app_route_auto_mode_redirects_when_modern_reachable(monkeypatch):
+    monkeypatch.setenv("LADA_WEB_UI_MODE", "auto")
+    monkeypatch.setenv("LADA_MODERN_WEB_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("LADA_MODERN_WEB_PATH", "/")
+
+    class _FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "modules.api.routers.app.socket.create_connection",
+        lambda *_args, **_kwargs: _FakeSocket(),
+    )
+
+    client = _build_client(_FakeState())
+    response = client.get("/app", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"].startswith("http://127.0.0.1:3000/")
 
 
 def test_rollout_status_normalizes_stage_and_reports_disabled_funnel(monkeypatch):

@@ -1,5 +1,6 @@
 """Tests for modules/google_calendar.py"""
 import sys
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -47,6 +48,14 @@ def mock_google_imports():
 
 class TestGoogleCalendar:
     """Tests for GoogleCalendar class"""
+
+    def test_source_compiles_without_invalid_escape_warnings(self):
+        source_path = Path("modules/google_calendar.py")
+        source = source_path.read_text(encoding="utf-8")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            compile(source, str(source_path), "exec")
 
     def test_init_default_paths(self, mock_google_imports):
         from modules.google_calendar import GoogleCalendar

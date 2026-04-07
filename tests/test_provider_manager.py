@@ -364,6 +364,194 @@ class TestStreamExecution:
                 chunks = list(manager.stream("test", model_id='gemini-2.0-flash'))
                 assert len(chunks) > 0
 
+    def test_stream_all_failures_include_provider_diagnostics(self, mock_model_registry):
+        """Final stream error chunk includes providers tried and per-provider errors."""
+        with patch('modules.providers.provider_manager.get_model_registry', return_value=mock_model_registry):
+            with patch('modules.providers.provider_manager.get_cost_tracker', return_value=None):
+                from modules.providers.provider_manager import ProviderManager
+                from modules.providers.base_provider import StreamChunk
+
+                manager = ProviderManager()
+                manager._rate_limiter = None
+
+                primary = Mock()
+                primary.provider_id = 'primary'
+                primary.name = 'Primary'
+                primary.ensure_available = Mock(return_value=True)
+                primary.config = Mock(priority=1)
+                primary.stream_complete = Mock(return_value=iter([
+                    StreamChunk(text='', done=False, source='primary', metadata={'error': 'primary failed'})
+                ]))
+
+                fallback = Mock()
+                fallback.provider_id = 'fallback'
+                fallback.name = 'Fallback'
+                fallback.ensure_available = Mock(return_value=True)
+                fallback.config = Mock(priority=2)
+                fallback.stream_complete = Mock(return_value=iter([
+                    StreamChunk(text='', done=False, source='fallback', metadata={'error': 'fallback failed'})
+                ]))
+
+                manager.providers['primary'] = primary
+                manager.providers['fallback'] = fallback
+
+                primary_model = Mock()
+                primary_model.provider = 'primary'
+                primary_model.id = 'primary-model'
+                primary_model.tier = 'fast'
+
+                fallback_model = Mock()
+                fallback_model.provider = 'fallback'
+                fallback_model.id = 'fallback-model'
+                fallback_model.tier = 'fast'
+
+                mock_model_registry.get_model = Mock(return_value=primary_model)
+                mock_model_registry.get_models_by_provider = Mock(
+                    side_effect=lambda pid: [primary_model] if pid == 'primary' else [fallback_model]
+                )
+
+                chunks = list(manager.stream('test prompt', model_id='primary-model'))
+
+                final_chunk = chunks[-1]
+                assert final_chunk.done is True
+                assert final_chunk.source == 'error'
+                assert final_chunk.metadata['providers_tried'] == ['primary', 'fallback']
+                assert final_chunk.metadata['provider_errors'] == {
+                    'primary': 'primary failed',
+                    'fallback': 'fallback failed',
+                }
+                assert final_chunk.metadata['rate_limited'] == {}
+
+    def test_stream_rate_limited_final_chunk_includes_rate_limited_map(self, mock_model_registry):
+        """Final stream error chunk includes providers skipped by rate limiting."""
+        with patch('modules.providers.provider_manager.get_model_registry', return_value=mock_model_registry):
+            with patch('modules.providers.provider_manager.get_cost_tracker', return_value=None):
+                from modules.providers.provider_manager import ProviderManager
+
+                class _AlwaysRateLimited:
+                    def check(self, provider_id):
+                        return False, 'rate_limited'
+
+                    def record_success(self, provider_id):
+                        return None
+
+                    def record_failure(self, provider_id):
+                        return None
+
+                manager = ProviderManager()
+                manager._rate_limiter = _AlwaysRateLimited()
+
+                primary = Mock()
+                primary.provider_id = 'primary'
+                primary.name = 'Primary'
+                primary.ensure_available = Mock(return_value=True)
+                primary.config = Mock(priority=1)
+                primary.stream_complete = Mock(return_value=iter(()))
+
+                fallback = Mock()
+                fallback.provider_id = 'fallback'
+                fallback.name = 'Fallback'
+                fallback.ensure_available = Mock(return_value=True)
+                fallback.config = Mock(priority=2)
+                fallback.stream_complete = Mock(return_value=iter(()))
+
+                manager.providers['primary'] = primary
+                manager.providers['fallback'] = fallback
+
+                primary_model = Mock()
+                primary_model.provider = 'primary'
+                primary_model.id = 'primary-model'
+
+                fallback_model = Mock()
+                fallback_model.provider = 'fallback'
+                fallback_model.id = 'fallback-model'
+
+                mock_model_registry.get_model = Mock(return_value=primary_model)
+                mock_model_registry.get_models_by_provider = Mock(
+                    side_effect=lambda pid: [primary_model] if pid == 'primary' else [fallback_model]
+                )
+
+                chunks = list(manager.stream('test prompt', model_id='primary-model'))
+
+                final_chunk = chunks[-1]
+                assert final_chunk.done is True
+                assert final_chunk.source == 'error'
+                assert final_chunk.metadata['providers_tried'] == ['primary', 'fallback']
+                assert final_chunk.metadata['provider_errors'] == {}
+                assert final_chunk.metadata['rate_limited'] == {
+                    'primary': 'rate_limited',
+                    'fallback': 'rate_limited',
+                }
+                primary.stream_complete.assert_not_called()
+                fallback.stream_complete.assert_not_called()
+
+    def test_stream_final_chunk_includes_mixed_error_and_rate_limit_metadata(self, mock_model_registry):
+        """Final stream chunk keeps provider errors and rate-limited providers together."""
+        with patch('modules.providers.provider_manager.get_model_registry', return_value=mock_model_registry):
+            with patch('modules.providers.provider_manager.get_cost_tracker', return_value=None):
+                from modules.providers.provider_manager import ProviderManager
+                from modules.providers.base_provider import StreamChunk
+
+                class _PrimaryOnlyAllowedRateLimiter:
+                    def check(self, provider_id):
+                        if provider_id == 'primary':
+                            return True, ''
+                        return False, 'rate_limited'
+
+                    def record_success(self, provider_id):
+                        return None
+
+                    def record_failure(self, provider_id):
+                        return None
+
+                manager = ProviderManager()
+                manager._rate_limiter = _PrimaryOnlyAllowedRateLimiter()
+
+                primary = Mock()
+                primary.provider_id = 'primary'
+                primary.name = 'Primary'
+                primary.ensure_available = Mock(return_value=True)
+                primary.config = Mock(priority=1)
+                primary.stream_complete = Mock(return_value=iter([
+                    StreamChunk(text='', done=False, source='primary', metadata={'error': 'primary failed'})
+                ]))
+
+                fallback = Mock()
+                fallback.provider_id = 'fallback'
+                fallback.name = 'Fallback'
+                fallback.ensure_available = Mock(return_value=True)
+                fallback.config = Mock(priority=2)
+                fallback.stream_complete = Mock(return_value=iter(()))
+
+                manager.providers['primary'] = primary
+                manager.providers['fallback'] = fallback
+
+                primary_model = Mock()
+                primary_model.provider = 'primary'
+                primary_model.id = 'primary-model'
+                primary_model.tier = 'fast'
+
+                fallback_model = Mock()
+                fallback_model.provider = 'fallback'
+                fallback_model.id = 'fallback-model'
+                fallback_model.tier = 'fast'
+
+                mock_model_registry.get_model = Mock(return_value=primary_model)
+                mock_model_registry.get_models_by_provider = Mock(
+                    side_effect=lambda pid: [primary_model] if pid == 'primary' else [fallback_model]
+                )
+
+                chunks = list(manager.stream('test prompt', model_id='primary-model'))
+                final_chunk = chunks[-1]
+
+                assert final_chunk.done is True
+                assert final_chunk.source == 'error'
+                assert final_chunk.metadata['providers_tried'] == ['primary', 'fallback']
+                assert final_chunk.metadata['provider_errors'] == {'primary': 'primary failed'}
+                assert final_chunk.metadata['rate_limited'] == {'fallback': 'rate_limited'}
+                primary.stream_complete.assert_called_once()
+                fallback.stream_complete.assert_not_called()
+
 
 class TestMessageBuilding:
     """Tests for _build_messages() method"""

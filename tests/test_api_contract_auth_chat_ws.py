@@ -316,6 +316,37 @@ def test_chat_stream_sanitizes_error_payload():
     assert '"request_id": "chat-stream-error-req-1"' in body
 
 
+def test_chat_stream_sse_passes_through_dict_chunk_metadata():
+    class _MetadataStreamAIRouter(_FakeAIRouter):
+        def stream_query(self, message):
+            yield {"chunk": "part-1", "source": "provider", "done": False, "metadata": {"phase": "one"}}
+            yield {
+                "chunk": "",
+                "source": "error",
+                "done": True,
+                "metadata": {
+                    "error": "All providers unavailable or rate limited",
+                    "providers_tried": ["provider"],
+                },
+            }
+
+    state = _FakeState(ai_router=_MetadataStreamAIRouter())
+    client = _build_client(create_chat_router(state))
+
+    response = client.post(
+        "/chat/stream",
+        json={"message": "stream please"},
+        headers={"X-Request-ID": "chat-stream-meta-req-1"},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"chunk": "part-1"' in body
+    assert '"metadata": {"phase": "one"}' in body
+    assert '"providers_tried": ["provider"]' in body
+    assert '"request_id": "chat-stream-meta-req-1"' in body
+
+
 def test_agent_not_found_preserves_404_and_request_id_header():
     state = _FakeState()
     client = _build_client(create_chat_router(state))
@@ -407,6 +438,60 @@ def test_websocket_chat_error_sanitizes_sensitive_details(monkeypatch):
     assert error_frame is not None
     assert sensitive_key not in error_frame["data"]["message"]
     assert error_frame["data"]["request_id"] == "ws-chat-error-req-1"
+
+
+def test_websocket_chat_stream_propagates_metadata(monkeypatch):
+    class _MetadataStreamAIRouter(_FakeAIRouter):
+        def stream_query(self, message, model=None, use_web_search=False):
+            yield {
+                "chunk": "partial",
+                "source": "provider",
+                "done": False,
+                "metadata": {"phase": "streaming"},
+            }
+            yield {
+                "chunk": "",
+                "source": "error",
+                "done": True,
+                "metadata": {
+                    "error": "All providers unavailable or rate limited",
+                    "providers_tried": ["provider"],
+                },
+            }
+
+    state = _FakeState(ai_router=_MetadataStreamAIRouter())
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        ws.receive_json()  # system.connected
+
+        ws.send_json(
+            {
+                "type": "chat",
+                "id": "msg-meta-1",
+                "request_id": "ws-chat-meta-req-1",
+                "data": {"message": "trigger", "stream": True},
+            }
+        )
+
+        chat_start = ws.receive_json()
+        chat_chunk = ws.receive_json()
+        chat_done = ws.receive_json()
+
+    assert chat_start["type"] == "chat.start"
+    assert chat_chunk["type"] == "chat.chunk"
+    assert chat_chunk["data"]["chunk"] == "partial"
+    assert chat_chunk["data"]["metadata"] == {"phase": "streaming"}
+    assert chat_chunk["data"]["request_id"] == "ws-chat-meta-req-1"
+
+    assert chat_done["type"] == "chat.done"
+    assert chat_done["data"]["metadata"]["error"] == "All providers unavailable or rate limited"
+    assert chat_done["data"]["metadata"]["providers_tried"] == ["provider"]
+    assert chat_done["data"]["request_id"] == "ws-chat-meta-req-1"
 
 
 def test_websocket_system_frames_propagate_request_id(monkeypatch):
