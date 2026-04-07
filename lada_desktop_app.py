@@ -13,6 +13,15 @@ import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Best-effort UTF-8 console output so status lines and child-process messages
+# cannot crash on Windows terminals using legacy code pages.
+try:
+    from modules.console_encoding import configure_console_utf8
+
+    configure_console_utf8()
+except Exception:
+    pass
+
 # Suppress non-critical warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='screen_brightness_control')
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -31,9 +40,9 @@ from PyQt5.QtWidgets import (
     QDialog, QFileDialog, QComboBox, QListWidget, QListWidgetItem,
     QSlider, QCheckBox, QSpinBox, QGroupBox, QShortcut, QStatusBar,
     QSystemTrayIcon, QMenu, QMessageBox, QSizePolicy,
-    QTextBrowser, QLineEdit
+    QTextBrowser, QLineEdit, QGraphicsOpacityEffect
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPointF, QEvent
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPointF, QEvent, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup
 from PyQt5.QtGui import QFont, QColor, QPainter, QPen, QRadialGradient, QPalette, QKeySequence, QIcon
 
 import threading
@@ -1206,7 +1215,15 @@ class Sidebar(QFrame):
         self._collapsed = False
         self._full_width = 272
         self._mini_width = 60
-        self.setFixedWidth(self._full_width)
+        self._anim_target_width = self._full_width
+        self._width_anim_group = QParallelAnimationGroup(self)
+        self._min_width_anim = QPropertyAnimation(self, b"minimumWidth")
+        self._max_width_anim = QPropertyAnimation(self, b"maximumWidth")
+        self._width_anim_group.addAnimation(self._min_width_anim)
+        self._width_anim_group.addAnimation(self._max_width_anim)
+        self._width_anim_group.finished.connect(self._finalize_width_animation)
+        self.setMinimumWidth(self._full_width)
+        self.setMaximumWidth(self._full_width)
         self.setStyleSheet(
             f"background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 rgba(18,25,35,245), stop:1 rgba(15,21,30,245));"
@@ -1214,6 +1231,48 @@ class Sidebar(QFrame):
         )
         self._build()
         self._load()
+
+    def is_collapsed(self) -> bool:
+        return bool(self._collapsed)
+
+    def set_collapsed(self, collapsed: bool, emit_signal: bool = True):
+        self._set_collapsed_state(bool(collapsed), emit_signal=emit_signal)
+
+    def _set_collapsed_state(self, collapsed: bool, emit_signal: bool = True):
+        if self._collapsed == collapsed:
+            return
+
+        self._collapsed = collapsed
+        if self._collapsed:
+            self._collapse_btn.setToolTip("Expand sidebar")
+            for w in self._collapsible_widgets:
+                w.hide()
+            self._animate_width(self._mini_width)
+        else:
+            self._collapse_btn.setToolTip("Collapse sidebar")
+            for w in self._collapsible_widgets:
+                w.show()
+            self._animate_width(self._full_width)
+
+        if emit_signal:
+            self.collapse_toggled.emit(self._collapsed)
+
+    def _animate_width(self, target_width: int):
+        target = int(target_width)
+        start = int(self.width()) if self.width() > 0 else target
+        start = max(self._mini_width, start)
+        self._anim_target_width = target
+        self._width_anim_group.stop()
+        for anim in (self._min_width_anim, self._max_width_anim):
+            anim.setDuration(180)
+            anim.setStartValue(start)
+            anim.setEndValue(target)
+            anim.setEasingCurve(QEasingCurve.InOutCubic)
+        self._width_anim_group.start()
+
+    def _finalize_width_animation(self):
+        self.setMinimumWidth(self._anim_target_width)
+        self.setMaximumWidth(self._anim_target_width)
 
     def _build(self):
         lay = QVBoxLayout(self)
@@ -1228,11 +1287,13 @@ class Sidebar(QFrame):
         self._collapse_btn = QPushButton("\u2261")
         self._collapse_btn.setFixedSize(32, 32)
         self._collapse_btn.setCursor(Qt.PointingHandCursor)
+        self._collapse_btn.setToolTip("Collapse sidebar")
         self._collapse_btn.setStyleSheet(
             "QPushButton { background: transparent; border: none; font-size: 18px; "
             f"color: {TEXT_DIM}; }}"
             f" QPushButton:hover {{ color: {TEXT}; }}"
         )
+        self._collapse_btn.clicked.connect(self._toggle_collapse)
         header.addWidget(self._collapse_btn)
 
         self._logo_label = QLabel()
@@ -1424,18 +1485,7 @@ class Sidebar(QFrame):
 
     def _toggle_collapse(self):
         """Toggle sidebar between full and mini mode."""
-        self._collapsed = not self._collapsed
-        if self._collapsed:
-            self.setFixedWidth(self._mini_width)
-            self._collapse_btn.setToolTip("Expand sidebar")
-            for w in self._collapsible_widgets:
-                w.hide()
-        else:
-            self.setFixedWidth(self._full_width)
-            self._collapse_btn.setToolTip("Collapse sidebar")
-            for w in self._collapsible_widgets:
-                w.show()
-        self.collapse_toggled.emit(self._collapsed)
+        self._set_collapsed_state(not self._collapsed, emit_signal=True)
 
     def _show_context_menu(self, pos):
         """Show right-click context menu for edit/delete"""
@@ -1963,42 +2013,42 @@ class ChatArea(QScrollArea):
         welcome_lay.addSpacing(26)
 
         # Large logo in accent-colored rounded square
-        logo_container = QLabel()
+        self._welcome_logo = QLabel()
         logo_path = Path("assets/lada_logo.png")
         if logo_path.exists():
             from PyQt5.QtGui import QPixmap
             pixmap = QPixmap(str(logo_path)).scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo_container.setPixmap(pixmap)
+            self._welcome_logo.setPixmap(pixmap)
         else:
-            logo_container.setText("L")
-            logo_container.setFont(QFont(FONT_HEADING, 36, QFont.Bold))
-            logo_container.setStyleSheet(f"""
+            self._welcome_logo.setText("L")
+            self._welcome_logo.setFont(QFont(FONT_HEADING, 36, QFont.Bold))
+            self._welcome_logo.setStyleSheet(f"""
                 color: white; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_DARK});
                 border-radius: 18px; padding: 10px;
             """)
-        logo_container.setFixedSize(72, 72)
-        logo_container.setAlignment(Qt.AlignCenter)
+        self._welcome_logo.setFixedSize(72, 72)
+        self._welcome_logo.setAlignment(Qt.AlignCenter)
         logo_wrap = QHBoxLayout()
         logo_wrap.addStretch()
-        logo_wrap.addWidget(logo_container)
+        logo_wrap.addWidget(self._welcome_logo)
         logo_wrap.addStretch()
         welcome_lay.addLayout(logo_wrap)
 
         welcome_lay.addSpacing(8)
 
         # Title
-        title = QLabel("What can I help with?")
-        title.setAlignment(Qt.AlignCenter)
-        title.setFont(QFont(FONT_HEADING, 28, QFont.Bold))
-        title.setStyleSheet(f"color: {TEXT};")
-        welcome_lay.addWidget(title)
+        self._welcome_title = QLabel("What can I help with?")
+        self._welcome_title.setAlignment(Qt.AlignCenter)
+        self._welcome_title.setFont(QFont(FONT_HEADING, 28, QFont.Bold))
+        self._welcome_title.setStyleSheet(f"color: {TEXT};")
+        welcome_lay.addWidget(self._welcome_title)
 
         # Subtitle
-        subtitle = QLabel("LADA — Your AI Desktop Assistant")
-        subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setFont(QFont(FONT_FAMILY, 13))
-        subtitle.setStyleSheet(f"color: {TEXT_DIM};")
-        welcome_lay.addWidget(subtitle)
+        self._welcome_subtitle = QLabel("LADA — Your AI Desktop Assistant")
+        self._welcome_subtitle.setAlignment(Qt.AlignCenter)
+        self._welcome_subtitle.setFont(QFont(FONT_FAMILY, 13))
+        self._welcome_subtitle.setStyleSheet(f"color: {TEXT_DIM};")
+        welcome_lay.addWidget(self._welcome_subtitle)
 
         # 2x2 suggestion cards
         welcome_lay.addSpacing(SPACING_XL)
@@ -2033,8 +2083,64 @@ class ChatArea(QScrollArea):
         self._streaming_msg = None  # Track current streaming message
         self._typing_step = 0
         self._typing_timer = QTimer()
+        self._welcome_animations = []
+        self._welcome_intro_played = False
 
         QTimer.singleShot(0, self._apply_responsive_suggestion_layout)
+        QTimer.singleShot(120, self._animate_welcome_intro)
+
+    def _welcome_animation_targets(self):
+        return [self._welcome_logo, self._welcome_title, self._welcome_subtitle] + list(self._suggestion_chips)
+
+    def _set_widget_opacity(self, widget, value: float):
+        if widget is None:
+            return
+        effect = widget.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        effect.setOpacity(float(value))
+
+    def _reset_welcome_opacity(self):
+        for widget in self._welcome_animation_targets():
+            self._set_widget_opacity(widget, 1.0)
+
+    def _release_welcome_animation(self, animation):
+        if animation in self._welcome_animations:
+            self._welcome_animations.remove(animation)
+
+    def _start_welcome_animation(self, animation):
+        if animation is not None:
+            animation.start()
+
+    def _stop_welcome_intro(self):
+        for animation in list(self._welcome_animations):
+            animation.stop()
+        self._welcome_animations.clear()
+
+    def _animate_welcome_intro(self, force: bool = False):
+        if self._has_messages or not self.welcome.isVisible():
+            return
+        if self._welcome_intro_played and not force:
+            return
+
+        self._stop_welcome_intro()
+        targets = self._welcome_animation_targets()
+        for idx, widget in enumerate(targets):
+            if widget is None:
+                continue
+            self._set_widget_opacity(widget, 0.0)
+            effect = widget.graphicsEffect()
+            anim = QPropertyAnimation(effect, b"opacity", self)
+            anim.setDuration(220 if idx < 3 else 180)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.OutCubic)
+            anim.finished.connect(lambda a=anim: self._release_welcome_animation(a))
+            self._welcome_animations.append(anim)
+            QTimer.singleShot(60 * idx, lambda a=anim: self._start_welcome_animation(a))
+
+        self._welcome_intro_played = True
 
     def _clear_layout(self, layout):
         while layout.count():
@@ -2107,6 +2213,8 @@ class ChatArea(QScrollArea):
         """Add a message to the chat area."""
         # Hide welcome on first message
         if not self._has_messages:
+            self._stop_welcome_intro()
+            self._reset_welcome_opacity()
             self.welcome.hide()
             self._has_messages = True
         
@@ -2121,6 +2229,8 @@ class ChatArea(QScrollArea):
     def add_streaming_placeholder(self):
         """Add a placeholder for streaming response with animated typing indicator."""
         if not self._has_messages:
+            self._stop_welcome_intro()
+            self._reset_welcome_opacity()
             self.welcome.hide()
             self._has_messages = True
 
@@ -2184,6 +2294,9 @@ class ChatArea(QScrollArea):
         # Show welcome again
         self.welcome.show()
         self._has_messages = False
+        self._welcome_intro_played = False
+        self._reset_welcome_opacity()
+        QTimer.singleShot(80, self._animate_welcome_intro)
 
     def _on_suggestion_click(self, cmd):
         """Handle click on a suggestion chip."""
@@ -2291,6 +2404,9 @@ class InputBar(QFrame):
     def __init__(self):
         super().__init__()
         self.files = []
+        self._input_enabled = True
+        self._input_min_height = 38
+        self._input_max_height = 108
         self.setStyleSheet(
             "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             " stop:0 rgba(18,25,35,194), stop:1 rgba(18,25,35,232));"
@@ -2357,18 +2473,18 @@ class InputBar(QFrame):
         row.setContentsMargins(10, 7, 7, 7)
         row.setSpacing(6)
 
-        att = QPushButton("+")
-        att.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
-        att.setCursor(Qt.PointingHandCursor)
-        att.setStyleSheet(f"""
+        self.attach_btn = QPushButton("+")
+        self.attach_btn.setFixedSize(CONTROL_ICON_SIZE, CONTROL_ICON_SIZE)
+        self.attach_btn.setCursor(Qt.PointingHandCursor)
+        self.attach_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; color: {TEXT_DIM};
                 border: none; border-radius: 17px; font-size: 20px;
             }}
             QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; }}
         """)
-        att.clicked.connect(self._attach)
-        row.addWidget(att)
+        self.attach_btn.clicked.connect(self._attach)
+        row.addWidget(self.attach_btn)
 
         # Model selector (inside input row, after attach button)
         row.addWidget(self.model_selector)
@@ -2392,7 +2508,8 @@ class InputBar(QFrame):
 
         self.inp = QTextEdit()
         self.inp.setPlaceholderText("Ask LADA anything...")
-        self.inp.setMaximumHeight(100)
+        self.inp.setMinimumHeight(self._input_min_height)
+        self.inp.setMaximumHeight(self._input_max_height)
         self.inp.setFont(QFont(FONT_FAMILY, 13))
         self.inp.setStyleSheet(f"""
             QTextEdit {{
@@ -2408,6 +2525,8 @@ class InputBar(QFrame):
             }}
         """)
         self.inp.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.inp.textChanged.connect(self._update_input_height)
+        self.inp.textChanged.connect(self._refresh_send_state)
         self.inp.installEventFilter(self)
         row.addWidget(self.inp, 1)
 
@@ -2422,6 +2541,10 @@ class InputBar(QFrame):
                 border: none; border-radius: 10px; font-size: 16px; font-weight: bold;
             }}
             QPushButton:hover {{ background: {ACCENT_DARK}; }}
+            QPushButton:disabled {{
+                background: rgba(95, 108, 122, 0.38);
+                color: rgba(255, 255, 255, 0.45);
+            }}
         """)
         self.sbtn.clicked.connect(self._send)
         row.addWidget(self.sbtn)
@@ -2480,6 +2603,24 @@ class InputBar(QFrame):
         note.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9px;")
         lay.addWidget(note)
 
+        self._update_input_height()
+        self._refresh_send_state()
+
+    def _update_input_height(self):
+        doc_height = int(self.inp.document().size().height()) + 10
+        target_height = max(self._input_min_height, min(self._input_max_height, doc_height))
+        self.inp.setFixedHeight(target_height)
+        if target_height >= self._input_max_height:
+            self.inp.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        else:
+            self.inp.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+    def _refresh_send_state(self):
+        has_text = bool(self.inp.toPlainText().strip())
+        has_files = bool(self.files)
+        can_send = self._input_enabled and (has_text or has_files)
+        self.sbtn.setEnabled(can_send)
+
     def is_web_search_enabled(self):
         """Check if web search toggle is enabled."""
         return self.web_search_btn.isChecked() if hasattr(self, 'web_search_btn') else False
@@ -2493,11 +2634,17 @@ class InputBar(QFrame):
         """Hide stop button, show send button."""
         self.stop_btn.hide()
         self.sbtn.show()
+        self._refresh_send_state()
 
     def enable(self, enabled=True):
-        """Enable or disable the input."""
-        self.inp.setEnabled(enabled)
-        self.sbtn.setEnabled(enabled)
+        """Enable or disable the composer controls."""
+        self._input_enabled = bool(enabled)
+        self.inp.setEnabled(self._input_enabled)
+        self.attach_btn.setEnabled(self._input_enabled)
+        self.qa_btn.setEnabled(self._input_enabled)
+        self.model_selector.setEnabled(self._input_enabled)
+        self.stop_btn.setEnabled(self._input_enabled)
+        self._refresh_send_state()
 
     def _attach(self):
         fs, _ = QFileDialog.getOpenFileNames(
@@ -2602,6 +2749,8 @@ class InputBar(QFrame):
             chip.clicked.connect(lambda _, c=chip, dd=d: self._rm(c, dd))
             self.file_row.addWidget(chip)
 
+        self._refresh_send_state()
+
     def _show_quick_actions(self):
         """Show quick actions popup above the / button."""
         pos = self.qa_btn.mapToGlobal(self.qa_btn.rect().topLeft())
@@ -2616,6 +2765,7 @@ class InputBar(QFrame):
         if d in self.files:
             self.files.remove(d)
         chip.deleteLater()
+        self._refresh_send_state()
 
     def _send(self):
         t = self.inp.toPlainText().strip()
@@ -2627,20 +2777,8 @@ class InputBar(QFrame):
                 if w:
                     w.deleteLater()
             self.files.clear()
-
-    def enable(self, e):
-        self.sbtn.setEnabled(e)
-        self.inp.setEnabled(e)
-    
-    def show_stop(self):
-        """Show stop button, hide send button"""
-        self.sbtn.hide()
-        self.stop_btn.show()
-    
-    def hide_stop(self):
-        """Hide stop button, show send button"""
-        self.stop_btn.hide()
-        self.sbtn.show()
+            self._update_input_height()
+            self._refresh_send_state()
 
     def eventFilter(self, obj, event):
         if obj == self.inp and event.type() == QEvent.KeyPress:
@@ -3118,8 +3256,12 @@ class CometOverlay(QFrame):
 
     def _toggle_pause(self):
         """Toggle between paused and running state."""
-        self._is_paused = not self._is_paused
+        self.set_paused_state(not self._is_paused, add_log=True)
         self.pause_requested.emit()
+
+    def set_paused_state(self, paused: bool, add_log: bool = False):
+        """Set paused UI state without emitting signals."""
+        self._is_paused = paused
         if self._is_paused:
             self.pause_btn.setText("  RESUME  ")
             self.pause_btn.setStyleSheet(f"""
@@ -3131,7 +3273,8 @@ class CometOverlay(QFrame):
                 }}
                 QPushButton:hover {{ background: #059669; }}
             """)
-            self._add_log_entry('PAUSED', '⏸ Task paused by user', '#f59e0b')
+            if add_log:
+                self._add_log_entry('PAUSED', '⏸ Task paused by user', '#f59e0b')
         else:
             self.pause_btn.setText("  PAUSE  ")
             self.pause_btn.setStyleSheet(f"""
@@ -3143,23 +3286,15 @@ class CometOverlay(QFrame):
                 }}
                 QPushButton:hover {{ background: #d97706; }}
             """)
-            self._add_log_entry('RESUMED', '▶ Task resumed', '#10a37f')
+            if add_log:
+                self._add_log_entry('RESUMED', '▶ Task resumed', '#10a37f')
 
     def start(self, task_description: str):
         """Start the overlay for a new task."""
         self._steps = []
-        self._is_paused = False
-        self.pause_btn.setText("  PAUSE  ")
-        self.pause_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: #f59e0b; color: white;
-                border: none; border-radius: 18px;
-                padding: 0 24px; font-size: 13px; font-weight: bold;
-                font-family: '{FONT_FAMILY}';
-            }}
-            QPushButton:hover {{ background: #d97706; }}
-        """)
+        self.set_paused_state(False, add_log=False)
         self.pause_btn.setEnabled(True)
+        self.pause_btn.setVisible(True)
         self._start_time = datetime.now()
         self._elapsed_timer.start(1000)
         self.current_action_label.setText(f"Task: {task_description}")
@@ -3290,6 +3425,313 @@ class CometOverlay(QFrame):
         self.progress_bar.setStyleSheet(f"background: {color}; border-radius: 2px;")
 
 
+class AutonomousActionOverlay(QWidget):
+    """Top-level floating overlay for autonomous action streaming on the desktop."""
+
+    stop_requested = pyqtSignal()
+    pause_requested = pyqtSignal()
+
+    PHASE_COLORS = {
+        'see': BLUE,
+        'think': ACCENT,
+        'act': SUCCESS,
+        'verify': WARNING,
+        'retry': RED,
+        'done': SUCCESS,
+        'error': RED,
+    }
+
+    def __init__(self):
+        flags = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+        super().__init__(None, flags)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowTitle("LADA Autonomous Overlay")
+
+        self._drag_offset = None
+        self._is_paused = False
+        self._start_time = None
+        self._last_event_key = None
+
+        self.setFixedSize(460, 320)
+        self._build()
+
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.timeout.connect(self._update_elapsed)
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.panel = QFrame()
+        self.panel.setObjectName("autonomousPanel")
+        self.panel.setStyleSheet(f"""
+            QFrame#autonomousPanel {{
+                background: rgba(10, 10, 10, 236);
+                border: 1px solid {BORDER};
+                border-radius: 14px;
+            }}
+        """)
+        root.addWidget(self.panel)
+
+        panel_lay = QVBoxLayout(self.panel)
+        panel_lay.setContentsMargins(12, 10, 12, 10)
+        panel_lay.setSpacing(8)
+
+        self.header = QFrame()
+        header_lay = QHBoxLayout(self.header)
+        header_lay.setContentsMargins(0, 0, 0, 0)
+        header_lay.setSpacing(8)
+
+        title = QLabel("AUTONOMOUS CONTROL")
+        title.setFont(QFont(FONT_HEADING, 10, QFont.Bold))
+        title.setStyleSheet(f"color: {TEXT};")
+        header_lay.addWidget(title)
+
+        header_lay.addStretch()
+
+        self.phase_badge = QLabel("START")
+        self.phase_badge.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
+        self.phase_badge.setStyleSheet(f"color: white; background: {ACCENT}; border-radius: 8px; padding: 4px 10px;")
+        header_lay.addWidget(self.phase_badge)
+
+        self.step_label = QLabel("Step 0/0")
+        self.step_label.setFont(QFont(FONT_FAMILY, 9))
+        self.step_label.setStyleSheet(f"color: {TEXT_DIM};")
+        header_lay.addWidget(self.step_label)
+
+        self.pause_btn = QPushButton("PAUSE")
+        self.pause_btn.setCursor(Qt.PointingHandCursor)
+        self.pause_btn.setFixedHeight(26)
+        self.pause_btn.setStyleSheet("""
+            QPushButton {
+                background: #f59e0b;
+                color: white;
+                border: none;
+                border-radius: 13px;
+                padding: 0 12px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background: #d97706; }
+        """)
+        self.pause_btn.clicked.connect(self._toggle_pause)
+        header_lay.addWidget(self.pause_btn)
+
+        self.stop_btn = QPushButton("STOP")
+        self.stop_btn.setCursor(Qt.PointingHandCursor)
+        self.stop_btn.setFixedHeight(26)
+        self.stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {RED};
+                color: white;
+                border: none;
+                border-radius: 13px;
+                padding: 0 12px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background: #dc2626; }}
+        """)
+        self.stop_btn.clicked.connect(lambda: self.stop_requested.emit())
+        header_lay.addWidget(self.stop_btn)
+
+        panel_lay.addWidget(self.header)
+
+        self.task_label = QLabel("Task:")
+        self.task_label.setWordWrap(True)
+        self.task_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        panel_lay.addWidget(self.task_label)
+
+        self.current_label = QLabel("Waiting...")
+        self.current_label.setWordWrap(True)
+        self.current_label.setStyleSheet(f"color: {TEXT}; font-size: 12px; font-weight: bold;")
+        panel_lay.addWidget(self.current_label)
+
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setStyleSheet(f"""
+            QTextEdit {{
+                background: {BG_CARD};
+                color: {TEXT};
+                border: 1px solid {BORDER};
+                border-radius: 10px;
+                padding: 6px;
+                font-size: 11px;
+                font-family: '{FONT_FAMILY}';
+            }}
+        """)
+        panel_lay.addWidget(self.log, 1)
+
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+
+        self.elapsed_label = QLabel("0:00")
+        self.elapsed_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;")
+        bottom.addWidget(self.elapsed_label)
+
+        bottom.addStretch()
+
+        hint = QLabel("Drag header to move")
+        hint.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;")
+        bottom.addWidget(hint)
+
+        panel_lay.addLayout(bottom)
+
+    def _set_default_position(self):
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+        geom = screen.availableGeometry()
+        self.move(geom.x() + geom.width() - self.width() - 24, geom.y() + 24)
+
+    def _append_log(self, text: str):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log.append(f"{timestamp}  {text}")
+        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def _toggle_pause(self):
+        self.set_paused_state(not self._is_paused, add_log=True)
+        self.pause_requested.emit()
+
+    def set_paused_state(self, paused: bool, add_log: bool = False):
+        self._is_paused = paused
+        if paused:
+            self.pause_btn.setText("RESUME")
+            self.pause_btn.setStyleSheet("""
+                QPushButton {
+                    background: #10a37f;
+                    color: white;
+                    border: none;
+                    border-radius: 13px;
+                    padding: 0 12px;
+                    font-size: 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover { background: #059669; }
+            """)
+            if add_log:
+                self._append_log("[PAUSE] Paused by user")
+        else:
+            self.pause_btn.setText("PAUSE")
+            self.pause_btn.setStyleSheet("""
+                QPushButton {
+                    background: #f59e0b;
+                    color: white;
+                    border: none;
+                    border-radius: 13px;
+                    padding: 0 12px;
+                    font-size: 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover { background: #d97706; }
+            """)
+            if add_log:
+                self._append_log("[PAUSE] Resumed")
+
+    def start(self, task_description: str):
+        self._start_time = datetime.now()
+        self._elapsed_timer.start(1000)
+        self._last_event_key = None
+        self.log.clear()
+        self.set_paused_state(False, add_log=False)
+        self.pause_btn.setEnabled(True)
+        self.pause_btn.setVisible(True)
+        self.stop_btn.setText("STOP")
+        self.stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {RED};
+                color: white;
+                border: none;
+                border-radius: 13px;
+                padding: 0 12px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background: #dc2626; }}
+        """)
+        self.task_label.setText(f"Task: {task_description}")
+        self.current_label.setText("Starting autonomous control...")
+        self.step_label.setText("Step 0/0")
+        self.phase_badge.setText("START")
+        self.phase_badge.setStyleSheet(f"color: white; background: {ACCENT}; border-radius: 8px; padding: 4px 10px;")
+        self._append_log("[START] Autonomous task started")
+        self._set_default_position()
+        self.show()
+        self.raise_()
+
+    def update_progress(self, step, max_steps, phase, detail):
+        phase_name = (phase or "").upper()
+        color = self.PHASE_COLORS.get(phase, TEXT_DIM)
+        self.phase_badge.setText(phase_name or "RUN")
+        self.phase_badge.setStyleSheet(
+            f"color: white; background: {color}; border-radius: 8px; padding: 4px 10px;"
+        )
+        self.step_label.setText(f"Step {step}/{max_steps}")
+        if detail:
+            self.current_label.setText(detail)
+
+        key = (step, phase, detail)
+        if detail and key != self._last_event_key:
+            self._append_log(f"[{phase_name}] {detail}")
+            self._last_event_key = key
+
+    def log_click(self, x: int, y: int):
+        self._append_log(f"[CLICK] ({x}, {y})")
+
+    def finish(self, success: bool, message: str):
+        self._elapsed_timer.stop()
+        phase = 'done' if success else 'error'
+        color = self.PHASE_COLORS[phase]
+        self.phase_badge.setText("DONE" if success else "FAILED")
+        self.phase_badge.setStyleSheet(
+            f"color: white; background: {color}; border-radius: 8px; padding: 4px 10px;"
+        )
+        self.current_label.setText(message)
+        self._append_log(f"[{self.phase_badge.text()}] {message}")
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setVisible(False)
+        self.stop_btn.setText("CLOSE")
+        self.stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {BG_HOVER};
+                color: {TEXT};
+                border: 1px solid {BORDER};
+                border-radius: 13px;
+                padding: 0 12px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {BG_CARD}; }}
+        """)
+
+    def _update_elapsed(self):
+        if not self._start_time:
+            return
+        elapsed = datetime.now() - self._start_time
+        mins = int(elapsed.total_seconds() // 60)
+        secs = int(elapsed.total_seconds() % 60)
+        self.elapsed_label.setText(f"{mins}:{secs:02d}")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.header.geometry().contains(event.pos()):
+            self._drag_offset = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPos() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+
 # ============ Main App ============
 
 class LadaApp(QMainWindow):
@@ -3318,6 +3760,9 @@ class LadaApp(QMainWindow):
         self._last_prompt = ""
         self._wakeup_active = False
         self._voice_enabled = True  # Master voice on/off flag (starts ON)
+        self._autonomous_event_log = []
+        self._sidebar_auto_collapsed = False
+        self._sidebar_responsive_adjusting = False
 
         # Standalone bus/orchestrator (feature-gated)
         self._standalone_orchestrator_enabled = os.getenv(
@@ -3970,6 +4415,9 @@ class LadaApp(QMainWindow):
 
             python_exe = sys.executable
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            child_env = os.environ.copy()
+            child_env.setdefault("PYTHONIOENCODING", "utf-8")
+            child_env.setdefault("PYTHONUTF8", "1")
 
             api_running = _port_in_use(5000)
             alexa_running = _port_in_use(5001)
@@ -3984,7 +4432,8 @@ class LadaApp(QMainWindow):
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             creationflags=creationflags,
-                            cwd=str(base_dir)
+                            cwd=str(base_dir),
+                            env=child_env,
                         )
                         self.alexa_processes.append(proc)
                         print("[LADA] API Server started (port 5000) - hidden")
@@ -4003,7 +4452,8 @@ class LadaApp(QMainWindow):
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             creationflags=creationflags,
-                            cwd=str(base_dir)
+                            cwd=str(base_dir),
+                            env=child_env,
                         )
                         self.alexa_processes.append(proc)
                         print("[LADA] Alexa Bridge started (port 5001) - hidden")
@@ -4027,7 +4477,8 @@ class LadaApp(QMainWindow):
                     ["ngrok", "http", "5001", "--log=stdout"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    creationflags=creationflags
+                    creationflags=creationflags,
+                    env=child_env,
                 )
                 self.alexa_processes.append(proc)
                 print("[LADA] ngrok tunnel started (5001 -> HTTPS) - hidden")
@@ -4443,13 +4894,19 @@ class LadaApp(QMainWindow):
         self.inp.enable(False)
         self.inp.show_stop()
         self.chat.add("assistant", "Starting autonomous task... I'll control the screen now.")
+        self._autonomous_event_log = []
 
-        # Show Comet overlay
-        self.comet_overlay.setGeometry(
-            self.side.width(), 0,
-            self.width() - self.side.width(), self.height()
-        )
-        self.comet_overlay.start(text)
+        # Show global floating overlay by default; fall back to in-app overlay if unavailable.
+        use_floating = hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay is not None
+        if use_floating:
+            self.floating_comet_overlay.start(text)
+            self.comet_overlay.hide()
+        else:
+            self.comet_overlay.setGeometry(
+                self.side.width(), 0,
+                self.width() - self.side.width(), self.height()
+            )
+            self.comet_overlay.start(text)
 
         # Track the active comet agent for stop/pause
         self._active_comet_agent = None
@@ -4457,13 +4914,26 @@ class LadaApp(QMainWindow):
         def progress_callback(step, max_steps, phase, detail, screenshot_path=None):
             """Thread-safe progress callback - schedules UI update on main thread."""
             QTimer.singleShot(0, lambda s=step, m=max_steps, p=phase, d=detail, ss=screenshot_path:
-                self.comet_overlay.update_progress(s, m, p, d, ss))
+                self._on_comet_progress(s, m, p, d, ss))
 
         def on_pause_toggle():
             """Handle pause/resume button from overlay - call agent pause/resume."""
+            sender = self.sender()
+            paused = False
+
+            if sender is self.comet_overlay:
+                paused = self.comet_overlay._is_paused
+                if use_floating:
+                    self.floating_comet_overlay.set_paused_state(paused, add_log=False)
+            elif use_floating and sender is self.floating_comet_overlay:
+                paused = self.floating_comet_overlay._is_paused
+                self.comet_overlay.set_paused_state(paused, add_log=False)
+            else:
+                paused = self.comet_overlay._is_paused
+
             agent = getattr(self, '_active_comet_agent', None)
             if agent:
-                if self.comet_overlay._is_paused:
+                if paused:
                     agent.pause()
                 else:
                     agent.resume()
@@ -4475,6 +4945,13 @@ class LadaApp(QMainWindow):
             pass
         self.comet_overlay.pause_requested.connect(on_pause_toggle)
 
+        if use_floating:
+            try:
+                self.floating_comet_overlay.pause_requested.disconnect()
+            except Exception:
+                pass
+            self.floating_comet_overlay.pause_requested.connect(on_pause_toggle)
+
         def run():
             try:
                 agent = self.jarvis.comet_agent
@@ -4484,7 +4961,7 @@ class LadaApp(QMainWindow):
 
                 # Set click effect callback - schedules UI on main thread
                 def click_effect(x, y):
-                    QTimer.singleShot(0, lambda cx=x, cy=y: self._show_click_effect(cx, cy))
+                    QTimer.singleShot(0, lambda cx=x, cy=y: self._on_comet_click(cx, cy))
                 agent.click_effect_callback = click_effect
 
                 result = agent.execute_task_sync(text, max_steps=30)
@@ -4504,6 +4981,41 @@ class LadaApp(QMainWindow):
 
         threading.Thread(target=run, daemon=True, name="CometAgent-Task").start()
 
+    def _on_comet_progress(self, step, max_steps, phase, detail, screenshot_path=None):
+        """Fan out agent progress updates to visible overlays and local event history."""
+        if self.comet_overlay.isVisible():
+            self.comet_overlay.update_progress(step, max_steps, phase, detail, screenshot_path)
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if self.floating_comet_overlay.isVisible():
+                self.floating_comet_overlay.update_progress(step, max_steps, phase, detail)
+
+        self._autonomous_event_log.append({
+            'time': datetime.now().isoformat(timespec='seconds'),
+            'step': int(step),
+            'max_steps': int(max_steps),
+            'phase': str(phase),
+            'detail': str(detail or ''),
+        })
+        self._autonomous_event_log = self._autonomous_event_log[-200:]
+
+    def _on_comet_click(self, x: int, y: int):
+        """Handle click feedback for both ripple effect and floating action stream."""
+        self._show_click_effect(x, y)
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if self.floating_comet_overlay.isVisible():
+                self.floating_comet_overlay.log_click(x, y)
+
+        self._autonomous_event_log.append({
+            'time': datetime.now().isoformat(timespec='seconds'),
+            'step': None,
+            'max_steps': None,
+            'phase': 'click',
+            'detail': f'({x}, {y})',
+        })
+        self._autonomous_event_log = self._autonomous_event_log[-200:]
+
     def _stop_comet_task(self):
         """Stop the running Comet agent task or close overlay."""
         if hasattr(self, '_active_comet_agent') and self._active_comet_agent:
@@ -4513,6 +5025,8 @@ class LadaApp(QMainWindow):
         else:
             # No active agent - just close the overlay
             self.comet_overlay.hide()
+            if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+                self.floating_comet_overlay.hide()
             self.inp.enable(True)
             self.inp.hide_stop()
 
@@ -4538,6 +5052,12 @@ class LadaApp(QMainWindow):
             if success:
                 QTimer.singleShot(3000, self.comet_overlay.hide)
             # On failure, user clicks CLOSE to dismiss
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if self.floating_comet_overlay.isVisible():
+                self.floating_comet_overlay.finish(success, response)
+                if success:
+                    QTimer.singleShot(3000, self.floating_comet_overlay.hide)
 
         self.chat.add("assistant", response)
         self.conv.append({"role": "assistant", "message": response})
@@ -4969,6 +5489,21 @@ class LadaApp(QMainWindow):
         hl.setContentsMargins(16, 0, 16, 0)
         hl.setSpacing(8)
 
+        self._hdr_sidebar_btn = QPushButton("\u2261")
+        self._hdr_sidebar_btn.setFixedSize(30, 30)
+        self._hdr_sidebar_btn.setCursor(Qt.PointingHandCursor)
+        self._hdr_sidebar_btn.setToolTip("Toggle sidebar (Ctrl+B)")
+        self._hdr_sidebar_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_DIM};
+                border: 1px solid transparent; border-radius: 15px;
+                font-size: 15px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; border-color: {BORDER}; }}
+        """)
+        self._hdr_sidebar_btn.clicked.connect(self._toggle_sidebar_from_header)
+        hl.addWidget(self._hdr_sidebar_btn)
+
         # Left: LADA text logo
         hdr_logo = QLabel("LADA")
         hdr_logo.setFont(QFont(FONT_HEADING, 14, QFont.Bold))
@@ -5060,6 +5595,11 @@ class LadaApp(QMainWindow):
         self.comet_overlay.hide()
         self.comet_overlay.stop_requested.connect(self._stop_comet_task)
 
+        # Global floating overlay (outside app window) for autonomous actions
+        self.floating_comet_overlay = AutonomousActionOverlay()
+        self.floating_comet_overlay.hide()
+        self.floating_comet_overlay.stop_requested.connect(self._stop_comet_task)
+
         # Welcome message with time-based greeting
         if JARVIS_OK and LadaPersonality:
             greeting = LadaPersonality.get_time_greeting()
@@ -5086,6 +5626,8 @@ class LadaApp(QMainWindow):
         """Setup keyboard shortcuts - Comet-style"""
         # Ctrl+N: New chat
         QShortcut(QKeySequence("Ctrl+N"), self, self._new)
+        # Ctrl+B: Toggle sidebar
+        QShortcut(QKeySequence("Ctrl+B"), self, self._toggle_sidebar_from_header)
         # Ctrl+M: Toggle voice (alternative)
         QShortcut(QKeySequence("Ctrl+M"), self, self._toggle_voice)
         # Shift+Alt+V: Voice mode (Comet-style)
@@ -5258,6 +5800,10 @@ class LadaApp(QMainWindow):
         # Hide tray icon
         if hasattr(self, 'tray_icon'):
             self.tray_icon.hide()
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            self.floating_comet_overlay.hide()
+            self.floating_comet_overlay.close()
 
         QApplication.quit()
     
@@ -5635,6 +6181,7 @@ class LadaApp(QMainWindow):
         self.side.new_chat.connect(self._new)
         self.side.load_chat.connect(self._load)
         self.side.load_voice_chat.connect(self._load_voice_session)
+        self.side.collapse_toggled.connect(self._on_sidebar_collapse_changed)
         self.side.open_settings.connect(self._open_settings)  # Settings from sidebar
         self.side.export_chat.connect(self._export_conversation)  # Export from sidebar
         self.side.open_session.connect(self._open_session_picker)  # Session from sidebar
@@ -5649,6 +6196,74 @@ class LadaApp(QMainWindow):
         self.chat.copy_clicked.connect(self._on_chat_copy)
         self.chat.regenerate_clicked.connect(self._on_chat_regenerate)
         self.chat.feedback_clicked.connect(self._on_chat_feedback)
+
+        self._on_sidebar_collapse_changed(self.side.is_collapsed())
+        QTimer.singleShot(0, self._apply_responsive_sidebar)
+
+    def _toggle_sidebar_from_header(self):
+        if hasattr(self, 'side') and self.side:
+            self.side.set_collapsed(not self.side.is_collapsed(), emit_signal=True)
+
+    def _on_sidebar_collapse_changed(self, collapsed: bool):
+        if hasattr(self, '_hdr_sidebar_btn') and self._hdr_sidebar_btn:
+            self._hdr_sidebar_btn.setText(">" if collapsed else "<")
+            self._hdr_sidebar_btn.setToolTip(
+                "Expand sidebar (Ctrl+B)" if collapsed else "Collapse sidebar (Ctrl+B)"
+            )
+
+        if not self._sidebar_responsive_adjusting:
+            self._sidebar_auto_collapsed = False
+
+        self._apply_header_compact_mode()
+        self._update_overlay_geometry()
+
+    def _apply_responsive_sidebar(self):
+        if not hasattr(self, 'side') or not self.side:
+            return
+
+        win_width = self.width()
+        collapse_threshold = 1040
+        expand_threshold = 1260
+
+        if win_width <= collapse_threshold and not self.side.is_collapsed():
+            self._sidebar_responsive_adjusting = True
+            self.side.set_collapsed(True, emit_signal=True)
+            self._sidebar_responsive_adjusting = False
+            self._sidebar_auto_collapsed = True
+        elif (
+            win_width >= expand_threshold
+            and self._sidebar_auto_collapsed
+            and self.side.is_collapsed()
+        ):
+            self._sidebar_responsive_adjusting = True
+            self.side.set_collapsed(False, emit_signal=True)
+            self._sidebar_responsive_adjusting = False
+            self._sidebar_auto_collapsed = False
+
+    def _update_overlay_geometry(self):
+        if not hasattr(self, 'side') or not self.side:
+            return
+
+        content_x = self.side.width()
+        content_w = max(1, self.width() - content_x)
+
+        if hasattr(self, 'vlay') and self.vlay:
+            self.vlay.setGeometry(content_x, 0, content_w, self.height())
+
+        if hasattr(self, 'comet_overlay') and self.comet_overlay:
+            self.comet_overlay.setGeometry(content_x, 0, content_w, self.height())
+
+    def _apply_header_compact_mode(self):
+        win_width = self.width()
+
+        show_model_pill = win_width >= 980
+        show_status_line = win_width >= 1180
+
+        if hasattr(self, '_active_model_label') and self._active_model_label:
+            self._active_model_label.setVisible(show_model_pill)
+
+        if hasattr(self, '_status_label') and self._status_label:
+            self._status_label.setVisible(show_status_line)
 
     def _on_chat_copy(self, text: str):
         """Handle copy action from chat message toolbar."""
@@ -5682,8 +6297,9 @@ class LadaApp(QMainWindow):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        self.vlay.setGeometry(self.side.width(), 0, self.width() - self.side.width(), self.height())
-        self.comet_overlay.setGeometry(self.side.width(), 0, self.width() - self.side.width(), self.height())
+        self._apply_responsive_sidebar()
+        self._apply_header_compact_mode()
+        self._update_overlay_geometry()
 
     def _new(self):
         self._save()
@@ -6922,6 +7538,11 @@ If not specified, use reasonable defaults. Return ONLY the JSON."""
         # Minimize to tray instead of quitting
         e.ignore()
         self.hide()
+
+        # Keep global autonomous overlay visible only while an active task is running.
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if not getattr(self, '_active_comet_agent', None):
+                self.floating_comet_overlay.hide()
         
         # Show tray notification on first minimize
         if hasattr(self, 'tray_icon') and self.tray_icon.isVisible():

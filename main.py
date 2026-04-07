@@ -20,6 +20,14 @@ from pathlib import Path
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Best-effort UTF-8 console output so emoji/status lines do not crash on cp1252 terminals.
+try:
+    from modules.console_encoding import configure_console_utf8
+
+    configure_console_utf8()
+except Exception:
+    pass
+
 # Load environment variables
 try:
     from dotenv import load_dotenv
@@ -44,12 +52,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import core modules
-from voice_tamil_free import FreeNaturalVoice
-from lada_ai_router import HybridAIRouter
-from lada_memory import MemorySystem
-
-
 class LADA:
     """
     LADA v7.0 - Language Agnostic Digital Assistant
@@ -64,36 +66,58 @@ class LADA:
     
     VERSION = "6.0"
     
-    def __init__(self):
-        """Initialize LADA with all components"""
+    def __init__(self, init_voice: bool = True, init_ai: bool = True, init_memory: bool = True):
+        """Initialize LADA components. Status mode can skip heavy subsystems."""
         
         print("=" * 70)
         print(f"🤖 LADA v{self.VERSION} - Initializing...")
         print("=" * 70)
         
         # Initialize components
-        logger.info("Initializing Voice System...")
-        self.voice = FreeNaturalVoice(
-            tamil_mode=os.getenv('TAMIL_MODE', 'true').lower() == 'true',
-            auto_detect=os.getenv('AUTO_DETECT_LANGUAGE', 'true').lower() == 'true'
-        )
-        
-        logger.info("Initializing AI Router...")
-        self.ai_router = HybridAIRouter()
-        
-        logger.info("Initializing Memory System...")
-        self.memory = MemorySystem()
+        self.voice = None
+        self.ai_router = None
+        self.memory = None
+
+        if init_voice:
+            logger.info("Initializing Voice System...")
+            from voice_tamil_free import FreeNaturalVoice
+            self.voice = FreeNaturalVoice(
+                tamil_mode=os.getenv('TAMIL_MODE', 'true').lower() == 'true',
+                auto_detect=os.getenv('AUTO_DETECT_LANGUAGE', 'true').lower() == 'true'
+            )
+
+        if init_ai:
+            logger.info("Initializing AI Router...")
+            from lada_ai_router import HybridAIRouter
+            self.ai_router = HybridAIRouter()
+
+        if init_memory:
+            logger.info("Initializing Memory System...")
+            from lada_memory import MemorySystem
+            self.memory = MemorySystem()
         
         # Running state
         self.running = False
         
         print("\n✅ LADA v7.0 Ready!")
-        print("   🎤 Voice: Tamil + English")
-        print("   🧠 AI: Multi-backend (Ollama/Gemini)")
-        print("   💾 Memory: Enabled")
+        voice_state = "Tamil + English" if self.voice else "Skipped"
+        ai_state = "Multi-backend (Ollama/Gemini)" if self.ai_router else "Skipped"
+        memory_state = "Enabled" if self.memory else "Skipped"
+        print(f"   🎤 Voice: {voice_state}")
+        print(f"   🧠 AI: {ai_state}")
+        print(f"   💾 Memory: {memory_state}")
         print("=" * 70)
         
         logger.info("LADA initialization complete")
+
+    def _ensure_voice_initialized(self):
+        """Initialize voice lazily for modes that require it."""
+        if self.voice is None:
+            from voice_tamil_free import FreeNaturalVoice
+            self.voice = FreeNaturalVoice(
+                tamil_mode=os.getenv('TAMIL_MODE', 'true').lower() == 'true',
+                auto_detect=os.getenv('AUTO_DETECT_LANGUAGE', 'true').lower() == 'true'
+            )
     
     def run_voice_mode(self):
         """
@@ -108,6 +132,8 @@ class LADA:
         print("💬  Say 'exit', 'quit', 'bye', or 'வெளியேறு' to stop")
         print("=" * 70 + "\n")
         
+        self._ensure_voice_initialized()
+
         # Welcome message (mixed language)
         self.voice.speak(
             "வணக்கம்! Hello! I am LADA, your personal assistant. "
@@ -163,6 +189,8 @@ class LADA:
         Run LADA in text mode - type commands
         """
         
+        self._ensure_voice_initialized()
+
         print("\n" + "=" * 70)
         print("📝 LADA v7.0 - Text Mode")
         print("=" * 70)
@@ -240,25 +268,34 @@ class LADA:
         
         # AI Backend Status
         print("\n🧠 AI Backends:")
-        status = self.ai_router.get_status()
-        for backend, info in status.items():
-            emoji = "✅" if info["available"] else "❌"
-            time_str = f" ({info['response_time']})" if info.get('response_time') != 'N/A' else ""
-            error_str = f" - {info['error']}" if info.get('error') else ""
-            print(f"   {emoji} {info['name']}{time_str}{error_str}")
+        if self.ai_router:
+            status = self.ai_router.get_status()
+            for backend, info in status.items():
+                emoji = "✅" if info["available"] else "❌"
+                time_str = f" ({info['response_time']})" if info.get('response_time') != 'N/A' else ""
+                error_str = f" - {info['error']}" if info.get('error') else ""
+                print(f"   {emoji} {info['name']}{time_str}{error_str}")
+        else:
+            print("   ⚠️ AI router not initialized")
         
         # Memory Status
         print("\n💾 Memory:")
-        mem_stats = self.memory.get_statistics()
-        print(f"   📝 Total messages: {mem_stats['total_messages']}")
-        print(f"   💬 Current conversation: {mem_stats['current_conversation_length']} messages")
-        print(f"   🌐 Preferred language: {mem_stats['preferred_language']}")
+        if self.memory:
+            mem_stats = self.memory.get_statistics()
+            print(f"   📝 Total messages: {mem_stats['total_messages']}")
+            print(f"   💬 Current conversation: {mem_stats['current_conversation_length']} messages")
+            print(f"   🌐 Preferred language: {mem_stats['preferred_language']}")
+        else:
+            print("   ⚠️ Memory system not initialized")
         
         # Voice Status
         print("\n🎤 Voice:")
-        print(f"   🗣️ Tamil mode: {self.voice.tamil_mode}")
-        print(f"   🔄 Auto-detect: {self.voice.auto_detect}")
-        print(f"   🔊 Current language: {self.voice.get_current_language()}")
+        if self.voice:
+            print(f"   🗣️ Tamil mode: {self.voice.tamil_mode}")
+            print(f"   🔄 Auto-detect: {self.voice.auto_detect}")
+            print(f"   🔊 Current language: {self.voice.get_current_language()}")
+        else:
+            print("   ⏭️ Voice not initialized (status-only mode)")
         
         print("\n" + "=" * 50)
     
@@ -267,10 +304,12 @@ class LADA:
         logger.info("Shutting down LADA...")
         
         # Save memory
-        self.memory.shutdown()
+        if self.memory:
+            self.memory.shutdown()
         
         # Clean up voice
-        self.voice.cleanup()
+        if self.voice:
+            self.voice.cleanup()
         
         self.running = False
         logger.info("LADA shutdown complete")
@@ -324,7 +363,7 @@ def main():
         
         if arg == 'status':
             # Quick status check
-            lada = LADA()
+            lada = LADA(init_voice=False, init_ai=True, init_memory=True)
             lada._show_status()
             return
 

@@ -34,7 +34,7 @@ class GoogleCalendar:
     1. Go to https://console.cloud.google.com/
     2. Create project, enable Calendar API
     3. Create OAuth 2.0 credentials (Desktop app)
-    4. Download credentials.json to C:\JarvisAI\config\
+    4. Download credentials.json to C:\\JarvisAI\\config\\
     """
     
     SCOPES = ['https://www.googleapis.com/auth/calendar']

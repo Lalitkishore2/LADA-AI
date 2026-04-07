@@ -574,6 +574,7 @@ async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""
             )
             full_response = ""
             sources = []
+            last_stream_metadata = {}
             q = asyncio.Queue()
             error_sent = False
             loop = asyncio.get_event_loop()
@@ -629,26 +630,44 @@ async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""
                             }
                         )
                     elif chunk_data.get('chunk'):
+                        chunk_metadata = chunk_data.get('metadata', {})
+                        chunk_metadata = chunk_metadata if isinstance(chunk_metadata, dict) else {}
+                        if chunk_metadata:
+                            last_stream_metadata = chunk_metadata
+
                         full_response += chunk_data['chunk']
+                        payload = {"chunk": chunk_data['chunk'], "request_id": request_id}
+                        if chunk_metadata:
+                            payload["metadata"] = chunk_metadata
+
                         await ws.send_json(
                             {
                                 "type": "chat.chunk",
                                 "id": msg_id,
-                                "data": {"chunk": chunk_data['chunk'], "request_id": request_id},
+                                "data": payload,
                             }
                         )
+
                     if chunk_data.get('done'):
+                        done_metadata = chunk_data.get('metadata', {})
+                        done_metadata = done_metadata if isinstance(done_metadata, dict) else {}
+                        if done_metadata:
+                            last_stream_metadata = done_metadata
                         break
 
             if not error_sent:
+                done_payload = {
+                    "content": full_response,
+                    "model": getattr(state.ai_router, 'current_backend_name', 'unknown'),
+                    "sources": sources,
+                    "request_id": request_id,
+                }
+                if last_stream_metadata:
+                    done_payload["metadata"] = last_stream_metadata
+
                 await ws.send_json({
                     "type": "chat.done", "id": msg_id,
-                    "data": {
-                        "content": full_response,
-                        "model": getattr(state.ai_router, 'current_backend_name', 'unknown'),
-                        "sources": sources,
-                        "request_id": request_id,
-                    },
+                    "data": done_payload,
                 })
         else:
             def _query_sync():

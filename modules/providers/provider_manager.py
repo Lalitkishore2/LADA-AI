@@ -18,6 +18,7 @@ import os
 import json
 import logging
 import time
+import threading
 from typing import Optional, Dict, Any, List, Generator
 from pathlib import Path
 
@@ -125,6 +126,8 @@ class ProviderManager:
         self.providers: Dict[str, BaseProvider] = {}
         self.model_registry = get_model_registry() if get_model_registry else None
         self.cost_tracker = get_cost_tracker() if get_cost_tracker else None
+        self._vault_fallback_warned = False
+        self._vault_fallback_lock = threading.Lock()
 
         # Default routing preferences
         self.system_prompt = ""
@@ -136,6 +139,43 @@ class ProviderManager:
         self._rate_limiter = get_rate_limiter() if RATE_LIMITER_OK else None
 
         logger.info("[ProviderManager] Initialized")
+
+    @staticmethod
+    def _is_expected_unconfigured_vault_error(exc: Exception) -> bool:
+        """Return True when secure vault is simply not configured in this environment."""
+        msg = str(exc).lower()
+        return "master key not found" in msg or "master key missing" in msg
+
+    def _get_secret_from_vault_or_env(self, key_name: str) -> str:
+        """Fetch a config value from secure vault, then environment as fallback."""
+        if not key_name:
+            return ""
+
+        if not SECURE_VAULT_OK:
+            return os.getenv(key_name, '')
+
+        try:
+            vault = get_secure_vault()
+            value = vault.get(key_name)
+            if value:
+                return value
+            return os.getenv(key_name, '')
+        except Exception as exc:
+            should_log = False
+            with self._vault_fallback_lock:
+                if not self._vault_fallback_warned:
+                    self._vault_fallback_warned = True
+                    should_log = True
+
+            if should_log:
+                level = logging.INFO if self._is_expected_unconfigured_vault_error(exc) else logging.WARNING
+                logger.log(
+                    level,
+                    f"[ProviderManager] Secure vault unavailable ({exc}); falling back to environment variables",
+                )
+            else:
+                logger.debug(f"[ProviderManager] Vault lookup failed for {key_name}: {exc}")
+            return os.getenv(key_name, '')
 
     def auto_configure(self) -> int:
         """
@@ -159,19 +199,7 @@ class ProviderManager:
                 base_url = ""
 
                 for ck in config_keys:
-                    # Try secure vault first
-                    if SECURE_VAULT_OK:
-                        try:
-                            vault = get_secure_vault()
-                            val = vault.get(ck)
-                            if not val:
-                                # Fallback to env for backward compatibility
-                                val = os.getenv(ck, '')
-                        except Exception as e:
-                            logger.warning(f"[ProviderManager] Vault error for {ck}: {e}, using env")
-                            val = os.getenv(ck, '')
-                    else:
-                        val = os.getenv(ck, '')
+                    val = self._get_secret_from_vault_or_env(ck)
                     
                     if val:
                         if 'URL' in ck.upper():
@@ -484,7 +512,9 @@ class ProviderManager:
         # Stream with fallback to other providers on failure
         full_response = ""
         success = False
-        providers_tried = []
+        providers_tried: List[str] = []
+        provider_errors: Dict[str, str] = {}
+        rate_limited: Dict[str, str] = {}
 
         providers_to_try = [provider]
         # Add fallback providers
@@ -493,11 +523,13 @@ class ProviderManager:
                 providers_to_try.append(p)
 
         for p in providers_to_try:
+            providers_tried.append(p.provider_id)
             try:
                 # Check rate limiter before attempting this provider
                 if self._rate_limiter:
                     rl_allowed, rl_reason = self._rate_limiter.check(p.provider_id)
                     if not rl_allowed:
+                        rate_limited[p.provider_id] = rl_reason or "rate_limited"
                         logger.debug(f"[ProviderManager] Rate limited {p.name}: {rl_reason}")
                         continue
 
@@ -510,12 +542,14 @@ class ProviderManager:
                         tier_match = [m for m in alt_models if m.tier == tier]
                         target_model = tier_match[0].id if tier_match else (alt_models[0].id if alt_models else target_model)
 
-                providers_tried.append(p.provider_id)
-
                 for chunk in p.stream_complete(messages, target_model, temperature, max_tokens, **kwargs):
-                    if chunk.metadata.get('error') and not chunk.text:
+                    chunk_metadata = chunk.metadata or {}
+                    if chunk_metadata.get('error') and not chunk.text:
                         # Provider failed, try next
-                        logger.warning(f"[ProviderManager] Stream failed on {p.name}: {chunk.metadata['error']}")
+                        provider_errors[p.provider_id] = str(chunk_metadata.get('error'))
+                        logger.warning(f"[ProviderManager] Stream failed on {p.name}: {chunk_metadata['error']}")
+                        if self._rate_limiter:
+                            self._rate_limiter.record_failure(p.provider_id)
                         break
 
                     if chunk.text:
@@ -533,6 +567,7 @@ class ProviderManager:
                     break
 
             except Exception as e:
+                provider_errors[p.provider_id] = str(e)
                 logger.warning(f"[ProviderManager] Stream error on {p.name}: {e}")
                 if self._rate_limiter:
                     self._rate_limiter.record_failure(p.provider_id)
@@ -541,7 +576,13 @@ class ProviderManager:
         if not success:
             yield StreamChunk(
                 text="Failed to get response from any AI provider.",
-                done=True, source="error"
+                done=True, source="error",
+                metadata={
+                    "error": "All providers unavailable or rate limited",
+                    "providers_tried": providers_tried,
+                    "provider_errors": provider_errors,
+                    "rate_limited": rate_limited,
+                },
             )
 
         # Track cost and history

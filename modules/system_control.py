@@ -5,6 +5,7 @@
 import os
 import subprocess
 import logging
+import threading
 from typing import Dict, List, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,8 @@ import psutil
 import json
 
 logger = logging.getLogger(__name__)
+_NOISY_OPTIONAL_LOGGERS_CONFIGURED = False
+_NOISY_OPTIONAL_LOGGERS_LOCK = threading.Lock()
 
 class PowerAction(Enum):
     """Power management actions"""
@@ -29,10 +32,42 @@ class SystemController:
     
     def __init__(self):
         """Initialize system controller"""
+        self._optional_dep_warnings: set[str] = set()
+        self._configure_optional_library_loggers()
         self.current_brightness = self._get_brightness()
         self.current_volume = self._get_volume()
         self.connected_networks = []
         self.bluetooth_devices = []
+
+    def _configure_optional_library_loggers(self):
+        """Reduce non-actionable warnings from optional third-party integrations."""
+        global _NOISY_OPTIONAL_LOGGERS_CONFIGURED
+        if _NOISY_OPTIONAL_LOGGERS_CONFIGURED:
+            return
+
+        with _NOISY_OPTIONAL_LOGGERS_LOCK:
+            if _NOISY_OPTIONAL_LOGGERS_CONFIGURED:
+                return
+            logging.getLogger("screen_brightness_control.windows").setLevel(logging.ERROR)
+            _NOISY_OPTIONAL_LOGGERS_CONFIGURED = True
+
+    def _log_operation_error(self, operation: str, error: Exception, optional_modules: Tuple[str, ...] = ()):
+        """Log operation failures with lower severity for missing optional dependencies."""
+        if isinstance(error, ModuleNotFoundError) and optional_modules:
+            missing_name = (getattr(error, "name", "") or "").strip()
+            for module_name in optional_modules:
+                if missing_name == module_name or missing_name.startswith(f"{module_name}."):
+                    key = f"{operation}:{module_name}"
+                    if key not in self._optional_dep_warnings:
+                        self._optional_dep_warnings.add(key)
+                        logger.warning(
+                            f"{operation.capitalize()} unavailable: optional dependency '{module_name}' is not installed"
+                        )
+                    else:
+                        logger.debug(f"{operation.capitalize()} still unavailable: missing '{module_name}'")
+                    return
+
+        logger.error(f"Error {operation}: {error}")
     
     # ============================================================
     # VOLUME & AUDIO CONTROL
@@ -81,7 +116,7 @@ class SystemController:
             }
         
         except Exception as e:
-            logger.error(f"Error setting volume: {e}")
+            self._log_operation_error("setting volume", e, optional_modules=("pycaw",))
             # Fallback: use Windows command
             try:
                 os.system(f'nircmd.exe setvolume 0 {level * 655}')
@@ -119,7 +154,7 @@ class SystemController:
             }
         
         except Exception as e:
-            logger.error(f"Error getting volume: {e}")
+            self._log_operation_error("getting volume", e, optional_modules=("pycaw",))
             return {'success': False, 'error': str(e)}
     
     def _get_volume(self) -> int:
@@ -143,7 +178,7 @@ class SystemController:
             return {'success': True, 'message': 'System muted'}
         
         except Exception as e:
-            logger.error(f"Error muting: {e}")
+            self._log_operation_error("muting", e, optional_modules=("pycaw",))
             return {'success': False, 'error': str(e)}
     
     def unmute(self) -> Dict[str, Any]:
@@ -159,7 +194,7 @@ class SystemController:
             return {'success': True, 'message': 'System unmuted'}
         
         except Exception as e:
-            logger.error(f"Error unmuting: {e}")
+            self._log_operation_error("unmuting", e, optional_modules=("pycaw",))
             return {'success': False, 'error': str(e)}
     
     # ============================================================
@@ -195,7 +230,7 @@ class SystemController:
             }
         
         except Exception as e:
-            logger.error(f"Error setting brightness: {e}")
+            self._log_operation_error("setting brightness", e, optional_modules=("screen_brightness_control",))
             return {
                 'success': False,
                 'error': str(e),
@@ -215,7 +250,7 @@ class SystemController:
             }
         
         except Exception as e:
-            logger.error(f"Error getting brightness: {e}")
+            self._log_operation_error("getting brightness", e, optional_modules=("screen_brightness_control",))
             return {'success': False, 'error': str(e)}
     
     def _get_brightness(self) -> int:

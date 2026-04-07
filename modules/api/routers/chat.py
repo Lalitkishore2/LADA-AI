@@ -163,7 +163,13 @@ def create_chat_router(state):
                         if isinstance(item, Exception):
                             raise item
 
-                        yield f"data: {json.dumps({'chunk': item})}\n\n"
+                        if isinstance(item, dict):
+                            payload = dict(item)
+                            payload.setdefault('request_id', request_id)
+                        else:
+                            payload = {'chunk': item}
+
+                        yield f"data: {json.dumps(payload)}\n\n"
                 else:
                     response = await _run_query_with_timeout(
                         lambda: state.ai_router.query(request.message),

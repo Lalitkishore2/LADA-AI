@@ -7,16 +7,19 @@ import json
 import asyncio
 import hashlib
 import ipaddress
+import re
 import logging
+import socket
 import shutil
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Body, Query, Request, Response, Depends
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
 
 from modules.api.deps import REQUEST_ID_HEADER, ensure_request_id, set_request_id_header
 from modules.error_sanitizer import safe_error_response
@@ -33,8 +36,14 @@ def create_app_router(state):
     base_dir = Path(__file__).parent.parent.parent.parent  # JarvisAI/
     dashboard_dir = base_dir / "web"
     sessions_dir = base_dir / "data" / "sessions"
+    session_name_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
     remote_rate_windows: Dict[str, Dict[str, float]] = {}
     remote_idempotency_cache: Dict[str, Dict[str, Any]] = {}
+    modern_ui_probe_cache: Dict[str, Any] = {
+        "base_url": "",
+        "checked_at": 0.0,
+        "reachable": False,
+    }
 
     def _bool_env(name: str, default: bool = False) -> bool:
         raw = os.getenv(name)
@@ -46,6 +55,73 @@ def create_app_router(state):
         stage = os.getenv("LADA_ROLLOUT_STAGE", "local").strip().lower()
         valid = {"disabled", "local", "internal", "canary", "public"}
         return stage if stage in valid else "local"
+
+    def _web_ui_mode() -> str:
+        """Select which UI /app should serve.
+
+        Values:
+          - legacy: always serve web/lada_app.html
+          - modern: always redirect to modern frontend URL
+          - auto: redirect only when modern frontend is reachable locally
+        """
+        mode = os.getenv("LADA_WEB_UI_MODE", "auto").strip().lower()
+        valid = {"legacy", "auto", "modern"}
+        return mode if mode in valid else "auto"
+
+    def _modern_web_base_url() -> str:
+        raw = os.getenv("LADA_MODERN_WEB_URL", "http://127.0.0.1:3000").strip()
+        return raw.rstrip("/") if raw else "http://127.0.0.1:3000"
+
+    def _modern_web_entry_path() -> str:
+        path = os.getenv("LADA_MODERN_WEB_PATH", "/").strip() or "/"
+        if not path.startswith("/"):
+            path = "/" + path
+        return path
+
+    def _probe_modern_web_reachable(base_url: str) -> bool:
+        try:
+            parsed = urlsplit(base_url)
+            host = parsed.hostname
+            if not host:
+                return False
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            with socket.create_connection((host, port), timeout=0.45):
+                return True
+        except OSError:
+            return False
+
+    def _is_modern_web_reachable(base_url: str) -> bool:
+        # Short cache avoids socket probe on every request.
+        now = time.time()
+        cache_ttl = 5.0
+        if (
+            modern_ui_probe_cache.get("base_url") == base_url
+            and now - float(modern_ui_probe_cache.get("checked_at", 0.0)) < cache_ttl
+        ):
+            return bool(modern_ui_probe_cache.get("reachable", False))
+
+        reachable = _probe_modern_web_reachable(base_url)
+        modern_ui_probe_cache["base_url"] = base_url
+        modern_ui_probe_cache["checked_at"] = now
+        modern_ui_probe_cache["reachable"] = reachable
+        return reachable
+
+    def _build_modern_web_redirect_url(request: Request) -> str:
+        base_url = _modern_web_base_url()
+        base_parts = urlsplit(base_url)
+        entry_path = _modern_web_entry_path()
+
+        query_pairs = parse_qsl(base_parts.query, keep_blank_values=True)
+        query_pairs.extend(parse_qsl(request.url.query, keep_blank_values=True))
+        query = urlencode(query_pairs, doseq=True)
+
+        return urlunsplit((
+            base_parts.scheme or "http",
+            base_parts.netloc,
+            entry_path,
+            query,
+            "",
+        ))
 
     def _find_tailscale_binary() -> str:
         for candidate in [
@@ -408,6 +484,25 @@ def create_app_router(state):
         except Exception as exc:
             logger.warning(f"[Remote] Audit log failed: {exc}")
 
+    def _session_file(name: str) -> Path:
+        token = (name or "").strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="Session name required")
+        if token in {".", ".."} or not session_name_pattern.fullmatch(token):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid session name. Use letters, numbers, dot, underscore, or dash.",
+            )
+
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        base_path = sessions_dir.resolve()
+        session_path = (base_path / f"{token}.json").resolve()
+        try:
+            session_path.relative_to(base_path)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid session path")
+        return session_path
+
     # ── Dashboard ────────────────────────────────────────────
 
     @r.get("/dashboard", response_class=HTMLResponse)
@@ -418,7 +513,19 @@ def create_app_router(state):
         return HTMLResponse(content="<h1>LADA Dashboard</h1><p>web/index.html not found</p>")
 
     @r.get("/app", response_class=HTMLResponse)
-    async def serve_app():
+    async def serve_app(request: Request):
+        mode = _web_ui_mode()
+        if mode in {"auto", "modern"}:
+            modern_base = _modern_web_base_url()
+            modern_url = _build_modern_web_redirect_url(request)
+
+            if mode == "modern":
+                return RedirectResponse(url=modern_url, status_code=307)
+
+            # Auto mode: only redirect for local machine requests and when frontend is reachable.
+            if _client_scope(_client_ip(request)) == "loopback" and _is_modern_web_reachable(modern_base):
+                return RedirectResponse(url=modern_url, status_code=307)
+
         app_file = dashboard_dir / "lada_app.html"
         if app_file.exists():
             return HTMLResponse(content=app_file.read_text(encoding='utf-8'))
@@ -435,10 +542,7 @@ def create_app_router(state):
     @r.post("/sessions/new")
     async def new_session(body: dict = Body(default={})):
         name = (body.get("name") or "").strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="Session name required")
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        session_path = sessions_dir / f"{name}.json"
+        session_path = _session_file(name)
         existing = session_path.exists()
         if not existing:
             session_path.write_text(
@@ -451,17 +555,21 @@ def create_app_router(state):
     @r.post("/sessions/switch")
     async def switch_session(body: dict = Body(default={})):
         name = (body.get("name") or "").strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="Session name required")
-        session_path = sessions_dir / f"{name}.json"
+        session_path = _session_file(name)
         if session_path.exists():
-            data = json.loads(session_path.read_text(encoding='utf-8'))
-            return {"session_name": name, "messages": data.get("messages", [])}
+            try:
+                data = json.loads(session_path.read_text(encoding='utf-8'))
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Session data is corrupted")
+            messages = data.get("messages", [])
+            if not isinstance(messages, list):
+                messages = []
+            return {"session_name": name, "messages": messages}
         return {"session_name": name, "messages": []}
 
     @r.delete("/sessions/{name}")
     async def delete_session(name: str):
-        session_path = sessions_dir / f"{name}.json"
+        session_path = _session_file(name)
         if session_path.exists():
             session_path.unlink()
             return {"deleted": True, "session_name": name}
@@ -471,10 +579,11 @@ def create_app_router(state):
     async def save_session(body: dict = Body(default={})):
         name = (body.get("name") or "").strip()
         messages = body.get("messages", [])
-        if not name:
-            raise HTTPException(status_code=400, detail="Session name required")
-        sessions_dir.mkdir(parents=True, exist_ok=True)
-        session_path = sessions_dir / f"{name}.json"
+        if not isinstance(messages, list):
+            raise HTTPException(status_code=400, detail="Messages must be a list")
+        if any(not isinstance(item, dict) for item in messages):
+            raise HTTPException(status_code=400, detail="Each message must be an object")
+        session_path = _session_file(name)
         session_data = {
             "session_name": name, "updated_at": datetime.now().isoformat(), "messages": messages,
         }

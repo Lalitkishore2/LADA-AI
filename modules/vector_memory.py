@@ -11,11 +11,16 @@ import json
 import time
 import hashlib
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger(__name__)
+_EMBEDDINGS_FALLBACK_LOGGED = False
+_CHROMADB_FALLBACK_WARNED = False
+_EMBEDDINGS_FALLBACK_LOCK = threading.Lock()
+_CHROMADB_FALLBACK_LOCK = threading.Lock()
 
 # Conditional imports
 try:
@@ -75,8 +80,17 @@ class EmbeddingProvider:
                 logger.warning(f"[VectorMemory] SentenceTransformer failed: {e}, using ChromaDB default")
                 self._use_chromadb_default = True
         else:
-            logger.info("[VectorMemory] sentence-transformers not installed, using ChromaDB default embeddings")
+            self._log_embeddings_fallback_once()
             self._use_chromadb_default = True
+
+    @staticmethod
+    def _log_embeddings_fallback_once():
+        global _EMBEDDINGS_FALLBACK_LOGGED
+        with _EMBEDDINGS_FALLBACK_LOCK:
+            if _EMBEDDINGS_FALLBACK_LOGGED:
+                return
+            logger.info("[VectorMemory] sentence-transformers not installed, using ChromaDB default embeddings")
+            _EMBEDDINGS_FALLBACK_LOGGED = True
 
     @property
     def uses_custom_embeddings(self) -> bool:
@@ -123,7 +137,7 @@ class VectorMemorySystem:
     def _init_chromadb(self):
         """Initialize ChromaDB client and collections."""
         if not CHROMADB_OK:
-            logger.warning("[VectorMemory] ChromaDB not installed. Using in-memory fallback.")
+            self._warn_chromadb_fallback_once()
             self._init_fallback()
             return
 
@@ -167,6 +181,19 @@ class VectorMemorySystem:
             except Exception:
                 self._fallback_store = []
         self._initialized = True
+
+    @staticmethod
+    def _warn_chromadb_fallback_once():
+        global _CHROMADB_FALLBACK_WARNED
+        with _CHROMADB_FALLBACK_LOCK:
+            if _CHROMADB_FALLBACK_WARNED:
+                return
+            strict_fallback = os.getenv("LADA_REQUIRE_CHROMADB", "").strip().lower() in {
+                "1", "true", "yes", "on"
+            }
+            level = logging.WARNING if strict_fallback else logging.INFO
+            logger.log(level, "[VectorMemory] ChromaDB not installed. Using in-memory fallback.")
+            _CHROMADB_FALLBACK_WARNED = True
 
     def _save_fallback(self):
         """Persist fallback store to disk."""

@@ -12,6 +12,7 @@ Routes AI queries through ProviderManager with:
 
 import os
 import json
+import sys
 import logging
 from typing import Optional, Dict, Any, List
 
@@ -191,11 +192,25 @@ class HybridAIRouter:
 
         # Provider Manager (unified multi-provider routing)
         self.provider_manager = None
-        if PROVIDER_MANAGER_OK:
+        module_ref = sys.modules.get(__name__)
+        provider_manager_ok = (
+            getattr(module_ref, 'PROVIDER_MANAGER_OK', PROVIDER_MANAGER_OK)
+            if module_ref else PROVIDER_MANAGER_OK
+        )
+        provider_factory = (
+            getattr(module_ref, 'get_provider_manager', get_provider_manager)
+            if module_ref else get_provider_manager
+        )
+
+        if provider_manager_ok and callable(provider_factory):
             try:
-                self.provider_manager = get_provider_manager()
-                self.provider_manager.set_system_prompt(self.system_prompt)
-                provider_count = len(self.provider_manager.providers)
+                self.provider_manager = provider_factory()
+
+                if self.provider_manager and hasattr(self.provider_manager, 'set_system_prompt'):
+                    self.provider_manager.set_system_prompt(self.system_prompt)
+
+                providers = getattr(self.provider_manager, 'providers', {}) if self.provider_manager else {}
+                provider_count = len(providers) if providers else 0
                 logger.info(f"[Router] ProviderManager: {provider_count} providers active")
             except Exception as e:
                 logger.warning(f"[Router] ProviderManager init failed: {e}")
@@ -631,12 +646,14 @@ class HybridAIRouter:
                 system_prompt=self.system_prompt,
                 web_context=augmented_context,
             ):
+                chunk_metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
                 if chunk.text:
                     full_response += chunk.text
                     yield {
                         'chunk': chunk.text,
                         'source': chunk.source or 'provider_manager',
                         'done': False,
+                        'metadata': chunk_metadata,
                     }
                 if chunk.done:
                     if self.provider_manager and full_response:
@@ -646,6 +663,7 @@ class HybridAIRouter:
                         'chunk': '',
                         'source': chunk.source or 'provider_manager',
                         'done': True,
+                        'metadata': chunk_metadata,
                     }
                     return
 
@@ -654,7 +672,7 @@ class HybridAIRouter:
                 if self.provider_manager:
                     self.provider_manager._add_to_history("assistant", full_response)
                 self._store_in_vector_memory(prompt, full_response)
-                yield {'chunk': '', 'source': 'provider_manager', 'done': True}
+                yield {'chunk': '', 'source': 'provider_manager', 'done': True, 'metadata': {}}
                 return
 
         except Exception as e:
@@ -712,13 +730,25 @@ class HybridAIRouter:
         each with 'name', 'available', 'error' for backward compatibility."""
         if not self.provider_manager:
             return {}
+
+        # Refresh health first so status mode reflects real connectivity
+        # instead of initial UNKNOWN states from provider initialization.
+        try:
+            self.provider_manager.check_all_health()
+        except Exception as e:
+            logger.debug(f"[Router] Provider health refresh failed: {e}")
+
         result = {}
-        for pid, p in self.provider_manager.providers.items():
+        for pid, p in sorted(
+            self.provider_manager.providers.items(),
+            key=lambda item: item[1].config.priority,
+        ):
             status_dict = p.get_status_dict()
+            avg_latency = status_dict.get('avg_latency_ms', 0)
             result[pid] = {
                 'name': status_dict.get('name', pid),
                 'available': status_dict.get('available', False),
-                'response_time': f"{status_dict.get('avg_latency_ms', 0):.0f}ms",
+                'response_time': f"{avg_latency:.0f}ms" if avg_latency else 'N/A',
                 'error': status_dict.get('last_error') or None,
             }
         return result
