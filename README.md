@@ -34,6 +34,16 @@ You need **at least one AI backend** configured. The fastest option:
 2. Put it in `.env`: `GEMINI_API_KEY=your_key_here`
 3. Run `python lada_desktop_app.py`
 
+### Operational Runbooks
+
+For runtime operations and incident triage, see:
+
+- `docs/RUNTIME_STABILIZATION_CLOSEOUT_2026-04-07.md`
+- `docs/RUNTIME_HARDENING_BACKLOG_2026-04-07.md`
+- `docs/RUNTIME_FALLBACK_SEVERITY_RUNBOOK_2026-04-07.md`
+- `docs/STARTUP_DIAGNOSTICS_TRIAGE_RUNBOOK_2026-04-07.md`
+- `docs/RUNTIME_STABILIZATION_COMMIT_PLAN_2026-04-07.md`
+
 ---
 
 ## Features
