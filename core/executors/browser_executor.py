@@ -3,16 +3,156 @@ LADA Browser Executor — Handles smart browser, browser tabs, YouTube/page
 summarization, and multi-tab orchestrator commands.
 
 Extracted from JarvisCommandProcessor.process() browser-related blocks.
+
+Security Features (Perplexity Comet-style hard boundaries):
+- isInternalPage: Blocks navigation to chrome://, about:, devtools:// pages
+- isUrlBlocked: Blocks file:// URIs and other dangerous schemes
 """
 
 import re
 import os
 import logging
-from typing import Tuple
+from typing import Tuple, Set
+from urllib.parse import urlparse
 
 from core.executors import BaseExecutor
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# HARD BOUNDARIES - Security constraints for browser automation
+# ============================================================================
+
+# Internal Chrome pages that the agent must NEVER navigate to
+_INTERNAL_PAGE_PREFIXES: Set[str] = {
+    'chrome://',
+    'chrome-extension://',
+    'chrome-devtools://',
+    'devtools://',
+    'about:',
+    'edge://',
+    'brave://',
+    'opera://',
+    'vivaldi://',
+}
+
+# URL schemes that are blocked for security
+_BLOCKED_SCHEMES: Set[str] = {
+    'file',          # Local filesystem access
+    'javascript',    # XSS vector
+    'data',          # Can encode malicious content
+    'vbscript',      # Windows scripting
+    'blob',          # Can access local data
+}
+
+# Specific paths that should never be automated
+_BLOCKED_PATHS: Set[str] = {
+    '/settings',
+    '/password',
+    '/passwords',
+    '/payment-methods',
+    '/addresses',
+    '/sync',
+    '/extensions',
+    '/flags',
+    '/net-internals',
+    '/inspect',
+}
+
+
+def is_internal_page(url: str) -> bool:
+    """
+    Check if URL is an internal browser page (chrome://, about:, etc.).
+    
+    These pages should NEVER be navigated to by the AI agent as they
+    can expose sensitive settings and system information.
+    
+    Args:
+        url: The URL to check
+        
+    Returns:
+        True if this is an internal page that should be blocked
+    """
+    if not url:
+        return False
+    
+    url_lower = url.lower().strip()
+    
+    for prefix in _INTERNAL_PAGE_PREFIXES:
+        if url_lower.startswith(prefix):
+            logger.warning(f"[HardBoundary] Blocked internal page: {url}")
+            return True
+    
+    return False
+
+
+def is_url_blocked(url: str) -> bool:
+    """
+    Check if URL uses a blocked scheme or accesses dangerous paths.
+    
+    Blocks:
+    - file:// URIs (local filesystem access)
+    - javascript: URIs (XSS vector)
+    - data: URIs (can encode malicious content)
+    - Sensitive browser paths (/settings, /passwords, etc.)
+    
+    Args:
+        url: The URL to check
+        
+    Returns:
+        True if this URL should be blocked
+    """
+    if not url:
+        return False
+    
+    url_lower = url.lower().strip()
+    
+    # Check internal pages first
+    if is_internal_page(url_lower):
+        return True
+    
+    try:
+        parsed = urlparse(url_lower)
+        
+        # Check scheme
+        if parsed.scheme in _BLOCKED_SCHEMES:
+            logger.warning(f"[HardBoundary] Blocked scheme '{parsed.scheme}': {url}")
+            return True
+        
+        # Check for sensitive paths on any domain
+        for blocked_path in _BLOCKED_PATHS:
+            if blocked_path in parsed.path.lower():
+                logger.warning(f"[HardBoundary] Blocked sensitive path '{blocked_path}': {url}")
+                return True
+        
+    except Exception as e:
+        # If we can't parse it, be conservative and block
+        logger.warning(f"[HardBoundary] Could not parse URL, blocking: {url} ({e})")
+        return True
+    
+    return False
+
+
+def validate_navigation_url(url: str) -> Tuple[bool, str]:
+    """
+    Validate a URL for safe navigation.
+    
+    Returns:
+        Tuple of (is_safe, error_message)
+    """
+    if not url:
+        return False, "Empty URL"
+    
+    if is_url_blocked(url):
+        return False, f"Navigation blocked: {url} (security policy)"
+    
+    # Ensure it has a valid scheme
+    if not url.startswith(('http://', 'https://', 'www.')):
+        # Could be a domain without scheme, prepend https://
+        url = f"https://{url}"
+    
+    return True, ""
 
 
 class BrowserExecutor(BaseExecutor):
@@ -23,6 +163,12 @@ class BrowserExecutor(BaseExecutor):
         handled, resp = self._handle_openclaw_compat(cmd)
         if handled:
             return True, resp
+
+        # "computer" command -> Comet agent (like OpenClaw's computer tool)
+        if cmd.lower().startswith('computer ') or cmd.lower().startswith('computer,'):
+            task = cmd[9:].strip().lstrip(',').strip()
+            if task and self.core.comet_agent:
+                return self._execute_comet_task(task)
 
         # Comet autonomous agent (browser/GUI tasks)
         handled, resp = self._handle_comet(cmd)
@@ -298,6 +444,12 @@ class BrowserExecutor(BaseExecutor):
             url = nav_match.group(1).strip()
             if not url.startswith(('http://', 'https://')):
                 url = f"https://{url}"
+            
+            # HARD BOUNDARY CHECK
+            is_safe, error_msg = validate_navigation_url(url)
+            if not is_safe:
+                return True, f"🚫 {error_msg}"
+            
             result = browser.navigate(url)
             if result.get('success'):
                 return True, f"Stealth navigation successful: {result.get('url', url)}"
@@ -501,6 +653,13 @@ class BrowserExecutor(BaseExecutor):
         if any(x in cmd for x in ['new tab', 'open tab', 'open new tab']):
             match = re.search(r'(?:new tab|open tab|open new tab)\s*(?:with|to|for)?\s*(.+)?', cmd)
             url = match.group(1).strip() if match and match.group(1) else None
+            
+            # HARD BOUNDARY CHECK for new tab with URL
+            if url:
+                is_safe, error_msg = validate_navigation_url(url)
+                if not is_safe:
+                    return True, f"🚫 {error_msg}"
+            
             result = bt.open_tab(url)
             if result.get('success'):
                 return True, f"✅ Opened new tab" + (f": {url}" if url else "")
@@ -526,6 +685,12 @@ class BrowserExecutor(BaseExecutor):
             match = re.search(r'(?:go to|navigate to|open website)\s+(.+)', cmd)
             if match:
                 url = match.group(1).strip()
+                
+                # HARD BOUNDARY CHECK
+                is_safe, error_msg = validate_navigation_url(url)
+                if not is_safe:
+                    return True, f"🚫 {error_msg}"
+                
                 result = bt.navigate_to(url)
                 return True, f"✅ Navigated to {url}" if result.get('success') else "Couldn't navigate"
 

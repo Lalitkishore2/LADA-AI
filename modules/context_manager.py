@@ -307,6 +307,153 @@ class ContextManager:
             ),
         }
 
+    def pre_compaction_flush(self, messages: List[Dict[str, str]], 
+                             ai_extract=None) -> List[str]:
+        """
+        Pre-compaction flush: Extract critical notes before context is trimmed.
+        
+        This is a "silent agentic turn" where the AI is prompted to identify
+        and preserve important facts before history is pruned (OpenClaw pattern).
+        
+        Args:
+            messages: Full message list about to be compacted
+            ai_extract: Optional callable(prompt) -> extracted_notes
+            
+        Returns:
+            List of critical notes that should be preserved
+        """
+        if not ai_extract:
+            # Fallback: Extract manually using heuristics
+            return self._extract_critical_notes_heuristic(messages)
+        
+        # Build the conversation text for analysis
+        conversation_text = []
+        for msg in messages:
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            if role != 'system':  # Skip system prompts
+                conversation_text.append(f"{role.upper()}: {content}")
+        
+        if not conversation_text:
+            return []
+        
+        # Silent agentic turn prompt
+        extract_prompt = """Analyze this conversation and extract ONLY the critical facts that must be preserved.
+Focus on:
+- User preferences and explicit requests (e.g., "I prefer...", "always do X")
+- Important decisions made during the conversation
+- Key technical details or configurations mentioned
+- Names, dates, or specific values that would be hard to re-derive
+- Action items or commitments made
+
+DO NOT include:
+- General chit-chat or greetings
+- Information that can be easily looked up
+- Redundant or repetitive information
+
+Output format: One fact per line, prefixed with "- ".
+If no critical facts found, respond with "NO_CRITICAL_FACTS".
+
+CONVERSATION:
+{text}
+""".format(text='\n'.join(conversation_text[-20:]))  # Last 20 messages
+
+        try:
+            result = ai_extract(extract_prompt)
+            if not result or 'NO_CRITICAL_FACTS' in result:
+                return []
+            
+            # Parse the bullet points
+            notes = []
+            for line in result.strip().split('\n'):
+                line = line.strip()
+                if line.startswith('- '):
+                    notes.append(line[2:].strip())
+                elif line and not line.startswith('#'):
+                    notes.append(line)
+            
+            logger.info(f"[ContextManager] Pre-compaction extracted {len(notes)} critical notes")
+            return notes
+            
+        except Exception as e:
+            logger.warning(f"[ContextManager] AI extraction failed: {e}, using heuristic")
+            return self._extract_critical_notes_heuristic(messages)
+    
+    def _extract_critical_notes_heuristic(self, messages: List[Dict[str, str]]) -> List[str]:
+        """
+        Heuristic-based extraction of critical notes when AI is unavailable.
+        """
+        notes = []
+        importance_markers = [
+            'remember', 'important', 'always', 'never', 'must', 'should',
+            'prefer', 'my name is', 'i am', 'don\'t forget', 'note that',
+            'key', 'critical', 'essential', 'deadline', 'due date'
+        ]
+        
+        for msg in messages:
+            if msg.get('role') != 'user':
+                continue
+            
+            content = msg.get('content', '').lower()
+            for marker in importance_markers:
+                if marker in content:
+                    # Extract the sentence containing the marker
+                    original = msg.get('content', '')
+                    # Simple sentence extraction
+                    sentences = original.replace('!', '.').replace('?', '.').split('.')
+                    for sentence in sentences:
+                        if marker in sentence.lower():
+                            clean = sentence.strip()
+                            if clean and len(clean) > 10:
+                                notes.append(clean)
+                                break
+                    break  # Only one note per message
+        
+        return notes[:10]  # Limit to 10 notes
+    
+    def compact_with_flush(self, messages: List[Dict[str, str]],
+                           model_id: str,
+                           ai_summarize=None,
+                           ai_extract=None,
+                           memory_stack=None,
+                           reserved_output: int = 2048) -> List[Dict[str, str]]:
+        """
+        Smart compaction with pre-flush to markdown memory.
+        
+        This combines:
+        1. Pre-compaction flush (extract critical notes)
+        2. Write notes to markdown memory stack
+        3. Summarize remaining context
+        
+        Args:
+            messages: Full message list
+            model_id: Target model
+            ai_summarize: Optional callable for summarization
+            ai_extract: Optional callable for note extraction
+            memory_stack: Optional MarkdownMemoryStack instance
+            reserved_output: Tokens reserved for output
+        """
+        budget = self.calculate_budget(messages, model_id, reserved_output)
+        
+        if not budget.needs_compaction:
+            return messages
+        
+        logger.info(f"[ContextManager] Context {budget.usage_ratio:.0%} full, "
+                    f"initiating pre-compaction flush for {model_id}")
+        
+        # Step 1: Extract critical notes
+        critical_notes = self.pre_compaction_flush(messages, ai_extract)
+        
+        # Step 2: Write to markdown memory if available
+        if memory_stack and critical_notes:
+            try:
+                memory_stack.flush_critical_notes(critical_notes)
+            except Exception as e:
+                logger.warning(f"[ContextManager] Failed to flush to markdown: {e}")
+        
+        # Step 3: Proceed with normal compaction
+        return self.compact_with_summary(messages, model_id, ai_summarize, reserved_output)
+
 
 # Module-level singleton
 _context_manager: Optional[ContextManager] = None

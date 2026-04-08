@@ -68,10 +68,10 @@ class AgentActions:
                 r'browse (?:the )?(?:internet|web)',
             ],
             'search_web': [
-                r'(?:search|google|look up)(?: for)? (.+)',
-                r'what is (.+)',
-                r'who is (.+)',
-                r'how to (.+)',
+                # Only explicit search commands, NOT questions like "what is X"
+                # Questions should go to AI for reasoning
+                r'^(?:search|google|look up|search for)(?: for)? (.+)',
+                r'^search the web for (.+)',
             ],
             'open_url': [
                 r'open (?:the )?(?:website|site|page|url) (.+)',

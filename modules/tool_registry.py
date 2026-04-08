@@ -1112,6 +1112,160 @@ def create_messaging_tools() -> List[ToolDefinition]:
     return tools
 
 
+# ============================================================================
+# 8 CORE TOOLS (Claude Code Architecture)
+# ============================================================================
+
+def create_core_claude_tools() -> List[ToolDefinition]:
+    """
+    Create the 8 core tools from Claude Code architecture.
+    
+    These are the fundamental tools that enable the AI to interact
+    with the filesystem, run commands, and manage tasks.
+    
+    Tools:
+    1. Bash - Universal command adapter
+    2. Read - Read file contents
+    3. Edit - Diff-based file editing
+    4. Write - Create/overwrite files
+    5. Grep - Pattern search (ripgrep-based)
+    6. Glob - File pattern matching
+    7. Task - Spawn sub-agents
+    8. TodoWrite - Persistent task tracking
+    """
+    tools = []
+    
+    # 1. Bash - Universal command adapter
+    tools.append(ToolDefinition(
+        name="bash",
+        description="Execute shell commands in a bash-like environment. On Windows, uses PowerShell. Returns stdout, stderr, and exit code. Has safety restrictions for destructive operations.",
+        category=ToolCategory.SYSTEM,
+        parameters=[
+            ToolParameter("command", "string", "The shell command to execute", required=True),
+            ToolParameter("timeout", "integer", "Timeout in seconds (default 30)", default=30),
+            ToolParameter("cwd", "string", "Working directory for the command"),
+        ],
+        keywords=["bash", "shell", "terminal", "execute", "run command", "cli"],
+        examples=["bash ls -la", "run git status", "execute npm install"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    # 2. Read - Read file contents
+    tools.append(ToolDefinition(
+        name="read",
+        description="Read the contents of a file. For large files, reads in chunks. Returns file content with line numbers. Supports text files, code, config, etc.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("path", "string", "Path to the file to read", required=True),
+            ToolParameter("start_line", "integer", "Starting line number (1-indexed)", default=1),
+            ToolParameter("end_line", "integer", "Ending line number (-1 for end of file)", default=-1),
+            ToolParameter("encoding", "string", "File encoding (default utf-8)", default="utf-8"),
+        ],
+        keywords=["read file", "view file", "show file", "cat", "file content", "open file"],
+        examples=["read src/main.py", "view config.json", "show lines 10-50 of app.js"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    # 3. Edit - Diff-based file editing
+    tools.append(ToolDefinition(
+        name="edit",
+        description="Make precise surgical edits to a file by specifying old_str and new_str. The old_str must match exactly one location in the file. Safer than full file rewrites.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("path", "string", "Path to the file to edit", required=True),
+            ToolParameter("old_str", "string", "The exact string to find and replace (must be unique)", required=True),
+            ToolParameter("new_str", "string", "The string to replace with", required=True),
+        ],
+        keywords=["edit file", "modify file", "change file", "update code", "replace text", "fix code"],
+        examples=["edit file to fix the bug", "change function name", "update config value"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    # 4. Write - Create/overwrite files
+    tools.append(ToolDefinition(
+        name="write",
+        description="Create a new file or overwrite an existing file with the given content. Use for creating new files or when the entire content needs to change. For small changes, prefer 'edit' tool.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("path", "string", "Path to the file to write", required=True),
+            ToolParameter("content", "string", "Content to write to the file", required=True),
+            ToolParameter("encoding", "string", "File encoding (default utf-8)", default="utf-8"),
+        ],
+        keywords=["create file", "write file", "new file", "save file", "make file"],
+        examples=["create new config.json", "write script.py", "save output to file"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    # 5. Grep - Pattern search (ripgrep-based)
+    tools.append(ToolDefinition(
+        name="grep",
+        description="Fast pattern search using ripgrep. Search for patterns in file contents across directories. Returns matching lines with file paths and line numbers.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("pattern", "string", "Regex pattern to search for", required=True),
+            ToolParameter("path", "string", "File or directory to search in", default="."),
+            ToolParameter("file_glob", "string", "Glob pattern to filter files (e.g., '*.py')"),
+            ToolParameter("case_sensitive", "boolean", "Case sensitive search", default=False),
+            ToolParameter("max_results", "integer", "Maximum number of results", default=50),
+            ToolParameter("context_lines", "integer", "Lines of context before/after match", default=0),
+        ],
+        keywords=["grep", "search code", "find in files", "search pattern", "rg", "ripgrep"],
+        examples=["grep 'def main' in *.py", "search for TODO comments", "find all imports"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    # 6. Glob - File pattern matching
+    tools.append(ToolDefinition(
+        name="glob",
+        description="Find files matching glob patterns. Returns list of file paths. Supports wildcards: * matches anything, ** matches across directories, ? matches single char.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("pattern", "string", "Glob pattern (e.g., '**/*.py', 'src/**/test_*.js')", required=True),
+            ToolParameter("path", "string", "Base directory for the search", default="."),
+            ToolParameter("max_results", "integer", "Maximum number of results", default=100),
+            ToolParameter("include_dirs", "boolean", "Include directories in results", default=False),
+        ],
+        keywords=["glob", "find files", "file pattern", "list files matching", "wildcard"],
+        examples=["glob **/*.py", "find all test files", "list config files"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    # 7. Task - Spawn sub-agents
+    tools.append(ToolDefinition(
+        name="task",
+        description="Spawn a specialized sub-agent to handle a specific task. The sub-agent runs with isolated context and returns results. Use for parallelizable work or when specialized expertise is needed.",
+        category=ToolCategory.AGENT,
+        parameters=[
+            ToolParameter("prompt", "string", "Task description for the sub-agent", required=True),
+            ToolParameter("agent_type", "string", "Type of agent: 'explore', 'task', 'code-review', 'general-purpose'", default="task"),
+            ToolParameter("files", "array", "List of file paths to include in agent context"),
+            ToolParameter("timeout", "integer", "Timeout in seconds", default=120),
+        ],
+        keywords=["task", "sub-agent", "delegate", "spawn agent", "parallel task"],
+        examples=["task: analyze security issues", "delegate code review", "spawn explore agent"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    # 8. TodoWrite - Persistent task tracking
+    tools.append(ToolDefinition(
+        name="todo_write",
+        description="Create, update, or complete todo items in the session's task list. Persists todos across conversations. Use for tracking multi-step work and progress.",
+        category=ToolCategory.AUTOMATION,
+        parameters=[
+            ToolParameter("action", "string", "Action: 'add', 'update', 'complete', 'delete', 'list'", required=True, enum=["add", "update", "complete", "delete", "list"]),
+            ToolParameter("id", "string", "Todo ID (for update/complete/delete)"),
+            ToolParameter("title", "string", "Todo title (for add/update)"),
+            ToolParameter("description", "string", "Detailed description"),
+            ToolParameter("status", "string", "Status: 'pending', 'in_progress', 'done', 'blocked'", enum=["pending", "in_progress", "done", "blocked"]),
+        ],
+        keywords=["todo", "task list", "track task", "add todo", "complete task", "task tracker"],
+        examples=["add todo: implement tests", "complete task #1", "list todos"],
+        permission=PermissionLevel.SAFE,
+    ))
+    
+    return tools
+
+
 # Module-level singleton
 _registry: Optional[ToolRegistry] = None
 
@@ -1128,6 +1282,8 @@ def get_tool_registry() -> ToolRegistry:
         for tool in create_scheduling_tools():
             _registry.register(tool)
         for tool in create_messaging_tools():
+            _registry.register(tool)
+        for tool in create_core_claude_tools():  # Add 8 core tools
             _registry.register(tool)
         logger.info(f"[ToolRegistry] {len(_registry._tools)} tools registered")
     return _registry

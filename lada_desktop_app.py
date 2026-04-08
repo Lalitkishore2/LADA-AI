@@ -361,6 +361,19 @@ class SettingsDialog(QDialog):
         self.browser_search_check.setToolTip("When disabled, LADA will answer searches in chat using AI with web context")
         dlay.addWidget(self.browser_search_check)
         
+        # Theme toggle
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("🎨 Theme:"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Dark Mode", "Light Mode"])
+        # Load current theme
+        from theme import get_theme_mode
+        self.theme_combo.setCurrentIndex(0 if get_theme_mode() == "dark" else 1)
+        self.theme_combo.currentIndexChanged.connect(self._change_theme)
+        theme_row.addWidget(self.theme_combo)
+        theme_row.addStretch()
+        dlay.addLayout(theme_row)
+        
         scroll_lay.addWidget(display_group)
         
         # Personality Mode Group (NEW - LADA v10.0)
@@ -516,6 +529,69 @@ class SettingsDialog(QDialog):
             alay.addWidget(QLabel("❌  AI Router not initialized"))
         
         scroll_lay.addWidget(ai_group)
+
+        # System Health & Doctor Group (NEW)
+        doctor_group = QGroupBox("System Health")
+        doc_lay = QVBoxLayout(doctor_group)
+        doc_lay.setSpacing(8)
+        
+        # Status summary
+        self.health_status_lbl = QLabel("🩺 Click 'Run Diagnostics' to check system health")
+        self.health_status_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        self.health_status_lbl.setWordWrap(True)
+        doc_lay.addWidget(self.health_status_lbl)
+        
+        # Results list (hidden until diagnostics run)
+        self.health_results = QListWidget()
+        self.health_results.setMaximumHeight(120)
+        self.health_results.setStyleSheet(f"""
+            QListWidget {{
+                background: {BG_INPUT}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                font-size: 11px;
+            }}
+            QListWidget::item {{ padding: 4px; }}
+        """)
+        self.health_results.setVisible(False)
+        doc_lay.addWidget(self.health_results)
+        
+        # Buttons row
+        doc_btn_row = QHBoxLayout()
+        
+        self.run_diagnostics_btn = QPushButton("🩺 Run Diagnostics")
+        self.run_diagnostics_btn.setCursor(Qt.PointingHandCursor)
+        self.run_diagnostics_btn.setToolTip("Run all system health checks")
+        self.run_diagnostics_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {GREEN}; color: white;
+                border: none; border-radius: 6px;
+                padding: 8px 16px; font-size: 12px;
+            }}
+            QPushButton:hover {{ background: {ACCENT_GRADIENT_END}; }}
+        """)
+        self.run_diagnostics_btn.clicked.connect(self._run_diagnostics)
+        doc_btn_row.addWidget(self.run_diagnostics_btn)
+        
+        self.auto_fix_btn = QPushButton("🔧 Auto-Fix Issues")
+        self.auto_fix_btn.setCursor(Qt.PointingHandCursor)
+        self.auto_fix_btn.setToolTip("Attempt automatic fixes for detected issues")
+        self.auto_fix_btn.setEnabled(False)
+        self.auto_fix_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: #3498db; color: white;
+                border: none; border-radius: 6px;
+                padding: 8px 16px; font-size: 12px;
+            }}
+            QPushButton:hover {{ background: #2980b9; }}
+            QPushButton:disabled {{ background: {BG_INPUT}; color: {TEXT_DIM}; }}
+        """)
+        self.auto_fix_btn.clicked.connect(self._run_auto_fix)
+        doc_btn_row.addWidget(self.auto_fix_btn)
+        
+        doc_btn_row.addStretch()
+        doc_lay.addLayout(doc_btn_row)
+        
+        scroll_lay.addWidget(doctor_group)
 
         # API Keys & Configuration Group
         api_group = QGroupBox("API Keys && Configuration")
@@ -736,6 +812,100 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error: {e}")
     
+    def _run_diagnostics(self):
+        """Run system diagnostics and display results."""
+        self.health_status_lbl.setText("🔄 Running diagnostics...")
+        self.health_results.clear()
+        self.health_results.setVisible(True)
+        self.auto_fix_btn.setEnabled(False)
+        QApplication.processEvents()
+        
+        try:
+            from modules.doctor import DiagnosticsRunner
+            
+            runner = DiagnosticsRunner()
+            report = runner.run_all()
+            
+            # Update status
+            is_healthy = report.failed == 0
+            status_icon = "✅" if is_healthy else "❌"
+            status_text = "HEALTHY" if is_healthy else "UNHEALTHY"
+            self.health_status_lbl.setText(
+                f"{status_icon} System Status: {status_text} | "
+                f"Checks: {report.passed}/{report.total_checks} passed | "
+                f"Duration: {report.duration_ms:.0f}ms"
+            )
+            self.health_status_lbl.setStyleSheet(
+                f"color: {GREEN if is_healthy else '#e74c3c'}; font-size: 12px; font-weight: bold;"
+            )
+            
+            # Show results
+            for result in report.results:
+                icon = "✅" if result.passed else ("⚠️" if result.severity.value == "warning" else "❌")
+                item = QListWidgetItem(f"{icon} {result.name}: {result.message}")
+                if not result.passed:
+                    item.setForeground(QColor("#e74c3c"))
+                self.health_results.addItem(item)
+            
+            # Enable auto-fix if there are fixable issues
+            fixable = [r for r in report.results if not r.passed and r.fixable]
+            if fixable:
+                self.auto_fix_btn.setEnabled(True)
+                self.auto_fix_btn.setToolTip(f"{len(fixable)} issue(s) can be auto-fixed")
+                self._fixable_issues = fixable
+            else:
+                self._fixable_issues = []
+                
+        except ImportError:
+            self.health_status_lbl.setText("❌ Doctor module not available")
+            self.health_status_lbl.setStyleSheet(f"color: #e74c3c; font-size: 12px;")
+        except Exception as e:
+            self.health_status_lbl.setText(f"❌ Error running diagnostics: {str(e)[:50]}")
+            self.health_status_lbl.setStyleSheet(f"color: #e74c3c; font-size: 12px;")
+    
+    def _run_auto_fix(self):
+        """Attempt to auto-fix detected issues."""
+        if not hasattr(self, '_fixable_issues') or not self._fixable_issues:
+            return
+        
+        reply = QMessageBox.question(
+            self,
+            "Auto-Fix Issues",
+            f"Attempt to auto-fix {len(self._fixable_issues)} issue(s)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        try:
+            from modules.doctor import AutoFixEngine
+            
+            engine = AutoFixEngine()
+            fixed = 0
+            failed = 0
+            
+            for issue in self._fixable_issues:
+                if issue.fix_id:
+                    result = engine.execute(issue.fix_id)
+                    if result and result.success:
+                        fixed += 1
+                    else:
+                        failed += 1
+            
+            QMessageBox.information(
+                self,
+                "Auto-Fix Complete",
+                f"Fixed: {fixed}\nFailed: {failed}\n\nRe-run diagnostics to verify."
+            )
+            
+            # Re-run diagnostics to show updated status
+            self._run_diagnostics()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Auto-fix failed: {e}")
+    
     def get_settings(self):
         """Return current settings"""
         return getattr(self, 'settings_data', {})
@@ -751,6 +921,28 @@ class SettingsDialog(QDialog):
     def _update_font_label(self, val):
         """Update font size label when slider changes"""
         self.font_lbl.setText(f"{val}px")
+    
+    def _change_theme(self, index):
+        """Change application theme (0=dark, 1=light)"""
+        from theme import set_theme_mode
+        new_mode = "dark" if index == 0 else "light"
+        new_qss = set_theme_mode(new_mode)
+        # Apply to main application
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(new_qss)
+        # Save theme preference
+        try:
+            settings_file = Path("config/app_settings.json")
+            settings_file.parent.mkdir(exist_ok=True)
+            if settings_file.exists():
+                saved = json.loads(settings_file.read_text())
+            else:
+                saved = {}
+            saved['theme_mode'] = new_mode
+            settings_file.write_text(json.dumps(saved, indent=2))
+        except Exception:
+            pass
 
 
 Path("logs").mkdir(exist_ok=True)
@@ -767,6 +959,7 @@ from theme import (
     CONTROL_ICON_SIZE, CONTROL_TOOLBAR_BUTTON_SIZE,
     APP_COLUMN_MAX_WIDTH, APP_INPUT_MAX_WIDTH, APP_WELCOME_GRID_MAX_WIDTH,
     APP_SUGGESTION_CARD_MIN_HEIGHT, APP_ASSISTANT_TEXT_MAX_WIDTH, APP_USER_TEXT_MAX_WIDTH,
+    get_theme_mode, set_theme_mode, get_theme_colors,
 )
 
 
@@ -4542,8 +4735,9 @@ class LadaApp(QMainWindow):
         
         try:
             self.continuous_listener.start()
-            self._set_wakeup_active(False)
-            print("[LADA] Continuous listening active - say 'LADA wakeup' to activate")
+            # Start in ACTIVE mode so voice works immediately (better UX)
+            self._set_wakeup_active(True)
+            print("[LADA] Voice control ACTIVE - speak any command")
         except Exception as e:
             print(f"[LADA] Could not start continuous listening: {e}")
 
@@ -7573,7 +7767,22 @@ def main():
     p.setColor(QPalette.Window, QColor(BG_SIDE))
     p.setColor(QPalette.WindowText, QColor(TEXT))
     app.setPalette(p)
-    app.setStyleSheet(GLOBAL_QSS)
+    
+    # Load saved theme preference
+    try:
+        settings_file = Path("config/app_settings.json")
+        if settings_file.exists():
+            saved = json.loads(settings_file.read_text())
+            saved_mode = saved.get('theme_mode', 'dark')
+            if saved_mode in ('dark', 'light'):
+                qss = set_theme_mode(saved_mode)
+                app.setStyleSheet(qss)
+            else:
+                app.setStyleSheet(GLOBAL_QSS)
+        else:
+            app.setStyleSheet(GLOBAL_QSS)
+    except Exception:
+        app.setStyleSheet(GLOBAL_QSS)
     
     # Don't quit when main window closes (for system tray)
     app.setQuitOnLastWindowClosed(False)

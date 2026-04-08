@@ -820,3 +820,230 @@ if __name__ == "__main__":
 
 # Backward compatibility alias
 ConversationMemory = MemorySystem
+
+
+# ============================================================================
+# MARKDOWN MEMORY STACK (OpenClaw-style git-backable memory)
+# ============================================================================
+
+class MarkdownMemoryStack:
+    """
+    Git-backable Markdown memory system (OpenClaw pattern).
+    
+    Structure:
+    - memory/MEMORY.md: Long-term curated memory (facts, preferences)
+    - memory/YYYY-MM-DD.md: Append-only daily logs
+    - memory/.git: Optional git history for versioning
+    
+    The markdown files are human-readable and can be version-controlled.
+    They complement the JSON storage for semantic search and structured queries.
+    """
+    
+    def __init__(self, workspace_dir: str = None):
+        self.workspace = Path(workspace_dir or os.getenv('LADA_WORKSPACE', './memory'))
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        
+        self.memory_file = self.workspace / 'MEMORY.md'
+        self._ensure_memory_file()
+        
+        logger.info(f"[MarkdownMemory] Initialized at {self.workspace}")
+    
+    def _ensure_memory_file(self):
+        """Create MEMORY.md if it doesn't exist."""
+        if not self.memory_file.exists():
+            header = """# LADA Long-Term Memory
+
+This file contains curated facts and preferences learned over time.
+It is loaded into private sessions to maintain context.
+
+---
+
+## User Profile
+
+- **Name**: Unknown
+- **Preferred Language**: English
+
+## Key Facts
+
+(Add important facts here)
+
+## Preferences
+
+(Add user preferences here)
+
+## Projects
+
+(Track ongoing projects)
+
+---
+*Last updated: {date}*
+""".format(date=datetime.now().strftime('%Y-%m-%d %H:%M'))
+            self.memory_file.write_text(header, encoding='utf-8')
+    
+    def get_daily_log_path(self, date: datetime = None) -> Path:
+        """Get path to daily log file."""
+        if date is None:
+            date = datetime.now()
+        return self.workspace / f"{date.strftime('%Y-%m-%d')}.md"
+    
+    def append_to_daily_log(self, content: str, category: str = "interaction"):
+        """Append an entry to today's daily log."""
+        log_path = self.get_daily_log_path()
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        
+        # Create file with header if it doesn't exist
+        if not log_path.exists():
+            header = f"""# Daily Log - {datetime.now().strftime('%Y-%m-%d')}
+
+Session started at {timestamp}
+
+---
+
+"""
+            log_path.write_text(header, encoding='utf-8')
+        
+        # Append entry
+        entry = f"\n### [{timestamp}] {category.upper()}\n\n{content}\n"
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(entry)
+    
+    def log_conversation(self, role: str, content: str):
+        """Log a conversation turn to daily log."""
+        prefix = "👤 **User**:" if role == "user" else "🤖 **LADA**:"
+        self.append_to_daily_log(f"{prefix} {content}", category="chat")
+    
+    def log_action(self, action: str, result: str = None):
+        """Log an action/command to daily log."""
+        entry = f"**Action**: `{action}`"
+        if result:
+            entry += f"\n**Result**: {result}"
+        self.append_to_daily_log(entry, category="action")
+    
+    def log_insight(self, insight: str):
+        """Log an AI-generated insight to daily log."""
+        self.append_to_daily_log(f"💡 {insight}", category="insight")
+    
+    def write_to_memory(self, section: str, content: str):
+        """
+        Write/update a section in MEMORY.md.
+        
+        Sections are identified by ## headers.
+        """
+        current = self.memory_file.read_text(encoding='utf-8')
+        
+        # Find section
+        section_header = f"## {section}"
+        if section_header in current:
+            # Update existing section - find start and end
+            lines = current.split('\n')
+            new_lines = []
+            in_section = False
+            section_written = False
+            
+            for line in lines:
+                if line.strip().startswith('## '):
+                    if line.strip() == section_header:
+                        in_section = True
+                        new_lines.append(line)
+                        new_lines.append('')
+                        new_lines.append(content)
+                        new_lines.append('')
+                        section_written = True
+                        continue
+                    else:
+                        in_section = False
+                
+                if not in_section:
+                    new_lines.append(line)
+            
+            if section_written:
+                current = '\n'.join(new_lines)
+        else:
+            # Add new section before the footer
+            footer_marker = "---\n*Last updated:"
+            if footer_marker in current:
+                current = current.replace(
+                    footer_marker,
+                    f"## {section}\n\n{content}\n\n{footer_marker}"
+                )
+            else:
+                current += f"\n\n## {section}\n\n{content}\n"
+        
+        # Update last modified
+        current = current.rsplit('*Last updated:', 1)[0]
+        current += f"*Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n"
+        
+        self.memory_file.write_text(current, encoding='utf-8')
+        logger.debug(f"[MarkdownMemory] Updated section: {section}")
+    
+    def read_memory(self) -> str:
+        """Read full MEMORY.md content."""
+        if self.memory_file.exists():
+            return self.memory_file.read_text(encoding='utf-8')
+        return ""
+    
+    def read_daily_log(self, date: datetime = None) -> str:
+        """Read a specific day's log."""
+        log_path = self.get_daily_log_path(date)
+        if log_path.exists():
+            return log_path.read_text(encoding='utf-8')
+        return ""
+    
+    def get_recent_logs(self, days: int = 7) -> List[Tuple[str, str]]:
+        """Get recent daily logs."""
+        logs = []
+        for i in range(days):
+            date = datetime.now() - timedelta(days=i)
+            log_path = self.get_daily_log_path(date)
+            if log_path.exists():
+                logs.append((
+                    date.strftime('%Y-%m-%d'),
+                    log_path.read_text(encoding='utf-8')
+                ))
+        return logs
+    
+    def flush_critical_notes(self, notes: List[str]):
+        """
+        Pre-compaction flush: Write critical notes to daily log before context is trimmed.
+        
+        This is called by ContextManager right before auto-compaction.
+        """
+        if not notes:
+            return
+        
+        content = "**Pre-Compaction Memory Flush**\n\nThe following important notes were extracted before context compaction:\n\n"
+        for note in notes:
+            content += f"- {note}\n"
+        
+        self.append_to_daily_log(content, category="memory-flush")
+        logger.info(f"[MarkdownMemory] Flushed {len(notes)} critical notes before compaction")
+    
+    def consolidate_to_memory(self, facts: Dict[str, str]):
+        """
+        Consolidate learned facts into MEMORY.md.
+        
+        Called during idle consolidation (KAIROS Auto-Dream).
+        """
+        if not facts:
+            return
+        
+        for section, content in facts.items():
+            self.write_to_memory(section, content)
+        
+        logger.info(f"[MarkdownMemory] Consolidated {len(facts)} fact sections to MEMORY.md")
+
+
+# Add timedelta import for get_recent_logs
+from datetime import timedelta
+
+
+# Module-level singleton for markdown memory
+_md_memory: Optional[MarkdownMemoryStack] = None
+
+
+def get_markdown_memory() -> MarkdownMemoryStack:
+    """Get or create the global markdown memory stack."""
+    global _md_memory
+    if _md_memory is None:
+        _md_memory = MarkdownMemoryStack()
+    return _md_memory

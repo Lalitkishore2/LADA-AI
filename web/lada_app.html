@@ -309,6 +309,10 @@ a:hover{color:var(--accent-h);text-decoration:underline}
   backdrop-filter:blur(6px);
   border-bottom-left-radius:4px;
 }
+.msg.assistant.system-command-response .msg-bubble{
+  background:linear-gradient(145deg, rgba(16,163,127,.15) 0%, rgba(34,197,94,.08) 100%);
+  border:1px solid rgba(34,197,94,.25);
+}
 .msg.system-info .msg-bubble{
   background:transparent;color:var(--text-faint);font-size:12px;
   border:1px dashed var(--border);padding:6px 14px;border-radius:8px;
@@ -1508,6 +1512,8 @@ function handleWSMessage(msg) {
     case 'chat.start':
       currentMsgId = msg.id;
       streamBuffer = '';
+      // Remove initial typing indicator before creating streaming bubble
+      stopTypingIndicator();
       addStreamingMessage(msg.id);
       // Start 120s response timeout
       clearTimeout(responseTimeoutTimer);
@@ -1553,12 +1559,14 @@ function handleWSMessage(msg) {
       break;
 
     case 'chat.response':
-      // Non-streaming full response
-      finalizeMessage(msg.id, msg.data?.content || '', msg.data?.model || selectedModel);
+      // Non-streaming full response (system commands)
+      stopTypingIndicator();  // Remove typing indicator first
+      const isSystemCmd = msg.data?.is_system_command;
+      const respContent = msg.data?.response || msg.data?.content || '';
+      finalizeMessage(msg.id, respContent, msg.data?.model || selectedModel, isSystemCmd);
       saveSessionIfActive();
       updateCostBadge();
-      if (ttsEnabled() && msg.data?.content) speakText(msg.data.content);
-      stopTypingIndicator();
+      if (ttsEnabled() && respContent) speakText(respContent);
       enableSend(true);
       break;
 
@@ -1916,10 +1924,22 @@ function updateStreamingMessage(id, text) {
   scrollBottomIfEnabled();
 }
 
-function finalizeMessage(id, content, model) {
-  const el = document.getElementById('bubble-' + id) || createOrphanBubble(id, model);
+function finalizeMessage(id, content, model, isSystemCommand = false) {
+  const el = document.getElementById('bubble-' + id) || createOrphanBubble(id, model, isSystemCommand);
   if (!el) return;
   const bubble = el.querySelector('.msg-bubble');
+  
+  // Add system command styling if applicable
+  if (isSystemCommand) {
+    el.classList.add('system-command-response');
+    // Add action badge
+    const actionBadge = document.createElement('div');
+    actionBadge.className = 'action-executed-badge';
+    actionBadge.innerHTML = '✓ Command Executed';
+    actionBadge.style.cssText = 'font-size:11px;color:#22c55e;margin-bottom:4px;font-weight:600;';
+    bubble.parentNode.insertBefore(actionBadge, bubble);
+  }
+  
   if (getSetting('markdown', true)) {
     try {
       bubble.innerHTML = marked.parse(content || '');
@@ -1935,17 +1955,18 @@ function finalizeMessage(id, content, model) {
   const meta = el.querySelector('.msg-meta');
   if (meta) {
     const mb = meta.querySelector('.model-badge');
-    if (mb) mb.textContent = model;
+    const badgeText = isSystemCommand ? '⚡ System' : model;
+    if (mb) mb.textContent = badgeText;
     else {
       const span = document.createElement('span');
       span.className = 'model-badge';
       span.style.cssText = 'font-size:10px;color:var(--text-faint);';
-      span.textContent = model;
+      span.textContent = badgeText;
       meta.appendChild(span);
     }
   }
 
-  messages.push({id, role:'assistant', content, model});
+  messages.push({id, role:'assistant', content, model: isSystemCommand ? 'system' : model});
   scrollBottomIfEnabled();
 }
 

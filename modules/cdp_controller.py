@@ -595,3 +595,247 @@ def navigate_cdp(url: str) -> Dict[str, Any]:
     if not cdp._connected:
         cdp.connect()
     return cdp.navigate(url)
+
+
+# ============================================================================
+# SEMANTIC GEOMETRY SYSTEM (Perplexity Comet-style)
+# ============================================================================
+
+@dataclass
+class SemanticElement:
+    """A semantic UI element with a stable reference ID for AI interaction."""
+    ref_id: str  # e.g., "ref_32"
+    role: str    # button, link, textbox, etc.
+    name: str    # Accessible name/label
+    description: str = ""
+    value: str = ""
+    focused: bool = False
+    disabled: bool = False
+    clickable: bool = True
+    bounding_box: Optional[Dict[str, float]] = None
+    node_id: int = 0
+    backend_node_id: int = 0
+    
+    def to_yaml_line(self) -> str:
+        """Convert to YAML-style line for AI consumption."""
+        parts = [f"[{self.ref_id}]", f"<{self.role}>"]
+        if self.name:
+            parts.append(f'"{self.name}"')
+        if self.value:
+            parts.append(f"value={self.value[:50]}")
+        if self.disabled:
+            parts.append("(disabled)")
+        if self.focused:
+            parts.append("(focused)")
+        return " ".join(parts)
+
+
+class SemanticGeometry:
+    """
+    Converts Chrome's Accessibility Tree into a simplified semantic map.
+    
+    This is the core of Perplexity Comet's approach:
+    - Raw HTML is NOT fed to the model
+    - Instead, we extract interactive elements with stable ref_ids
+    - The AI clicks "ref_32" instead of guessing coordinates
+    """
+    
+    def __init__(self, cdp: CDPController):
+        self.cdp = cdp
+        self._ref_counter = 0
+        self._elements: Dict[str, SemanticElement] = {}
+    
+    def _next_ref(self) -> str:
+        """Generate next reference ID."""
+        self._ref_counter += 1
+        return f"ref_{self._ref_counter}"
+    
+    def get_semantic_snapshot(self) -> str:
+        """
+        Get a YAML-style semantic snapshot of the current page.
+        
+        This is what gets sent to the AI model instead of raw HTML.
+        Returns a compact representation like:
+        
+        ```
+        [ref_1] <button> "Sign In"
+        [ref_2] <textbox> "Email" (focused)
+        [ref_3] <textbox> "Password"
+        [ref_4] <link> "Forgot Password?"
+        [ref_5] <button> "Submit" (disabled)
+        ```
+        """
+        self._ref_counter = 0
+        self._elements.clear()
+        
+        tree = self.cdp.get_accessibility_tree()
+        if not tree:
+            return "# Page accessibility tree unavailable"
+        
+        lines = ["# Page Elements (click by ref_id)\n"]
+        
+        # Interactive roles we care about
+        interactive_roles = {
+            "button", "link", "textbox", "checkbox", "radio",
+            "combobox", "listbox", "menu", "menuitem", "tab",
+            "searchbox", "switch", "slider", "spinbutton",
+            "gridcell", "option", "treeitem"
+        }
+        
+        for node in tree:
+            role_obj = node.get("role", {})
+            role = role_obj.get("value", "") if isinstance(role_obj, dict) else str(role_obj)
+            
+            if role.lower() not in interactive_roles:
+                continue
+            
+            name_obj = node.get("name", {})
+            name = name_obj.get("value", "") if isinstance(name_obj, dict) else str(name_obj)
+            
+            desc_obj = node.get("description", {})
+            description = desc_obj.get("value", "") if isinstance(desc_obj, dict) else ""
+            
+            value_obj = node.get("value", {})
+            value = value_obj.get("value", "") if isinstance(value_obj, dict) else ""
+            
+            # Check states
+            focused = self._get_bool_property(node, "focused")
+            disabled = self._get_bool_property(node, "disabled")
+            
+            # Create semantic element
+            ref_id = self._next_ref()
+            element = SemanticElement(
+                ref_id=ref_id,
+                role=role,
+                name=name,
+                description=description,
+                value=value,
+                focused=focused,
+                disabled=disabled,
+                node_id=node.get("nodeId", 0),
+                backend_node_id=node.get("backendDOMNodeId", 0),
+            )
+            
+            self._elements[ref_id] = element
+            lines.append(element.to_yaml_line())
+        
+        if len(lines) == 1:
+            lines.append("# No interactive elements found")
+        
+        return "\n".join(lines)
+    
+    def _get_bool_property(self, node: Dict, prop_name: str) -> bool:
+        """Extract boolean property from AX node."""
+        props = node.get("properties", [])
+        for prop in props:
+            if prop.get("name") == prop_name:
+                value = prop.get("value", {})
+                if isinstance(value, dict):
+                    return value.get("value", False)
+                return bool(value)
+        return False
+    
+    def click_by_ref(self, ref_id: str) -> Dict[str, Any]:
+        """
+        Click an element by its reference ID.
+        
+        This is how the AI agent performs clicks:
+        - AI sees: [ref_32] <button> "Submit"
+        - AI says: click ref_32
+        - We click the exact element
+        """
+        element = self._elements.get(ref_id)
+        if not element:
+            return {"success": False, "error": f"Unknown ref: {ref_id}"}
+        
+        if element.disabled:
+            return {"success": False, "error": f"{ref_id} is disabled"}
+        
+        try:
+            # Use backend node ID for precise clicking
+            if element.backend_node_id:
+                # Resolve to actual DOM node
+                result = self.cdp.send("DOM.resolveNode", {
+                    "backendNodeId": element.backend_node_id
+                })
+                if result:
+                    object_id = result.get("object", {}).get("objectId")
+                    if object_id:
+                        # Call click() on the element
+                        self.cdp.send("Runtime.callFunctionOn", {
+                            "objectId": object_id,
+                            "functionDeclaration": "function() { this.click(); }"
+                        })
+                        return {
+                            "success": True,
+                            "ref_id": ref_id,
+                            "element": element.role,
+                            "name": element.name
+                        }
+            
+            return {"success": False, "error": f"Could not resolve {ref_id}"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def type_by_ref(self, ref_id: str, text: str) -> Dict[str, Any]:
+        """
+        Type text into an element by reference ID.
+        """
+        element = self._elements.get(ref_id)
+        if not element:
+            return {"success": False, "error": f"Unknown ref: {ref_id}"}
+        
+        if element.role not in ["textbox", "searchbox", "combobox"]:
+            return {"success": False, "error": f"{ref_id} is not a text input"}
+        
+        try:
+            if element.backend_node_id:
+                result = self.cdp.send("DOM.resolveNode", {
+                    "backendNodeId": element.backend_node_id
+                })
+                if result:
+                    object_id = result.get("object", {}).get("objectId")
+                    if object_id:
+                        # Focus and set value
+                        self.cdp.send("Runtime.callFunctionOn", {
+                            "objectId": object_id,
+                            "functionDeclaration": f"""
+                                function() {{
+                                    this.focus();
+                                    this.value = {json.dumps(text)};
+                                    this.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                }}
+                            """
+                        })
+                        return {
+                            "success": True,
+                            "ref_id": ref_id,
+                            "typed": text[:50] + ("..." if len(text) > 50 else "")
+                        }
+            
+            return {"success": False, "error": f"Could not type into {ref_id}"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def get_element_info(self, ref_id: str) -> Optional[SemanticElement]:
+        """Get full info about an element by ref_id."""
+        return self._elements.get(ref_id)
+    
+    def find_by_name(self, name: str) -> List[SemanticElement]:
+        """Find elements by name (fuzzy match)."""
+        name_lower = name.lower()
+        return [
+            e for e in self._elements.values()
+            if name_lower in e.name.lower()
+        ]
+
+
+def get_semantic_geometry(cdp: CDPController = None) -> SemanticGeometry:
+    """Get SemanticGeometry instance for current CDP connection."""
+    if cdp is None:
+        cdp = get_cdp_controller()
+        if not cdp._connected:
+            cdp.connect()
+    return SemanticGeometry(cdp)
