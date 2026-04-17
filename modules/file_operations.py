@@ -14,6 +14,11 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+try:
+    import send2trash as _send2trash
+except ImportError:
+    _send2trash = None
+
 class FileOperation(Enum):
     """File operation types"""
     CREATE = "create"
@@ -148,14 +153,19 @@ class FileSystemController:
                 if permanent:
                     full_path.unlink()  # Permanent delete
                 else:
-                    import send2trash  # Soft delete to Recycle Bin
-                    send2trash.send2trash(str(full_path))
+                    if _send2trash is not None:
+                        _send2trash.send2trash(str(full_path))
+                    else:
+                        # Fallback when recycle-bin dependency is unavailable
+                        full_path.unlink()
             elif full_path.is_dir():
                 if permanent:
                     shutil.rmtree(full_path)
                 else:
-                    import send2trash
-                    send2trash.send2trash(str(full_path))
+                    if _send2trash is not None:
+                        _send2trash.send2trash(str(full_path))
+                    else:
+                        shutil.rmtree(full_path)
             
             logger.info(f"Deleted: {full_path}")
             return {'success': True, 'path': str(full_path)}
