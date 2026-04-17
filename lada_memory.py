@@ -15,8 +15,8 @@ import json
 import logging
 import threading
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 
@@ -1031,11 +1031,6 @@ Session started at {timestamp}
             self.write_to_memory(section, content)
         
         logger.info(f"[MarkdownMemory] Consolidated {len(facts)} fact sections to MEMORY.md")
-
-
-# Add timedelta import for get_recent_logs
-from datetime import timedelta
-
 
 # Module-level singleton for markdown memory
 _md_memory: Optional[MarkdownMemoryStack] = None
