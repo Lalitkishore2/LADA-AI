@@ -1,0 +1,33 @@
+{
+  "name": "@lada/qa-lab",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA QA lab plugin with private debugger UI and scenario runner",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*",
+    "lada": "workspace:*"
+  },
+  "peerDependencies": {
+    "lada": ">=2026.4.6"
+  },
+  "peerDependenciesMeta": {
+    "lada": {
+      "optional": true
+    }
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@lada/qa-lab",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.6"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.6"
+    }
+  }
+}
+

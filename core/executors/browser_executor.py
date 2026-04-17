@@ -159,12 +159,12 @@ class BrowserExecutor(BaseExecutor):
     """Handles browser control, tab management, summarization, and multi-tab commands."""
 
     def try_handle(self, cmd: str) -> Tuple[bool, str]:
-        # OpenClaw compatibility aliases (shared core path for CLI/API/Desktop)
-        handled, resp = self._handle_openclaw_compat(cmd)
+        # Browser compatibility aliases (shared core path for CLI/API/Desktop)
+        handled, resp = self._handle_browser_compat(cmd)
         if handled:
             return True, resp
 
-        # "computer" command -> Comet agent (like OpenClaw's computer tool)
+        # "computer" command -> Comet agent (desktop-computer tool style)
         if cmd.lower().startswith('computer ') or cmd.lower().startswith('computer,'):
             task = cmd[9:].strip().lstrip(',').strip()
             if task and self.core.comet_agent:
@@ -212,37 +212,40 @@ class BrowserExecutor(BaseExecutor):
 
         return False, ""
 
-    # -- OpenClaw Compatibility Aliases ----------------------
+    # -- Browser Compatibility Aliases ----------------------
 
-    def _handle_openclaw_compat(self, cmd: str) -> Tuple[bool, str]:
-        if not cmd.strip().startswith("openclaw"):
+    def _handle_browser_compat(self, cmd: str) -> Tuple[bool, str]:
+        stripped = cmd.strip()
+        lowered = stripped.lower()
+        if not lowered.startswith("lada browser"):
             return False, ""
 
-        command = cmd.strip()
+        command = lowered
+        display_name = "LADA browser"
         adapter = None
 
         try:
-            from integrations.openclaw_adapter import get_openclaw_adapter
-            adapter = get_openclaw_adapter()
+            from integrations.lada_browser_adapter import get_lada_browser_adapter
+            adapter = get_lada_browser_adapter()
         except Exception as e:
-            logger.debug(f"[BrowserExecutor] OpenClaw adapter unavailable: {e}")
+            logger.debug(f"[BrowserExecutor] Browser adapter unavailable: {e}")
 
-        if command in {"openclaw", "openclaw help"}:
+        if command in {"lada browser", "lada browser help"}:
             return True, (
-                "OpenClaw compatibility commands:\n"
-                "- openclaw status\n"
-                "- openclaw connect\n"
-                "- openclaw disconnect\n"
-                "- openclaw navigate <url>\n"
-                "- openclaw snapshot\n"
-                "- openclaw click <selector>\n"
-                "- openclaw type <selector> :: <text>\n"
-                "- openclaw scroll <up|down> [pixels]\n"
-                "- openclaw extract [selector]"
+                "LADA browser commands:\n"
+                "- lada browser status\n"
+                "- lada browser connect\n"
+                "- lada browser disconnect\n"
+                "- lada browser navigate <url>\n"
+                "- lada browser snapshot\n"
+                "- lada browser click <selector>\n"
+                "- lada browser type <selector> :: <text>\n"
+                "- lada browser scroll <up|down> [pixels]\n"
+                "- lada browser extract [selector]"
             )
 
-        if command == "openclaw status":
-            lines = ["OpenClaw compatibility status:"]
+        if command == "lada browser status":
+            lines = ["LADA browser compatibility status:"]
             if adapter:
                 status = adapter.status()
                 lines.append(f"- adapter enabled: {status.get('enabled', False)}")
@@ -251,30 +254,31 @@ class BrowserExecutor(BaseExecutor):
                 if status.get('url'):
                     lines.append(f"- gateway: {status.get('url')}")
             else:
-                lines.append("- adapter: disabled (set LADA_OPENCLAW_ADAPTER_ENABLED=true to enable gateway mode)")
+                lines.append("- adapter: disabled (set LADA_BROWSER_ADAPTER_ENABLED=true to enable gateway mode)")
             return True, "\n".join(lines)
 
-        if command == "openclaw connect":
+        if command == "lada browser connect":
             if not adapter:
-                return True, "OpenClaw adapter is disabled. Set LADA_OPENCLAW_ADAPTER_ENABLED=true and restart."
+                return True, f"{display_name} adapter is disabled. Set LADA_BROWSER_ADAPTER_ENABLED=true and restart."
             ok = adapter.connect()
-            return True, "OpenClaw adapter connected." if ok else "OpenClaw adapter connection failed."
+            return True, f"{display_name} adapter connected." if ok else f"{display_name} adapter connection failed."
 
-        if command == "openclaw disconnect":
+        if command == "lada browser disconnect":
             if not adapter:
-                return True, "OpenClaw adapter is not active."
+                return True, f"{display_name} adapter is not active."
             adapter.disconnect()
-            return True, "OpenClaw adapter disconnected."
+            return True, f"{display_name} adapter disconnected."
 
-        if command.startswith("openclaw navigate "):
-            url = command[len("openclaw navigate "):].strip()
+        if command.startswith("lada browser navigate "):
+            prefix = "lada browser navigate "
+            url = command[len(prefix):].strip()
             if not url:
-                return True, "Usage: openclaw navigate <url>"
+                return True, "Usage: lada browser navigate <url>"
             if not url.startswith(("http://", "https://")):
                 url = f"https://{url}"
 
             if adapter and adapter.navigate(url):
-                return True, f"OpenClaw adapter navigated to {url}."
+                return True, f"{display_name} adapter navigated to {url}."
 
             try:
                 from modules.stealth_browser import get_stealth_browser
@@ -292,12 +296,12 @@ class BrowserExecutor(BaseExecutor):
 
             return True, f"Tried native navigation to {url}, but could not complete it."
 
-        if command == "openclaw snapshot":
+        if command == "lada browser snapshot":
             if adapter:
                 snapshot = adapter.snapshot_summary()
                 if snapshot:
                     return True, (
-                        "OpenClaw snapshot summary:\n"
+                        "LADA browser snapshot summary:\n"
                         f"- URL: {snapshot.get('url', '')}\n"
                         f"- Title: {snapshot.get('title', '')}\n"
                         f"- Interactive elements: {snapshot.get('interactive_elements', 0)}\n"
@@ -324,13 +328,14 @@ class BrowserExecutor(BaseExecutor):
 
             return True, "Native snapshot command is currently unavailable."
 
-        if command.startswith("openclaw click "):
-            selector = command[len("openclaw click "):].strip()
+        if command.startswith("lada browser click "):
+            prefix = "lada browser click "
+            selector = command[len(prefix):].strip()
             if not selector:
-                return True, "Usage: openclaw click <selector>"
+                return True, "Usage: lada browser click <selector>"
 
             if adapter and adapter.click(selector):
-                return True, f"OpenClaw adapter clicked: {selector}"
+                return True, f"{display_name} adapter clicked: {selector}"
 
             try:
                 from modules.stealth_browser import get_stealth_browser
@@ -343,18 +348,19 @@ class BrowserExecutor(BaseExecutor):
 
             return True, f"Could not click selector: {selector}"
 
-        if command.startswith("openclaw type "):
-            payload = command[len("openclaw type "):].strip()
+        if command.startswith("lada browser type "):
+            prefix = "lada browser type "
+            payload = command[len(prefix):].strip()
             separator = "::" if "::" in payload else "|" if "|" in payload else ""
             if not separator:
-                return True, "Usage: openclaw type <selector> :: <text>"
+                return True, "Usage: lada browser type <selector> :: <text>"
 
             selector, typed = [p.strip() for p in payload.split(separator, 1)]
             if not selector:
-                return True, "Usage: openclaw type <selector> :: <text>"
+                return True, "Usage: lada browser type <selector> :: <text>"
 
             if adapter and adapter.type_text(selector, typed):
-                return True, f"OpenClaw adapter typed into {selector}."
+                return True, f"{display_name} adapter typed into {selector}."
 
             try:
                 from modules.stealth_browser import get_stealth_browser
@@ -367,8 +373,9 @@ class BrowserExecutor(BaseExecutor):
 
             return True, f"Could not type into selector: {selector}"
 
-        if command.startswith("openclaw scroll "):
-            payload = command[len("openclaw scroll "):].strip().split()
+        if command.startswith("lada browser scroll "):
+            prefix = "lada browser scroll "
+            payload = command[len(prefix):].strip().split()
             direction = payload[0].lower() if payload else "down"
             if direction not in {"up", "down"}:
                 direction = "down"
@@ -381,7 +388,7 @@ class BrowserExecutor(BaseExecutor):
                     amount = 500
 
             if adapter and adapter.scroll(direction=direction, amount=amount):
-                return True, f"OpenClaw adapter scrolled {direction} by {amount}px."
+                return True, f"{display_name} adapter scrolled {direction} by {amount}px."
 
             try:
                 from modules.stealth_browser import get_stealth_browser
@@ -394,8 +401,9 @@ class BrowserExecutor(BaseExecutor):
 
             return True, f"Could not scroll {direction}."
 
-        if command.startswith("openclaw extract"):
-            selector = command[len("openclaw extract"):].strip()
+        if command.startswith("lada browser extract"):
+            prefix = "lada browser extract"
+            selector = command[len(prefix):].strip()
 
             if adapter:
                 text_out = adapter.extract_text(selector=selector or None)
@@ -422,8 +430,8 @@ class BrowserExecutor(BaseExecutor):
             return True, "Could not extract page content."
 
         return True, (
-            "OpenClaw compatibility command not recognized. "
-            "Use 'openclaw help' for supported commands."
+            "LADA browser command not recognized. "
+            "Use 'lada browser help' for supported commands."
         )
 
     # ── Stealth Browser ─────────────────────────────────────

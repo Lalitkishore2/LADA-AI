@@ -1,0 +1,11 @@
+{
+  "name": "@lada/media-understanding-core",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA media understanding runtime package",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  }
+}
+

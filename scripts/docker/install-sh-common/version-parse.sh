@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+extract_lada_semver() {
+  local raw="${1:-}"
+  local parsed=""
+  parsed="$(
+    printf '%s\n' "$raw" \
+      | tr -d '\r' \
+      | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?' \
+      | head -n 1 \
+      || true
+  )"
+  printf '%s' "${parsed#v}"
+}
+

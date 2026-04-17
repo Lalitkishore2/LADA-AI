@@ -130,6 +130,7 @@ class CometAgent:
     MAX_STEPS = 50  # Safety limit
     STEP_DELAY = 0.5  # Seconds between actions
     MAX_RETRIES_PER_STEP = 3  # Self-correction retry limit
+    CAPTURE_RETRIES = 3
 
     def __init__(self, ai_router=None, headless: bool = False,
                  progress_callback=None):
@@ -204,11 +205,18 @@ class CometAgent:
         # Take screenshot
         screenshot_taken = False
         if self.screenshot_analyzer:
-            try:
-                screenshot_path = self.screenshot_analyzer.capture_screenshot()
-                state.screenshot_path = screenshot_path
-                screenshot_taken = True
+            screenshot_path = None
+            for _ in range(self.CAPTURE_RETRIES):
+                try:
+                    screenshot_path = self.screenshot_analyzer.capture_screenshot()
+                    if screenshot_path:
+                        state.screenshot_path = screenshot_path
+                        screenshot_taken = True
+                        break
+                except Exception:
+                    continue
 
+            if screenshot_taken and screenshot_path:
                 # Try visual grounding with SoM first (more accurate)
                 if self.visual_grounder:
                     try:
@@ -235,21 +243,34 @@ class CometAgent:
                     analysis = self.screenshot_analyzer.analyze_screenshot(screenshot_path)
                     if analysis:
                         state.detected_elements = analysis.get('elements', [])
-            except Exception:
-                pass
 
         # Fallback: use pyautogui for screenshot
         if not screenshot_taken and PYAUTOGUI_OK:
-            try:
-                from pathlib import Path
-                ss_dir = Path("screenshots")
-                ss_dir.mkdir(exist_ok=True)
-                ss_path = str(ss_dir / f"screen_{int(time.time())}.png")
-                img = pyautogui.screenshot()
-                img.save(ss_path)
-                state.screenshot_path = ss_path
-            except Exception:
-                pass
+            for _ in range(self.CAPTURE_RETRIES):
+                try:
+                    from pathlib import Path
+                    ss_dir = Path("screenshots")
+                    ss_dir.mkdir(exist_ok=True)
+                    ss_path = str(ss_dir / f"screen_{int(time.time() * 1000)}.png")
+                    img = pyautogui.screenshot()
+                    img.save(ss_path)
+                    state.screenshot_path = ss_path
+                    screenshot_taken = True
+                    break
+                except Exception:
+                    continue
+
+        # Final fallback through GUI automator
+        if not screenshot_taken and self.gui:
+            for _ in range(self.CAPTURE_RETRIES):
+                try:
+                    shot = self.gui.screenshot()
+                    if shot.get("success") and shot.get("path"):
+                        state.screenshot_path = shot["path"]
+                        screenshot_taken = True
+                        break
+                except Exception:
+                    continue
 
         # Get visible text via OCR
         if self.screen_vision:
@@ -485,8 +506,8 @@ If the task cannot be completed, use action="error" with reasoning.
 
                         # Fallback: Try to find by text/label with GUI automator
                         if self.gui:
-                            success = self.gui.click_text(action.target)
-                            if success:
+                            click_result = self.gui.click_on_text(action.target)
+                            if click_result.get("success"):
                                 # Try to get coordinates from gui for effect
                                 if self.click_effect_callback:
                                     try:
@@ -512,15 +533,20 @@ If the task cannot be completed, use action="error" with reasoning.
                 return False, f"Could not click '{action.target}'"
                 
             elif action.type == ActionType.TYPE:
+                text_to_type = action.value or action.target or ""
+                if not text_to_type:
+                    return False, "No text provided for type action"
                 if self.gui:
-                    self.gui.type_text(action.value)
-                    return True, f"Typed '{action.value[:20]}...'"
+                    type_result = self.gui.type_text(text_to_type)
+                    if not type_result.get("success"):
+                        return False, type_result.get("error", "GUI typing failed")
+                    return True, f"Typed '{text_to_type[:20]}...'"
                 elif PYAUTOGUI_OK:
-                    pyautogui.write(action.value, interval=0.03)
-                    return True, f"Typed '{action.value[:20]}...'"
+                    pyautogui.write(text_to_type, interval=0.03)
+                    return True, f"Typed '{text_to_type[:20]}...'"
                 elif self.browser:
-                    self.browser.type(action.target or "input", action.value)
-                    return True, f"Typed in {action.target}"
+                    self.browser.type(action.target or "input", text_to_type)
+                    return True, f"Typed in {action.target or 'input'}"
 
                 return False, "No typing capability available"
                 
@@ -570,7 +596,24 @@ If the task cannot be completed, use action="error" with reasoning.
             elif action.type == ActionType.SCREENSHOT:
                 if self.screenshot_analyzer:
                     path = self.screenshot_analyzer.capture_screenshot()
-                    return True, f"Screenshot saved: {path}"
+                    if path:
+                        return True, f"Screenshot saved: {path}"
+                if self.gui:
+                    shot = self.gui.screenshot()
+                    if shot.get("success"):
+                        return True, f"Screenshot saved: {shot.get('path', 'unknown')}"
+                    return False, shot.get("error", "Screenshot failed")
+                if PYAUTOGUI_OK:
+                    try:
+                        from pathlib import Path
+                        ss_dir = Path("screenshots")
+                        ss_dir.mkdir(exist_ok=True)
+                        ss_path = str(ss_dir / f"screen_{int(time.time() * 1000)}.png")
+                        pyautogui.screenshot().save(ss_path)
+                        return True, f"Screenshot saved: {ss_path}"
+                    except Exception as screenshot_exc:
+                        return False, f"Screenshot failed: {screenshot_exc}"
+                return False, "No screenshot capability available"
                     
             elif action.type == ActionType.COMPLETE:
                 return True, "Task completed successfully"

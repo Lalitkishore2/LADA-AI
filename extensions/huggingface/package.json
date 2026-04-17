@@ -1,0 +1,16 @@
+{
+  "name": "@lada/huggingface-provider",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA Hugging Face provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

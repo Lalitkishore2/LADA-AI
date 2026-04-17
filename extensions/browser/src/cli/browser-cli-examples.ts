@@ -1,0 +1,35 @@
+export const browserCoreExamples = [
+  "lada browser status",
+  "lada browser start",
+  "lada browser stop",
+  "lada browser tabs",
+  "lada browser open https://example.com",
+  "lada browser focus abcd1234",
+  "lada browser close abcd1234",
+  "lada browser screenshot",
+  "lada browser screenshot --full-page",
+  "lada browser screenshot --ref 12",
+  "lada browser snapshot",
+  "lada browser snapshot --format aria --limit 200",
+  "lada browser snapshot --efficient",
+  "lada browser snapshot --labels",
+];
+
+export const browserActionExamples = [
+  "lada browser navigate https://example.com",
+  "lada browser resize 1280 720",
+  "lada browser click 12 --double",
+  'lada browser type 23 "hello" --submit',
+  "lada browser press Enter",
+  "lada browser hover 44",
+  "lada browser drag 10 11",
+  "lada browser select 9 OptionA OptionB",
+  "lada browser upload /tmp/lada/uploads/file.pdf",
+  'lada browser fill --fields \'[{"ref":"1","value":"Ada"}]\'',
+  "lada browser dialog --accept",
+  'lada browser wait --text "Done"',
+  "lada browser evaluate --fn '(el) => el.textContent' --ref 7",
+  "lada browser console --level error",
+  "lada browser pdf",
+];
+

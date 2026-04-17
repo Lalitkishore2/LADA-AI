@@ -1,0 +1,17 @@
+{
+  "name": "@myorg/lada-my-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "lada": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "ladaVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  }
+}
+

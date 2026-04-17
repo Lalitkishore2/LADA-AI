@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lada-config
+  labels:
+    app: lada
+data:
+  lada.json: |
+    {
+      "gateway": {
+        "mode": "local",
+        "bind": "loopback",
+        "port": 18789,
+        "auth": {
+          "mode": "token"
+        },
+        "controlUi": {
+          "enabled": true
+        }
+      },
+      "agents": {
+        "defaults": {
+          "workspace": "~/.lada/workspace"
+        },
+        "list": [
+          {
+            "id": "default",
+            "name": "LADA Assistant",
+            "workspace": "~/.lada/workspace"
+          }
+        ]
+      },
+      "cron": { "enabled": false }
+    }
+  AGENTS.md: |
+    # LADA Assistant
+
+    You are a helpful AI assistant running in Kubernetes.
+

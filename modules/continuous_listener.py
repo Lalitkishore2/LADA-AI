@@ -73,6 +73,7 @@ class ContinuousListener:
         self.thread: Optional[threading.Thread] = None
         self.recognizer = sr.Recognizer() if SR_AVAILABLE else None
         self.microphone = None
+        self.mic_device_index = self._resolve_microphone_device_index()
         
         # Hybrid STT for offline (Faster-Whisper preferred)
         self.hybrid_stt = None
@@ -86,6 +87,19 @@ class ContinuousListener:
             self.recognizer.dynamic_energy_threshold = True
             self.recognizer.pause_threshold = 0.6  # Faster response
             self.recognizer.phrase_threshold = 0.2
+
+    def _resolve_microphone_device_index(self) -> Optional[int]:
+        """Resolve preferred microphone index from env var."""
+        import os
+        raw = os.getenv("LADA_MIC_DEVICE_INDEX", "").strip()
+        if not raw:
+            return None
+        try:
+            idx = int(raw)
+            return idx if idx >= 0 else None
+        except ValueError:
+            logger.warning("LADA_MIC_DEVICE_INDEX is invalid, ignoring value")
+            return None
     
     def _load_hybrid_stt(self):
         """Load Hybrid STT model for offline recognition (Faster-Whisper on RTX 3050 6GB)"""
@@ -148,7 +162,14 @@ class ContinuousListener:
     def _listen_loop(self):
         """Main listening loop"""
         try:
-            self.microphone = sr.Microphone()
+            if self.mic_device_index is None:
+                self.microphone = sr.Microphone()
+            else:
+                try:
+                    self.microphone = sr.Microphone(device_index=self.mic_device_index)
+                except Exception as exc:
+                    logger.warning(f"Configured microphone index {self.mic_device_index} unavailable: {exc}")
+                    self.microphone = sr.Microphone()
             
             # Calibrate for ambient noise
             with self.microphone as source:

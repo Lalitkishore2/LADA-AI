@@ -1,6 +1,6 @@
 """
 LADA v11.0 - Event Hooks System
-OpenClaw-inspired extensible event-driven automation.
+Extensible event-driven automation.
 Hooks fire asynchronously on command/agent/message lifecycle boundaries
 without modifying LADA core code.
 """

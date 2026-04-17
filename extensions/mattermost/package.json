@@ -1,0 +1,43 @@
+{
+  "name": "@lada/mattermost",
+  "version": "2026.4.6",
+  "description": "LADA Mattermost channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*",
+    "lada": "workspace:*"
+  },
+  "peerDependencies": {
+    "lada": ">=2026.4.6"
+  },
+  "peerDependenciesMeta": {
+    "lada": {
+      "optional": true
+    }
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "mattermost",
+      "label": "Mattermost",
+      "selectionLabel": "Mattermost (plugin)",
+      "docsPath": "/channels/mattermost",
+      "docsLabel": "mattermost",
+      "blurb": "self-hosted Slack-style chat; install the plugin to enable.",
+      "order": 65
+    },
+    "install": {
+      "npmSpec": "@lada/mattermost",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.6"
+    }
+  }
+}
+

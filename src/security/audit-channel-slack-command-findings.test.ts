@@ -1,0 +1,101 @@
+import { describe, expect, it, vi } from "vitest";
+import { collectSlackSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
+import type { LADAConfig } from "../config/config.js";
+import { withChannelSecurityStateDir } from "./audit-channel-security.test-helpers.js";
+
+const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
+  readChannelAllowFromStoreMock: vi.fn(async () => [] as string[]),
+}));
+
+vi.mock("lada/plugin-sdk/conversation-runtime", () => ({
+  readChannelAllowFromStore: readChannelAllowFromStoreMock,
+}));
+
+function createSlackAccount(
+  config: NonNullable<LADAConfig["channels"]>["slack"],
+): Parameters<typeof collectSlackSecurityAuditFindings>[0]["account"] {
+  return {
+    accountId: "default",
+    enabled: true,
+    botToken: "xoxb-test",
+    botTokenSource: "config",
+    appTokenSource: "config",
+    config,
+  } as Parameters<typeof collectSlackSecurityAuditFindings>[0]["account"];
+}
+
+describe("security audit slack command findings", () => {
+  it("flags Slack slash commands without a channel users allowlist", async () => {
+    const cfg: LADAConfig = {
+      channels: {
+        slack: {
+          enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+          groupPolicy: "open",
+          slashCommand: { enabled: true },
+        },
+      },
+    };
+
+    await withChannelSecurityStateDir(async () => {
+      readChannelAllowFromStoreMock.mockResolvedValue([]);
+      const findings = await collectSlackSecurityAuditFindings({
+        cfg: cfg as LADAConfig & {
+          channels: {
+            slack: NonNullable<LADAConfig["channels"]>["slack"];
+          };
+        },
+        account: createSlackAccount(cfg.channels!.slack),
+        accountId: "default",
+      });
+
+      expect(findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("flags Slack slash commands when access-group enforcement is disabled", async () => {
+    const cfg: LADAConfig = {
+      commands: { useAccessGroups: false },
+      channels: {
+        slack: {
+          enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+          groupPolicy: "open",
+          slashCommand: { enabled: true },
+        },
+      },
+    };
+
+    await withChannelSecurityStateDir(async () => {
+      readChannelAllowFromStoreMock.mockResolvedValue([]);
+      const findings = await collectSlackSecurityAuditFindings({
+        cfg: cfg as LADAConfig & {
+          channels: {
+            slack: NonNullable<LADAConfig["channels"]>["slack"];
+          };
+        },
+        account: createSlackAccount(cfg.channels!.slack),
+        accountId: "default",
+      });
+
+      expect(findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.useAccessGroups_off",
+            severity: "critical",
+          }),
+        ]),
+      );
+    });
+  });
+});
+

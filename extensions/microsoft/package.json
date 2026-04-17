@@ -1,0 +1,19 @@
+{
+  "name": "@lada/microsoft-speech",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA Microsoft speech plugin",
+  "type": "module",
+  "dependencies": {
+    "node-edge-tts": "^1.2.10"
+  },
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

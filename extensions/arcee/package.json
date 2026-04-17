@@ -1,0 +1,16 @@
+{
+  "name": "@lada/arcee-provider",
+  "version": "2026.4.4",
+  "private": true,
+  "description": "LADA Arcee provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

@@ -1964,7 +1964,7 @@ class RichTextLabel(QTextBrowser):
 
 
 class Msg(QFrame):
-    """Full-width message row (ChatGPT/Claude style) with hover toolbar."""
+    """Full-width message row (modern chat style) with hover toolbar."""
     copy_clicked = pyqtSignal(str)
     regenerate_clicked = pyqtSignal()
     feedback_clicked = pyqtSignal(str)  # 'up' or 'down'
@@ -4292,8 +4292,8 @@ class LadaApp(QMainWindow):
 
         return False, ""
 
-    def _handle_openclaw_alias_command(self, text: str) -> tuple:
-        """Handle OpenClaw-prefixed commands as native LADA aliases.
+    def _handle_lada_browser_command(self, text: str) -> tuple:
+        """Handle LADA browser-prefixed commands as native aliases.
 
         This keeps user continuity while enforcing native-only runtime behavior.
         """
@@ -4302,27 +4302,27 @@ class LadaApp(QMainWindow):
 
         adapter = None
         try:
-            from integrations.openclaw_adapter import get_openclaw_adapter
-            adapter = get_openclaw_adapter()
+            from integrations.lada_browser_adapter import get_lada_browser_adapter
+            adapter = get_lada_browser_adapter()
         except Exception as e:
-            logger.debug(f"[LADA] OpenClaw adapter unavailable: {e}")
+            logger.debug(f"[LADA] Browser adapter unavailable: {e}")
 
-        if lc in {"openclaw", "openclaw help"}:
+        if lc in {"lada browser", "lada browser help"}:
             return True, (
-                "OpenClaw compatibility commands:\n"
-                "- openclaw status\n"
-                "- openclaw connect\n"
-                "- openclaw disconnect\n"
-                "- openclaw navigate <url>\n"
-                "- openclaw snapshot\n"
-                "- openclaw click <selector>\n"
-                "- openclaw type <selector> :: <text>\n"
-                "- openclaw scroll <up|down> [pixels]\n"
-                "- openclaw extract [selector]"
+                "LADA browser commands:\n"
+                "- lada browser status\n"
+                "- lada browser connect\n"
+                "- lada browser disconnect\n"
+                "- lada browser navigate <url>\n"
+                "- lada browser snapshot\n"
+                "- lada browser click <selector>\n"
+                "- lada browser type <selector> :: <text>\n"
+                "- lada browser scroll <up|down> [pixels]\n"
+                "- lada browser extract [selector]"
             )
 
-        if lc == "openclaw status":
-            lines = ["OpenClaw compatibility status:"]
+        if lc == "lada browser status":
+            lines = ["LADA browser compatibility status:"]
             if adapter:
                 status = adapter.status()
                 lines.append(f"- adapter enabled: {status.get('enabled', False)}")
@@ -4331,34 +4331,34 @@ class LadaApp(QMainWindow):
                 if status.get('url'):
                     lines.append(f"- gateway: {status.get('url')}")
             else:
-                lines.append("- adapter: disabled (set LADA_OPENCLAW_ADAPTER_ENABLED=true to enable gateway mode)")
+                lines.append("- adapter: disabled (set LADA_BROWSER_ADAPTER_ENABLED=true to enable gateway mode)")
             handled, backend = self._handle_backend_status()
             if handled:
                 lines.append("")
                 lines.append(backend)
             return True, "\n".join(lines)
 
-        if lc == "openclaw connect":
+        if lc == "lada browser connect":
             if not adapter:
-                return True, "OpenClaw adapter is disabled. Set LADA_OPENCLAW_ADAPTER_ENABLED=true and restart."
+                return True, "Browser adapter is disabled. Set LADA_BROWSER_ADAPTER_ENABLED=true and restart."
             ok = adapter.connect()
-            return True, "OpenClaw adapter connected." if ok else "OpenClaw adapter connection failed."
+            return True, "Browser adapter connected." if ok else "Browser adapter connection failed."
 
-        if lc == "openclaw disconnect":
+        if lc == "lada browser disconnect":
             if not adapter:
-                return True, "OpenClaw adapter is not active."
+                return True, "Browser adapter is not active."
             adapter.disconnect()
-            return True, "OpenClaw adapter disconnected."
+            return True, "Browser adapter disconnected."
 
-        if lc.startswith("openclaw navigate "):
-            url = command[len("openclaw navigate "):].strip()
+        if lc.startswith("lada browser navigate "):
+            url = command[len("lada browser navigate "):].strip()
             if not url:
-                return True, "Usage: openclaw navigate <url>"
+                return True, "Usage: lada browser navigate <url>"
             if not url.startswith(("http://", "https://")):
                 url = f"https://{url}"
 
             if adapter and adapter.navigate(url):
-                return True, f"OpenClaw adapter navigated to {url}."
+                return True, f"Browser adapter navigated to {url}."
 
             handled, response = self._dispatch_system_command(f"open {url}")
             if handled:
@@ -4369,12 +4369,12 @@ class LadaApp(QMainWindow):
                     return True, response
             return True, f"Tried native navigation to {url}, but could not complete it."
 
-        if lc == "openclaw snapshot":
+        if lc == "lada browser snapshot":
             if adapter:
                 snapshot = adapter.snapshot_summary()
                 if snapshot:
                     return True, (
-                        "OpenClaw snapshot summary:\n"
+                        "LADA browser snapshot summary:\n"
                         f"- URL: {snapshot.get('url', '')}\n"
                         f"- Title: {snapshot.get('title', '')}\n"
                         f"- Interactive elements: {snapshot.get('interactive_elements', 0)}\n"
@@ -4404,13 +4404,13 @@ class LadaApp(QMainWindow):
                 return True, response
             return True, "Native screenshot command is currently unavailable."
 
-        if lc.startswith("openclaw click "):
-            selector = command[len("openclaw click "):].strip()
+        if lc.startswith("lada browser click "):
+            selector = command[len("lada browser click "):].strip()
             if not selector:
-                return True, "Usage: openclaw click <selector>"
+                return True, "Usage: lada browser click <selector>"
 
             if adapter and adapter.click(selector):
-                return True, f"OpenClaw adapter clicked: {selector}"
+                return True, f"Browser adapter clicked: {selector}"
 
             try:
                 from modules.stealth_browser import get_stealth_browser
@@ -4423,18 +4423,18 @@ class LadaApp(QMainWindow):
 
             return True, f"Could not click selector: {selector}"
 
-        if lc.startswith("openclaw type "):
-            payload = command[len("openclaw type "):].strip()
+        if lc.startswith("lada browser type "):
+            payload = command[len("lada browser type "):].strip()
             separator = "::" if "::" in payload else "|" if "|" in payload else ""
             if not separator:
-                return True, "Usage: openclaw type <selector> :: <text>"
+                return True, "Usage: lada browser type <selector> :: <text>"
 
             selector, typed = [p.strip() for p in payload.split(separator, 1)]
             if not selector:
-                return True, "Usage: openclaw type <selector> :: <text>"
+                return True, "Usage: lada browser type <selector> :: <text>"
 
             if adapter and adapter.type_text(selector, typed):
-                return True, f"OpenClaw adapter typed into {selector}."
+                return True, f"Browser adapter typed into {selector}."
 
             try:
                 from modules.stealth_browser import get_stealth_browser
@@ -4447,8 +4447,8 @@ class LadaApp(QMainWindow):
 
             return True, f"Could not type into selector: {selector}"
 
-        if lc.startswith("openclaw scroll "):
-            payload = command[len("openclaw scroll "):].strip().split()
+        if lc.startswith("lada browser scroll "):
+            payload = command[len("lada browser scroll "):].strip().split()
             direction = payload[0].lower() if payload else "down"
             if direction not in {"up", "down"}:
                 direction = "down"
@@ -4460,7 +4460,7 @@ class LadaApp(QMainWindow):
                     amount = 500
 
             if adapter and adapter.scroll(direction=direction, amount=amount):
-                return True, f"OpenClaw adapter scrolled {direction} by {amount}px."
+                return True, f"Browser adapter scrolled {direction} by {amount}px."
 
             try:
                 from modules.stealth_browser import get_stealth_browser
@@ -4473,8 +4473,8 @@ class LadaApp(QMainWindow):
 
             return True, f"Could not scroll {direction}."
 
-        if lc.startswith("openclaw extract"):
-            selector = command[len("openclaw extract"):].strip()
+        if lc.startswith("lada browser extract"):
+            selector = command[len("lada browser extract"):].strip()
 
             if adapter:
                 text_out = adapter.extract_text(selector=selector or None)
@@ -4500,8 +4500,8 @@ class LadaApp(QMainWindow):
             return True, "Could not extract page content."
 
         return True, (
-            "OpenClaw compatibility command not recognized. "
-            "Use 'openclaw help' for supported commands."
+            "LADA browser command not recognized. "
+            "Use 'lada browser help' for supported commands."
         )
 
     def _start_ollama(self):
@@ -5266,9 +5266,8 @@ class LadaApp(QMainWindow):
         """
         t = text.lower().strip()
 
-        # Native-only runtime: OpenClaw-prefixed commands map to native aliases.
-        if t.startswith("openclaw"):
-            return self._handle_openclaw_alias_command(text)
+        if t.startswith("lada browser"):
+            return self._handle_lada_browser_command(text)
 
         # === SYSTEM COMMAND KEYWORDS - always try JARVIS first for these ===
         system_keywords = [

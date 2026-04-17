@@ -1,0 +1,19 @@
+{
+  "name": "@lada/google-plugin",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA Google plugin",
+  "type": "module",
+  "dependencies": {
+    "@google/genai": "^1.48.0"
+  },
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

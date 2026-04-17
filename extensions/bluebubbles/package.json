@@ -1,0 +1,57 @@
+{
+  "name": "@lada/bluebubbles",
+  "version": "2026.4.6",
+  "description": "LADA BlueBubbles channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*",
+    "lada": "workspace:*"
+  },
+  "peerDependencies": {
+    "lada": ">=2026.4.6"
+  },
+  "peerDependenciesMeta": {
+    "lada": {
+      "optional": true
+    }
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "bluebubbles",
+      "label": "BlueBubbles",
+      "selectionLabel": "BlueBubbles (macOS app)",
+      "detailLabel": "BlueBubbles",
+      "docsPath": "/channels/bluebubbles",
+      "docsLabel": "bluebubbles",
+      "blurb": "iMessage via the BlueBubbles mac app + REST API.",
+      "aliases": [
+        "bb"
+      ],
+      "preferOver": [
+        "imessage"
+      ],
+      "systemImage": "bubble.left.and.text.bubble.right",
+      "order": 75
+    },
+    "install": {
+      "npmSpec": "@lada/bluebubbles",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.6"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.6"
+    },
+    "build": {
+      "ladaVersion": "2026.4.6"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
+

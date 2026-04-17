@@ -1,0 +1,43 @@
+{
+  "name": "@lada/line",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA LINE channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*",
+    "lada": "workspace:*"
+  },
+  "peerDependencies": {
+    "lada": ">=2026.4.6"
+  },
+  "peerDependenciesMeta": {
+    "lada": {
+      "optional": true
+    }
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "line",
+      "label": "LINE",
+      "selectionLabel": "LINE (Messaging API)",
+      "detailLabel": "LINE Bot",
+      "docsPath": "/channels/line",
+      "docsLabel": "line",
+      "blurb": "LINE Messaging API webhook bot.",
+      "systemImage": "message",
+      "order": 75,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@lada/line",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.6"
+    }
+  }
+}
+

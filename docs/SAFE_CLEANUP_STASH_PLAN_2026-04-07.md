@@ -21,7 +21,7 @@ This plan is non-destructive and uses path-scoped stashes so you can restore onl
 - `data/workflows/morning_routine.json`
 - `data/workflows/research_workflow.json`
 - `docs/SETUP.md`
-- `exports/test_export.md`
+- `docs/exports/test_export.md`
 - `frontend/src/app/remote/page.tsx`
 - `frontend/src/app/settings/page.tsx`
 - `frontend/src/lib/lada-api.ts`
@@ -60,7 +60,7 @@ This plan is non-destructive and uses path-scoped stashes so you can restore onl
 This captures machine-generated runtime files, logs, caches, and drafts.
 
 ```powershell
-git stash push -u -m "wip/runtime-artifacts-2026-04-07" -- .coverage config/last_briefing.txt config/weather_cache.json data/audit/remote_actions.jsonl data/workflows/evening_routine.json data/workflows/morning_routine.json data/workflows/research_workflow.json exports/test_export.md tests/test_history.json data/email_drafts data/secure_vault.invalid-*.enc
+git stash push -u -m "wip/runtime-artifacts-2026-04-07" -- .coverage config/last_briefing.txt config/weather_cache.json data/audit/remote_actions.jsonl data/workflows/evening_routine.json data/workflows/morning_routine.json data/workflows/research_workflow.json docs/exports/test_export.md tests/test_history.json data/email_drafts data/secure_vault.invalid-*.enc
 ```
 
 ## Step 2 - Stash unrelated code/product work

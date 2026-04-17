@@ -22,9 +22,12 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 HANDLER_CONTRACT_VERSION = os.getenv("LADA_TOOL_HANDLER_CONTRACT_VERSION", "1.0")
+_todo_lock = Lock()
+_session_todos: List[Dict[str, Any]] = []
 
 
 def _major_from_version(version_text: str) -> int:
@@ -345,6 +348,119 @@ def _handle_comet_task(task: str = "") -> ToolResult:
         return ToolResult(success=False, output="", error="Comet agent not available")
     except Exception as e:
         return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_task(prompt: str = "", agent_type: str = "task",
+                 files: Optional[List[str]] = None, timeout: int = 120) -> ToolResult:
+    """
+    Spawn a local subagent task with strict depth=1 isolation.
+    """
+    if not prompt.strip():
+        return ToolResult(success=False, output="", error="Task prompt is required")
+    try:
+        from modules.subagents.runtime import get_subagent_runtime, SubagentConfig
+
+        runtime = get_subagent_runtime()
+        config = SubagentConfig(
+            agent_type=(agent_type or "task").strip(),
+            task_description=prompt.strip(),
+            timeout_seconds=max(10, int(timeout or 120)),
+            context={"files": files or [], "transport": "local-runtime"},
+            allow_subagents=False,
+            inherit_context=False,
+            session_id="tool-task",
+        )
+        state = runtime.spawn_and_get(config=config)
+        result = runtime.wait(state.id, timeout=max(10, int(timeout or 120)))
+
+        if result and result.success:
+            return ToolResult(
+                success=True,
+                output=result.output or f"Subagent {state.id} completed",
+                data={"subagent_id": state.id, "agent_type": config.agent_type, "depth": state.depth},
+            )
+
+        err = result.error if result else "Subagent did not produce a result"
+        return ToolResult(
+            success=False,
+            output="",
+            error=err,
+            data={"subagent_id": state.id, "agent_type": config.agent_type, "depth": state.depth},
+        )
+    except Exception as e:
+        return ToolResult(success=False, output="", error=str(e))
+
+
+def _handle_todo_write(action: str = "list", id: str = "", title: str = "",
+                       description: str = "", status: str = "pending") -> ToolResult:
+    """
+    In-memory todo tracker for the AI command loop.
+    """
+    action_key = (action or "").strip().lower()
+    with _todo_lock:
+        if action_key == "add":
+            if not title.strip():
+                return ToolResult(success=False, output="", error="title is required for add")
+            todo_id = id.strip() or f"todo-{len(_session_todos) + 1}"
+            if any(t["id"] == todo_id for t in _session_todos):
+                return ToolResult(success=False, output="", error=f"Todo ID already exists: {todo_id}")
+            item = {
+                "id": todo_id,
+                "title": title.strip(),
+                "description": (description or "").strip(),
+                "status": status if status in {"pending", "in_progress", "done", "blocked"} else "pending",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+            _session_todos.append(item)
+            return ToolResult(success=True, output=f"Added todo {todo_id}: {item['title']}", data={"todo": item})
+
+        if action_key == "update":
+            todo_id = id.strip()
+            if not todo_id:
+                return ToolResult(success=False, output="", error="id is required for update")
+            for item in _session_todos:
+                if item["id"] == todo_id:
+                    if title.strip():
+                        item["title"] = title.strip()
+                    if description.strip():
+                        item["description"] = description.strip()
+                    if status in {"pending", "in_progress", "done", "blocked"}:
+                        item["status"] = status
+                    item["updated_at"] = datetime.now().isoformat()
+                    return ToolResult(success=True, output=f"Updated todo {todo_id}", data={"todo": item})
+            return ToolResult(success=False, output="", error=f"Todo not found: {todo_id}")
+
+        if action_key == "complete":
+            todo_id = id.strip()
+            if not todo_id:
+                return ToolResult(success=False, output="", error="id is required for complete")
+            for item in _session_todos:
+                if item["id"] == todo_id:
+                    item["status"] = "done"
+                    item["updated_at"] = datetime.now().isoformat()
+                    return ToolResult(success=True, output=f"Completed todo {todo_id}", data={"todo": item})
+            return ToolResult(success=False, output="", error=f"Todo not found: {todo_id}")
+
+        if action_key == "delete":
+            todo_id = id.strip()
+            if not todo_id:
+                return ToolResult(success=False, output="", error="id is required for delete")
+            before = len(_session_todos)
+            _session_todos[:] = [t for t in _session_todos if t["id"] != todo_id]
+            if len(_session_todos) == before:
+                return ToolResult(success=False, output="", error=f"Todo not found: {todo_id}")
+            return ToolResult(success=True, output=f"Deleted todo {todo_id}")
+
+        if action_key == "list":
+            if not _session_todos:
+                return ToolResult(success=True, output="No todos yet.", data={"todos": []})
+            lines = ["Session todos:"]
+            for item in _session_todos:
+                lines.append(f"- [{item['status']}] {item['id']}: {item['title']}")
+            return ToolResult(success=True, output="\n".join(lines), data={"todos": list(_session_todos)})
+
+    return ToolResult(success=False, output="", error=f"Unsupported action: {action}")
 
 
 # ============================================================
@@ -1382,6 +1498,8 @@ def wire_tool_handlers(registry: ToolRegistry) -> int:
         'next_song': _handle_next_song,
         'lights_control': _handle_lights_control,
         'comet_task': _handle_comet_task,
+        'task': _handle_task,
+        'todo_write': _handle_todo_write,
         # New tools (AI Command Agent)
         'find_files': _handle_find_files,
         'list_directory': _handle_list_directory,

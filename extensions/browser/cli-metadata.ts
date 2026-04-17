@@ -1,0 +1,17 @@
+import { definePluginEntry } from "lada/plugin-sdk/core";
+
+export default definePluginEntry({
+  id: "browser",
+  name: "Browser",
+  description: "Default browser tool plugin",
+  register(api) {
+    api.registerCli(
+      async ({ program }) => {
+        const { registerBrowserCli } = await import("./runtime-api.js");
+        registerBrowserCli(program);
+      },
+      { commands: ["browser"] },
+    );
+  },
+});
+

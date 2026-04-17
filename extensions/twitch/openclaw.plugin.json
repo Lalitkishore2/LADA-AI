@@ -1,0 +1,13 @@
+{
+  "id": "twitch",
+  "channels": ["twitch"],
+  "channelEnvVars": {
+    "twitch": ["LADA_TWITCH_ACCESS_TOKEN"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+

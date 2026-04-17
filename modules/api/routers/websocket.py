@@ -6,6 +6,8 @@ Security features:
 - Connection rate limiting
 - Max concurrent connections per IP
 - Idle timeout
+- Protocol v1.0 handshake with role/scope negotiation
+- Idempotency enforcement for side-effect operations
 """
 
 import json
@@ -16,9 +18,10 @@ import logging
 import os
 from datetime import datetime
 from collections import defaultdict
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from urllib.parse import urlparse
 
 from modules.api.deps import normalize_request_id
 from modules.error_sanitizer import safe_error_response
@@ -31,8 +34,42 @@ WS_MAX_CONNECTIONS_PER_IP = int(os.getenv("LADA_WS_MAX_CONN_PER_IP", "5"))
 WS_IDLE_TIMEOUT = int(os.getenv("LADA_WS_IDLE_TIMEOUT", "300"))  # 5 minutes
 WS_MESSAGE_RATE_LIMIT = int(os.getenv("LADA_WS_MSG_RATE_LIMIT", "30"))  # messages per minute
 
+# Protocol v1.0 feature flags
+WS_PROTOCOL_ENABLED = os.getenv("LADA_WS_PROTOCOL_ENABLED", "1").lower() in ("1", "true", "yes")
+WS_PROTOCOL_HANDSHAKE_TIMEOUT = int(os.getenv("LADA_WS_HANDSHAKE_TIMEOUT", "10"))  # seconds
+WS_REQUIRE_IDEMPOTENCY = os.getenv("LADA_WS_REQUIRE_IDEMPOTENCY", "0").lower() in ("1", "true", "yes")
+
 # Track connections per IP
 _connections_per_ip: dict = defaultdict(int)
+
+# Protocol validator singleton (lazy loaded)
+_protocol_validator: Optional[Any] = None
+
+
+def _extract_ws_auth_token(websocket: WebSocket) -> str:
+    """Extract session token from Authorization header or query string."""
+    auth_header = (websocket.headers.get("authorization") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        bearer_token = auth_header[7:].strip()
+        if bearer_token:
+            return bearer_token
+    return (websocket.query_params.get("token", "") or "").strip()
+
+
+def _get_protocol_validator():
+    """Lazy-load protocol validator to avoid circular imports."""
+    global _protocol_validator
+    if _protocol_validator is None and WS_PROTOCOL_ENABLED:
+        try:
+            from modules.gateway_protocol.validator import ProtocolValidator
+            _protocol_validator = ProtocolValidator(
+                require_idempotency=WS_REQUIRE_IDEMPOTENCY,
+                max_frame_size=WS_MAX_MESSAGE_SIZE,
+            )
+            logger.info("[WS] Protocol v1.0 validator initialized")
+        except ImportError as e:
+            logger.warning(f"[WS] Protocol validator not available: {e}")
+    return _protocol_validator
 
 
 def _sanitize_ws_error_message(exception: Exception, operation: str) -> str:
@@ -50,6 +87,165 @@ async def _send_ws_response(ws, msg_type: str, msg_id: str, data: Any, request_i
     else:
         payload["request_id"] = resolved_request_id
     await ws.send_json(payload)
+
+
+def _safe_agent_url(url: str) -> str:
+    candidate = str(url or "").strip()
+    if not candidate:
+        return ""
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return ""
+    lowered = candidate.lower()
+    blocked_prefixes = ("chrome://", "devtools://", "about:", "file://", "javascript:", "data:")
+    if lowered.startswith(blocked_prefixes):
+        return ""
+    return candidate
+
+
+async def _handle_agent_rpc(state, ws, msg_id: str, data: Dict[str, Any], request_id: str = ""):
+    """Handle high-frequency browser automation RPC over /agent WebSocket."""
+    action = str(data.get("action", "")).strip().lower()
+    if not action:
+        await _send_ws_response(
+            ws, "agent.rpc.error", msg_id,
+            {"message": "action is required"},
+            request_id=request_id,
+        )
+        return
+
+    adapter = None
+    try:
+        state.load_components()
+        adapter = getattr(state, "lada_browser_adapter", None)
+        if adapter is None:
+            try:
+                from integrations.lada_browser_adapter import get_lada_browser_adapter
+                adapter = get_lada_browser_adapter()
+                state.lada_browser_adapter = adapter
+            except Exception:
+                adapter = None
+    except Exception:
+        adapter = None
+
+    try:
+        from modules.stealth_browser import get_stealth_browser
+        browser = get_stealth_browser()
+    except Exception as e:
+        await _send_ws_response(
+            ws, "agent.rpc.error", msg_id,
+            {"message": f"Browser automation unavailable: {e}"},
+            request_id=request_id,
+        )
+        return
+
+    if action == "navigate":
+        url = _safe_agent_url(data.get("url", ""))
+        if not url:
+            await _send_ws_response(
+                ws, "agent.rpc.error", msg_id,
+                {"message": "Blocked or invalid URL"},
+                request_id=request_id,
+            )
+            return
+
+        if adapter and getattr(adapter, "navigate", None):
+            ok = bool(adapter.navigate(url))
+            if ok:
+                await _send_ws_response(
+                    ws, "agent.rpc.done", msg_id,
+                    {"success": True, "action": action, "mode": "lada_browser_adapter", "url": url},
+                    request_id=request_id,
+                )
+                return
+
+        result = browser.navigate(url)
+        await _send_ws_response(
+            ws, "agent.rpc.done", msg_id,
+            {"success": bool(result.get("success")), "action": action, "mode": "stealth_browser", "result": result},
+            request_id=request_id,
+        )
+        return
+
+    if action == "click":
+        selector = str(data.get("selector", "")).strip()
+        by = str(data.get("by", "css") or "css").strip()
+        if not selector:
+            await _send_ws_response(ws, "agent.rpc.error", msg_id, {"message": "selector is required"}, request_id=request_id)
+            return
+
+        if adapter and getattr(adapter, "click", None):
+            ok = bool(adapter.click(selector))
+            if ok:
+                await _send_ws_response(
+                    ws, "agent.rpc.done", msg_id,
+                    {"success": True, "action": action, "mode": "lada_browser_adapter", "selector": selector},
+                    request_id=request_id,
+                )
+                return
+
+        result = browser.click(selector=selector, by=by)
+        await _send_ws_response(
+            ws, "agent.rpc.done", msg_id,
+            {"success": bool(result.get("success")), "action": action, "mode": "stealth_browser", "result": result},
+            request_id=request_id,
+        )
+        return
+
+    if action == "type":
+        selector = str(data.get("selector", "")).strip()
+        text = str(data.get("text", ""))
+        by = str(data.get("by", "css") or "css").strip()
+        if not selector:
+            await _send_ws_response(ws, "agent.rpc.error", msg_id, {"message": "selector is required"}, request_id=request_id)
+            return
+
+        if adapter and getattr(adapter, "type_text", None):
+            ok = bool(adapter.type_text(selector, text))
+            if ok:
+                await _send_ws_response(
+                    ws, "agent.rpc.done", msg_id,
+                    {"success": True, "action": action, "mode": "lada_browser_adapter", "selector": selector},
+                    request_id=request_id,
+                )
+                return
+
+        result = browser.type_text(selector=selector, text=text, by=by)
+        await _send_ws_response(
+            ws, "agent.rpc.done", msg_id,
+            {"success": bool(result.get("success")), "action": action, "mode": "stealth_browser", "result": result},
+            request_id=request_id,
+        )
+        return
+
+    if action == "scroll":
+        direction = str(data.get("direction", "down")).strip().lower() or "down"
+        amount = int(data.get("amount", 500))
+        if adapter and getattr(adapter, "scroll", None):
+            ok = bool(adapter.scroll(direction=direction, amount=amount))
+            if ok:
+                await _send_ws_response(
+                    ws, "agent.rpc.done", msg_id,
+                    {"success": True, "action": action, "mode": "lada_browser_adapter", "direction": direction, "amount": amount},
+                    request_id=request_id,
+                )
+                return
+
+        result = browser.scroll(direction=direction, amount=amount)
+        await _send_ws_response(
+            ws, "agent.rpc.done", msg_id,
+            {"success": bool(result.get("success")), "action": action, "mode": "stealth_browser", "result": result},
+            request_id=request_id,
+        )
+        return
+
+    await _send_ws_response(
+        ws, "agent.rpc.error", msg_id,
+        {"message": f"Unsupported action: {action}"},
+        request_id=request_id,
+    )
 
 
 def _event_to_dict(event) -> dict:
@@ -283,6 +479,123 @@ def _maybe_cleanup_orchestrator_event_bridge(state):
         state.ws_orchestrator_subscription_filters.clear()
 
 
+# ============================================================================
+# Approval Event Broadcasting
+# ============================================================================
+
+async def _broadcast_approval_event(state, event_type: str, event_payload: dict):
+    """
+    Broadcast approval events to subscribed WebSocket sessions.
+    
+    Event types:
+    - approval.requested: New approval request created
+    - approval.approved: Request was approved
+    - approval.denied: Request was denied
+    - approval.cancelled: Request was cancelled
+    - approval.expired: Request expired
+    """
+    subscribers = list(getattr(state, "ws_approval_subscribers", set()))
+    if not subscribers:
+        return
+    
+    stale_sessions = []
+    event_request_id = normalize_request_id(
+        event_payload.get("request_id") or event_payload.get("id"),
+        prefix="ws-approval",
+    )
+    message = {
+        "type": event_type,
+        "data": {
+            "event": event_payload,
+            "request_id": event_request_id,
+            "timestamp": datetime.now().isoformat(),
+        },
+    }
+    
+    for session_id in subscribers:
+        ws = state.ws_connections.get(session_id)
+        if ws is None:
+            stale_sessions.append(session_id)
+            continue
+        
+        # Check agent_id filter if set
+        session_filter = getattr(state, "ws_approval_subscription_filters", {}).get(session_id, {})
+        filter_agent_id = session_filter.get("agent_id")
+        event_agent_id = event_payload.get("agent_id")
+        
+        if filter_agent_id and event_agent_id and filter_agent_id != event_agent_id:
+            continue
+        
+        try:
+            await ws.send_json(message)
+            if session_id in state.ws_sessions:
+                state.ws_sessions[session_id]['messages_sent'] += 1
+        except Exception:
+            stale_sessions.append(session_id)
+    
+    for session_id in stale_sessions:
+        state.ws_approval_subscribers.discard(session_id)
+        if hasattr(state, "ws_approval_subscription_filters"):
+            state.ws_approval_subscription_filters.pop(session_id, None)
+
+
+def broadcast_approval_event_sync(state, event_type: str, event_payload: dict):
+    """
+    Synchronous wrapper to broadcast approval events from non-async context.
+    
+    Call this from approval queue callbacks.
+    """
+    loop = getattr(state, "ws_approval_event_loop", None)
+    if loop is None or loop.is_closed():
+        return
+    
+    try:
+        asyncio.run_coroutine_threadsafe(
+            _broadcast_approval_event(state, event_type, event_payload),
+            loop,
+        )
+    except Exception as exc:
+        logger.warning(f"[WS] Failed to schedule approval event broadcast: {exc}")
+
+
+async def _process_legacy_message(state, websocket, session_id: str, raw: str, request_id: str):
+    """
+    Process a message received during handshake that wasn't a protocol connect.
+    Used for backward compatibility with legacy clients.
+    """
+    session = state.ws_sessions.get(session_id)
+    if not session:
+        return
+    
+    try:
+        msg = json.loads(raw)
+    except json.JSONDecodeError:
+        await websocket.send_json({
+            "type": "error",
+            "data": {"message": "Invalid JSON", "request_id": request_id},
+        })
+        return
+    
+    msg_type = msg.get("type", "")
+    msg_id = msg.get("id", "")
+    msg_data = msg.get("data", {})
+    if not isinstance(msg_data, dict):
+        msg_data = {}
+    msg_request_id = normalize_request_id(
+        msg.get("request_id") or msg.get("correlation_id") or request_id,
+        prefix="ws",
+    )
+    session['messages_received'] = session.get('messages_received', 0) + 1
+    
+    # Delegate to appropriate handler (simplified for common cases)
+    if msg_type == "ping":
+        await websocket.send_json({"type": "pong", "data": {"request_id": msg_request_id}})
+    elif msg_type == "chat":
+        # Will be handled in main loop
+        pass
+    # Other types will be processed in main message loop
+
+
 def create_ws_router(state):
     """Create WebSocket gateway router."""
     r = APIRouter(tags=["websocket"])
@@ -316,7 +629,7 @@ def create_ws_router(state):
             _connections_per_ip[client_ip] += 1
             reserved = True
             
-            token = websocket.query_params.get("token", "")
+            token = _extract_ws_auth_token(websocket)
             if not state.validate_session_token(token):
                 await websocket.close(code=4001, reason="Authentication required")
                 return
@@ -341,13 +654,100 @@ def create_ws_router(state):
             'rate_limit_window_start': time.time(),
             'orchestrator_events': False,
             'orchestrator_event_filters': {},
+            'protocol_session': None,  # Protocol v1.0 session state
+            'granted_scopes': [],  # Protocol v1.0 scopes
         }
         logger.info(f"[WS] Client connected: {session_id} from {client_ip} ({connect_request_id})")
 
-        try:
+        # Protocol v1.0 handshake (optional, backward compatible)
+        protocol_session = None
+        validator = _get_protocol_validator()
+        
+        if validator and WS_PROTOCOL_ENABLED:
+            try:
+                # Wait for connect message with timeout
+                raw_handshake = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=WS_PROTOCOL_HANDSHAKE_TIMEOUT
+                )
+                
+                handshake_data = json.loads(raw_handshake)
+                msg_type = handshake_data.get("type", "")
+                
+                # Check if client is using protocol v1.0
+                if msg_type == "connect" or "protocol_version" in handshake_data:
+                    response, protocol_session = validator.validate_connect(handshake_data)
+                    
+                    if not response.success:
+                        await websocket.send_json(response.to_dict())
+                        await websocket.close(code=4003, reason=response.error.message if response.error else "Handshake failed")
+                        logger.warning(f"[WS] Protocol handshake failed for {session_id}: {response.error}")
+                        return
+                    
+                    # Store protocol session state
+                    state.ws_sessions[session_id]['protocol_session'] = protocol_session
+                    state.ws_sessions[session_id]['granted_scopes'] = [s.value for s in response.granted_scopes]
+                    
+                    # Send protocol connected response
+                    await websocket.send_json(response.to_dict())
+                    logger.info(f"[WS] Protocol v1.0 handshake complete for {session_id}")
+                else:
+                    # Legacy client - process message after sending legacy connected
+                    await websocket.send_json({
+                        "type": "system.connected",
+                        "data": {"session_id": session_id, "version": "9.0.0",
+                                 "request_id": connect_request_id,
+                                 "protocol_version": "1.0",
+                                 "capabilities": [
+                                     "chat",
+                                     "stream",
+                                     "agent",
+                                     "system",
+                                     "orchestrator.dispatch",
+                                     "orchestrator.events",
+                                 ],
+                                 "limits": {
+                                     "max_message_size": WS_MAX_MESSAGE_SIZE,
+                                     "rate_limit": WS_MESSAGE_RATE_LIMIT,
+                                     "idle_timeout": WS_IDLE_TIMEOUT,
+                                 }},
+                    })
+                    # Process the first message that wasn't a handshake
+                    await _process_legacy_message(state, websocket, session_id, raw_handshake, connect_request_id)
+                    
+            except asyncio.TimeoutError:
+                # No handshake message received - legacy client, send connected
+                await websocket.send_json({
+                    "type": "system.connected",
+                    "data": {"session_id": session_id, "version": "9.0.0",
+                             "request_id": connect_request_id,
+                             "protocol_version": "1.0",
+                             "capabilities": [
+                                 "chat",
+                                 "stream",
+                                 "agent",
+                                 "system",
+                                 "orchestrator.dispatch",
+                                 "orchestrator.events",
+                             ],
+                             "limits": {
+                                 "max_message_size": WS_MAX_MESSAGE_SIZE,
+                                 "rate_limit": WS_MESSAGE_RATE_LIMIT,
+                                 "idle_timeout": WS_IDLE_TIMEOUT,
+                             }},
+                })
+            except json.JSONDecodeError:
+                await websocket.send_json({
+                    "type": "error",
+                    "data": {"message": "Invalid JSON in handshake", "request_id": connect_request_id},
+                })
+                await websocket.close(code=4003, reason="Invalid handshake")
+                return
+        else:
+            # Protocol disabled - send legacy connected message immediately
             await websocket.send_json({
                 "type": "system.connected",
-                "data": {"session_id": session_id, "version": "8.0.0",
+                "data": {"session_id": session_id, "version": "9.0.0",
                          "request_id": connect_request_id,
                          "capabilities": [
                              "chat",
@@ -363,6 +763,8 @@ def create_ws_router(state):
                              "idle_timeout": WS_IDLE_TIMEOUT,
                          }},
             })
+
+        try:
 
             while True:
                 # Get live session object (not stale copy)
@@ -445,6 +847,57 @@ def create_ws_router(state):
                     prefix="ws",
                 )
                 state.ws_sessions[session_id]['messages_received'] += 1
+                
+                # Protocol v1.0 validation (if enabled and session has protocol state)
+                protocol_session = session.get('protocol_session')
+                idempotency_key = msg.get("idempotency_key")
+                
+                if protocol_session and validator:
+                    from modules.gateway_protocol.schema import MessageType
+                    from modules.gateway_protocol.validator import ValidationResult
+                    
+                    # Map legacy message types to protocol operations
+                    operation = f"{msg_type}.send" if msg_type in ("chat", "agent") else msg_type
+                    
+                    # Build protocol message for validation
+                    protocol_msg = {
+                        "message_id": msg_id or None,
+                        "type": "request",
+                        "operation": operation,
+                        "payload": msg_data,
+                        "idempotency_key": idempotency_key,
+                    }
+                    
+                    result = validator.validate_frame(protocol_msg, protocol_session)
+                    
+                    if not result.valid:
+                        await websocket.send_json({
+                            "type": "error",
+                            "id": msg_id,
+                            "data": {
+                                "message": result.error.message if result.error else "Validation failed",
+                                "code": result.error.code if result.error else "VALIDATION_ERROR",
+                                "request_id": msg_request_id,
+                            },
+                        })
+                        logger.warning(f"[WS] Protocol validation failed for {session_id}: {result.error}")
+                        continue
+                    
+                    if result.is_duplicate:
+                        # Return cached response for duplicate idempotency key
+                        if result.cached_response:
+                            await websocket.send_json(result.cached_response)
+                        else:
+                            await websocket.send_json({
+                                "type": "response",
+                                "id": msg_id,
+                                "data": {
+                                    "message": "Duplicate request",
+                                    "idempotency_key": idempotency_key,
+                                    "request_id": msg_request_id,
+                                },
+                            })
+                        continue
 
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong", "data": {"request_id": msg_request_id}})
@@ -508,6 +961,15 @@ def create_ws_router(state):
                         msg_data,
                         request_id=msg_request_id,
                     )
+                elif msg_type == "approval":
+                    await _handle_approval(
+                        state,
+                        websocket,
+                        session_id,
+                        msg_id,
+                        msg_data,
+                        request_id=msg_request_id,
+                    )
                 else:
                     await websocket.send_json({
                         "type": "error", "id": msg_id,
@@ -524,6 +986,13 @@ def create_ws_router(state):
         finally:
             # Cleanup connection tracking
             _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+            
+            # Cleanup protocol session if present
+            session_data = state.ws_sessions.get(session_id, {})
+            protocol_session = session_data.get('protocol_session')
+            if protocol_session and validator:
+                validator.remove_session(protocol_session.session_id)
+            
             state.ws_connections.pop(session_id, None)
             state.ws_sessions.pop(session_id, None)
             if hasattr(state, 'ws_orchestrator_subscribers'):
@@ -531,12 +1000,184 @@ def create_ws_router(state):
                 if hasattr(state, 'ws_orchestrator_subscription_filters'):
                     state.ws_orchestrator_subscription_filters.pop(session_id, None)
                 _maybe_cleanup_orchestrator_event_bridge(state)
+            if hasattr(state, 'ws_approval_subscribers'):
+                state.ws_approval_subscribers.discard(session_id)
+                if hasattr(state, 'ws_approval_subscription_filters'):
+                    state.ws_approval_subscription_filters.pop(session_id, None)
+
+    @r.websocket("/agent")
+    async def websocket_agent_rpc(websocket: WebSocket):
+        """Dedicated WS channel for high-frequency browser automation RPC."""
+        client_ip = websocket.client.host if websocket.client else "unknown"
+
+        if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
+            await websocket.close(code=4029, reason="Too many connections from this IP")
+            return
+
+        _connections_per_ip[client_ip] += 1
+        token = _extract_ws_auth_token(websocket)
+        if not state.validate_session_token(token):
+            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+            await websocket.close(code=4001, reason="Authentication required")
+            return
+
+        await websocket.accept()
+        session_id = f"agent_{uuid.uuid4().hex[:8]}"
+        connect_request_id = normalize_request_id(websocket.headers.get("x-request-id"), prefix="ws-agent")
+        try:
+            await websocket.send_json(
+                {
+                    "type": "agent.connected",
+                    "data": {
+                        "session_id": session_id,
+                        "request_id": connect_request_id,
+                        "capabilities": ["navigate", "click", "type", "scroll"],
+                    },
+                }
+            )
+
+            while True:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=WS_IDLE_TIMEOUT)
+                if len(raw) > WS_MAX_MESSAGE_SIZE:
+                    await websocket.send_json(
+                        {
+                            "type": "agent.rpc.error",
+                            "data": {"message": f"Message too large. Max size: {WS_MAX_MESSAGE_SIZE} bytes"},
+                        }
+                    )
+                    continue
+
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    await websocket.send_json({"type": "agent.rpc.error", "data": {"message": "Invalid JSON"}})
+                    continue
+
+                msg_id = str(msg.get("id", "")).strip()
+                msg_data = msg.get("data", {}) if isinstance(msg.get("data"), dict) else {}
+                msg_request_id = normalize_request_id(
+                    msg.get("request_id") or connect_request_id,
+                    prefix="ws-agent",
+                )
+                await _handle_agent_rpc(state, websocket, msg_id, msg_data, request_id=msg_request_id)
+
+        except WebSocketDisconnect:
+            logger.info(f"[WS-agent] Client disconnected: {session_id}")
+        except asyncio.TimeoutError:
+            await websocket.close(code=4000, reason="Idle timeout")
+        except Exception as e:
+            logger.error(f"[WS-agent] Error for {session_id}: {e}")
+        finally:
+            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+
+    # =========================================================================
+    # ACP WebSocket Endpoint (IDE Integration)
+    # =========================================================================
+    
+    @r.websocket("/acp")
+    async def acp_websocket_endpoint(websocket: WebSocket):
+        """
+        ACP (Agent Communication Protocol) WebSocket endpoint.
+        
+        Used for IDE integration (VS Code, JetBrains, etc.).
+        Supports JSON-RPC 2.0 style communication.
+        """
+        client_ip = websocket.client.host if websocket.client else "unknown"
+        
+        # Check connection limit
+        if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
+            await websocket.close(code=1013, reason="Too many connections")
+            return
+        
+        await websocket.accept()
+        _connections_per_ip[client_ip] += 1
+        
+        acp_session_id = f"acp_{uuid.uuid4().hex[:8]}"
+        logger.info(f"[ACP] Client connected: {acp_session_id} from {client_ip}")
+        
+        # Lazy import ACP bridge
+        try:
+            from modules.acp_bridge import get_acp_server
+            acp_server = get_acp_server()
+        except ImportError as e:
+            logger.error(f"[ACP] Bridge not available: {e}")
+            await websocket.send_json({
+                "jsonrpc": "2.0",
+                "error": {"code": -32603, "message": "ACP bridge not available"},
+                "id": None,
+            })
+            await websocket.close(code=1011)
+            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+            return
+        
+        # Create ACP session
+        acp_session = acp_server.create_session(
+            session_id=acp_session_id,
+            metadata={"ip": client_ip, "transport": "websocket"},
+        )
+        
+        try:
+            while True:
+                # Receive message
+                try:
+                    raw_message = await asyncio.wait_for(
+                        websocket.receive_text(),
+                        timeout=WS_IDLE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.info(f"[ACP] Session {acp_session_id} timed out")
+                    break
+                
+                # Size check
+                if len(raw_message) > WS_MAX_MESSAGE_SIZE:
+                    await websocket.send_json({
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32600, "message": "Message too large"},
+                        "id": None,
+                    })
+                    continue
+                
+                # Parse JSON-RPC request
+                try:
+                    request = json.loads(raw_message)
+                except json.JSONDecodeError:
+                    await websocket.send_json({
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32700, "message": "Parse error"},
+                        "id": None,
+                    })
+                    continue
+                
+                # Handle request through ACP server
+                response = await acp_server.handle_request(
+                    session_id=acp_session_id,
+                    request=request,
+                )
+                
+                # Convert ACPResponse to dict for JSON serialization
+                if hasattr(response, 'to_dict'):
+                    response = response.to_dict()
+                
+                await websocket.send_json(response)
+        
+        except WebSocketDisconnect:
+            logger.info(f"[ACP] Client disconnected: {acp_session_id}")
+        except Exception as e:
+            logger.error(f"[ACP] Error for {acp_session_id}: {e}")
+        finally:
+            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+            acp_server.close_session(acp_session_id)
 
     return r
 
 
 async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""):
-    """Handle chat messages over WebSocket."""
+    """Handle chat messages over WebSocket.
+    
+    Flow:
+    1. Check for system commands first (jarvis.process)
+    2. If not a system command, route to AI for response
+    """
     state.load_components()
     message = data.get("message", "")
     stream = data.get("stream", True)
@@ -553,6 +1194,32 @@ async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""
             }
         )
         return
+    
+    # ── Check for system commands first ──────────────────────────────────
+    if state.jarvis:
+        try:
+            loop = asyncio.get_event_loop()
+            handled, response = await loop.run_in_executor(
+                None, state.jarvis.process, message
+            )
+            if handled:
+                # System command was handled - send response and done
+                await ws.send_json({
+                    "type": "chat.response",
+                    "id": msg_id,
+                    "data": {
+                        "response": response or "Command executed.",
+                        "sources": [],
+                        "is_system_command": True,
+                        "request_id": request_id,
+                    },
+                })
+                return
+        except Exception as e:
+            logger.warning(f"[WS] Jarvis command check failed: {e}")
+            # Fall through to AI query on error
+    
+    # ── Not a system command - route to AI ───────────────────────────────
     if not state.ai_router:
         await ws.send_json(
             {
@@ -1102,3 +1769,294 @@ async def _handle_task(state, ws, msg_id, data, request_id: str = ""):
     else:
         await ws.send_json({"type": "error", "id": msg_id,
                             "data": {"message": f"Unknown task action: {action}", "request_id": request_id}})
+
+
+async def _handle_approval(state, ws, session_id, msg_id, data, request_id: str = ""):
+    """
+    Handle approval-related WebSocket messages.
+    
+    Actions:
+    - subscribe: Subscribe to approval events
+    - unsubscribe: Unsubscribe from approval events
+    - list: List pending approval requests
+    - approve: Approve a request by token
+    - deny: Deny a request by token
+    - cancel: Cancel a request by token
+    - check: Check if action requires approval
+    """
+    action = data.get("action", "")
+    
+    # Initialize approval subscribers set if needed
+    if not hasattr(state, 'ws_approval_subscribers'):
+        state.ws_approval_subscribers = set()
+    if not hasattr(state, 'ws_approval_subscription_filters'):
+        state.ws_approval_subscription_filters = {}
+    if not hasattr(state, 'ws_approval_event_loop'):
+        state.ws_approval_event_loop = asyncio.get_event_loop()
+    
+    if action == "subscribe":
+        # Subscribe to approval events
+        state.ws_approval_subscribers.add(session_id)
+        
+        # Store filters if provided
+        filters = data.get("filters", {})
+        if filters:
+            state.ws_approval_subscription_filters[session_id] = filters
+        
+        await _send_ws_response(
+            ws,
+            "approval.subscribed",
+            msg_id,
+            {
+                "session_id": session_id,
+                "filters": filters,
+            },
+            request_id=request_id,
+        )
+        return
+    
+    elif action == "unsubscribe":
+        state.ws_approval_subscribers.discard(session_id)
+        state.ws_approval_subscription_filters.pop(session_id, None)
+        
+        await _send_ws_response(
+            ws,
+            "approval.unsubscribed",
+            msg_id,
+            {"session_id": session_id},
+            request_id=request_id,
+        )
+        return
+    
+    elif action == "list":
+        try:
+            from modules.approval import get_approval_queue
+            
+            queue = get_approval_queue()
+            agent_id = data.get("agent_id")
+            pending = queue.list_pending(agent_id=agent_id)
+            
+            await _send_ws_response(
+                ws,
+                "approval.list",
+                msg_id,
+                {
+                    "pending": [r.to_dict() for r in pending],
+                    "count": len(pending),
+                },
+                request_id=request_id,
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_approval_list")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
+        return
+    
+    elif action == "approve":
+        try:
+            from modules.approval import get_approval_queue
+            
+            token = data.get("token", "")
+            if not token:
+                await ws.send_json({
+                    "type": "error",
+                    "id": msg_id,
+                    "data": {"message": "token is required", "request_id": request_id},
+                })
+                return
+            
+            queue = get_approval_queue()
+            result = queue.approve(
+                request_id_or_token=token,
+                approver_id=data.get("approver_id", "ws_user"),
+                reason=data.get("reason", ""),
+                pin=data.get("pin"),
+            )
+            
+            if not result:
+                await ws.send_json({
+                    "type": "error",
+                    "id": msg_id,
+                    "data": {"message": f"Request not found: {token}", "request_id": request_id},
+                })
+                return
+            
+            await _send_ws_response(
+                ws,
+                "approval.approved",
+                msg_id,
+                {
+                    "token": token,
+                    "status": result.status.value,
+                    "request": result.to_dict(),
+                },
+                request_id=request_id,
+            )
+            
+            # Broadcast to subscribers
+            await _broadcast_approval_event(
+                state,
+                "approval.approved",
+                result.to_dict(),
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_approval_approve")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
+        return
+    
+    elif action == "deny":
+        try:
+            from modules.approval import get_approval_queue
+            
+            token = data.get("token", "")
+            if not token:
+                await ws.send_json({
+                    "type": "error",
+                    "id": msg_id,
+                    "data": {"message": "token is required", "request_id": request_id},
+                })
+                return
+            
+            queue = get_approval_queue()
+            result = queue.deny(
+                request_id_or_token=token,
+                approver_id=data.get("approver_id", "ws_user"),
+                reason=data.get("reason", ""),
+            )
+            
+            if not result:
+                await ws.send_json({
+                    "type": "error",
+                    "id": msg_id,
+                    "data": {"message": f"Request not found: {token}", "request_id": request_id},
+                })
+                return
+            
+            await _send_ws_response(
+                ws,
+                "approval.denied",
+                msg_id,
+                {
+                    "token": token,
+                    "status": result.status.value,
+                    "request": result.to_dict(),
+                },
+                request_id=request_id,
+            )
+            
+            # Broadcast to subscribers
+            await _broadcast_approval_event(
+                state,
+                "approval.denied",
+                result.to_dict(),
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_approval_deny")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
+        return
+    
+    elif action == "cancel":
+        try:
+            from modules.approval import get_approval_queue
+            
+            token = data.get("token", "")
+            if not token:
+                await ws.send_json({
+                    "type": "error",
+                    "id": msg_id,
+                    "data": {"message": "token is required", "request_id": request_id},
+                })
+                return
+            
+            queue = get_approval_queue()
+            result = queue.cancel(token, reason=data.get("reason", ""))
+            
+            if not result:
+                await ws.send_json({
+                    "type": "error",
+                    "id": msg_id,
+                    "data": {"message": f"Request not found: {token}", "request_id": request_id},
+                })
+                return
+            
+            await _send_ws_response(
+                ws,
+                "approval.cancelled",
+                msg_id,
+                {
+                    "token": token,
+                    "status": result.status.value,
+                },
+                request_id=request_id,
+            )
+            
+            # Broadcast to subscribers
+            await _broadcast_approval_event(
+                state,
+                "approval.cancelled",
+                result.to_dict(),
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_approval_cancel")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
+        return
+    
+    elif action == "check":
+        try:
+            from modules.approval import get_hook_registry
+            
+            check_action = data.get("check_action", "")
+            if not check_action:
+                await ws.send_json({
+                    "type": "error",
+                    "id": msg_id,
+                    "data": {"message": "check_action is required", "request_id": request_id},
+                })
+                return
+            
+            registry = get_hook_registry()
+            result = registry.check_approval_required(
+                action=check_action,
+                command=data.get("command", ""),
+                params=data.get("params", {}),
+                agent_id=data.get("agent_id"),
+                channel_type=data.get("channel_type"),
+            )
+            
+            await _send_ws_response(
+                ws,
+                "approval.check",
+                msg_id,
+                result,
+                request_id=request_id,
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_approval_check")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
+        return
+    
+    else:
+        await ws.send_json({
+            "type": "error",
+            "id": msg_id,
+            "data": {"message": f"Unknown approval action: {action}", "request_id": request_id},
+        })

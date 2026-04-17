@@ -1,0 +1,2 @@
+First App Store release of LADA for iPhone. Pair with your LADA Gateway to use chat, voice, sharing, and device actions from iOS.
+

@@ -14,6 +14,10 @@ import logging
 from typing import Tuple
 
 from core.executors import BaseExecutor
+from modules.windows_capture_guard import (
+    apply_foreground_capture_guard,
+    WDA_EXCLUDEFROMCAPTURE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -460,9 +464,12 @@ class DesktopExecutor(BaseExecutor):
         # --- screenshot ---
         if any(x in cmd for x in ['take screenshot', 'screenshot',
                                    'capture screen', 'screen capture']):
+            # Best-effort DLP guard: mark active window as excluded before capture.
+            guard = apply_foreground_capture_guard(WDA_EXCLUDEFROMCAPTURE)
             result = self.core.gui_automator.screenshot()
             if result.get('success'):
-                return True, f"Screenshot saved: {result.get('path', 'screenshots/')}"
+                guard_note = f" ({guard.message})" if guard.success else ""
+                return True, f"Screenshot saved: {result.get('path', 'screenshots/')}{guard_note}"
             return True, f"Screenshot failed: {result.get('error', 'Unknown error')}"
 
         # --- read screen / OCR ---

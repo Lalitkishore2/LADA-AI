@@ -1,0 +1,11 @@
+{
+  "name": "@lada/image-generation-core",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA image generation runtime package",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  }
+}
+

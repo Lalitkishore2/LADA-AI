@@ -1,5 +1,5 @@
 """
-LADA Model Failover System (OpenClaw-inspired)
+LADA Model Failover System
 ===============================================
 Enhances the existing HybridAIRouter with intelligent failover, auth profile
 rotation, cooldown tracking, and auto-recovery.

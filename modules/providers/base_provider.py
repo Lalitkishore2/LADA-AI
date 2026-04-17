@@ -6,7 +6,7 @@ this interface. The ProviderManager uses these adapters to route
 queries across 22+ providers with unified streaming, error handling,
 and cost tracking.
 
-Design inspired by OpenClaw's multi-protocol provider system but
+Design uses a multi-protocol provider system with
 with added cost tracking, context window enforcement, and retry policies.
 """
 

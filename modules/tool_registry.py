@@ -11,7 +11,7 @@ Each tool declares:
 The command router matches user intents to registered tools
 instead of scanning through regex patterns.
 
-Inspired by OpenClaw's tool-display.json architecture.
+Inspired by schema-driven tool-display patterns.
 """
 
 import logging
@@ -884,7 +884,7 @@ def create_agent_tools() -> List[ToolDefinition]:
         permission=PermissionLevel.MODERATE,
     ))
 
-    # Stealth browser automation (OpenClaw-level anti-bot parity)
+    # Stealth browser automation (anti-bot parity)
     tools.append(ToolDefinition(
         name="stealth_navigate",
         description="Navigate to a URL using stealth browser mode to reduce bot detection.",
@@ -1113,12 +1113,12 @@ def create_messaging_tools() -> List[ToolDefinition]:
 
 
 # ============================================================================
-# 8 CORE TOOLS (Claude Code Architecture)
+# 8 CORE TOOLS (LADA Core Architecture)
 # ============================================================================
 
-def create_core_claude_tools() -> List[ToolDefinition]:
+def create_lada_core_tools() -> List[ToolDefinition]:
     """
-    Create the 8 core tools from Claude Code architecture.
+    Create the 8 LADA core tools.
     
     These are the fundamental tools that enable the AI to interact
     with the filesystem, run commands, and manage tasks.
@@ -1283,7 +1283,9 @@ def get_tool_registry() -> ToolRegistry:
             _registry.register(tool)
         for tool in create_messaging_tools():
             _registry.register(tool)
-        for tool in create_core_claude_tools():  # Add 8 core tools
+        for tool in create_lada_core_tools():  # Add 8 core tools
             _registry.register(tool)
         logger.info(f"[ToolRegistry] {len(_registry._tools)} tools registered")
     return _registry
+
+

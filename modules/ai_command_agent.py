@@ -4,6 +4,12 @@ LADA AI Command Agent — AI-first command execution with ReAct tool-calling loo
 Replaces rigid pattern matching with an AI agent that understands ANY command,
 selects the right tools, and executes autonomously.
 
+LADA master loop:
+- while(tool_call) execution pattern
+- 7 recovery paths for resilient operation
+- Collapse-drain-retry for context overflow
+- Automatic tool failure retry with backoff
+
 Flow:
     User: "find my WhatsApp photos"
     -> Agent classifies: actionable command
@@ -22,10 +28,121 @@ import time
 import logging
 from pathlib import Path
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
+from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# ERROR CLASSIFICATION & RECOVERY (LADA Pattern)
+# ============================================================================
+
+class RecoveryStrategy(Enum):
+    """7 recovery strategies for different failure modes."""
+    RETRY_SIMPLE = "retry_simple"           # Just retry the same call
+    RETRY_WITH_BACKOFF = "retry_backoff"    # Exponential backoff
+    COLLAPSE_AND_RETRY = "collapse_retry"   # Reduce context and retry
+    DRAIN_AND_RETRY = "drain_retry"         # Clear pending, retry single
+    SWITCH_MODEL = "switch_model"           # Try a different model
+    SWITCH_TIER = "switch_tier"             # Try a different tier (fast/smart)
+    ABORT = "abort"                         # Give up and return error
+
+
+@dataclass
+class ToolCallError:
+    """Classification of a tool execution error."""
+    tool_name: str
+    error_message: str
+    is_transient: bool = False      # Network timeout, rate limit
+    is_tool_bug: bool = False       # Tool implementation issue
+    is_context_overflow: bool = False  # Too much data
+    is_permission: bool = False     # Access denied
+    retry_count: int = 0
+    
+    def get_recovery_strategy(self) -> RecoveryStrategy:
+        """Determine best recovery strategy for this error."""
+        if self.retry_count >= 3:
+            return RecoveryStrategy.ABORT
+        
+        if self.is_transient:
+            return RecoveryStrategy.RETRY_WITH_BACKOFF
+        
+        if self.is_context_overflow:
+            return RecoveryStrategy.COLLAPSE_AND_RETRY
+        
+        if self.is_tool_bug:
+            return RecoveryStrategy.DRAIN_AND_RETRY
+        
+        if self.is_permission:
+            return RecoveryStrategy.ABORT  # Can't fix permission issues
+        
+        return RecoveryStrategy.RETRY_SIMPLE
+
+
+@dataclass
+class LoopState:
+    """State tracking for the master tool-calling loop."""
+    round_num: int = 0
+    total_tool_calls: int = 0
+    failed_tools: List[ToolCallError] = field(default_factory=list)
+    context_collapsed: bool = False
+    model_switched: bool = False
+    tier_switched: bool = False
+    
+    def can_retry(self, max_rounds: int) -> bool:
+        """Check if we can continue the loop."""
+        if self.round_num >= max_rounds:
+            return False
+        if len(self.failed_tools) >= 5:
+            return False  # Too many failures
+        return True
+
+
+def classify_error(tool_name: str, error_msg: str, retry_count: int = 0) -> ToolCallError:
+    """Classify a tool execution error for recovery strategy selection."""
+    error_lower = error_msg.lower()
+    
+    # Transient errors (network, rate limit)
+    transient_patterns = [
+        'timeout', 'timed out', 'connection', 'network',
+        'rate limit', 'too many requests', '429', '503',
+        'temporarily unavailable', 'try again'
+    ]
+    is_transient = any(p in error_lower for p in transient_patterns)
+    
+    # Context overflow
+    overflow_patterns = [
+        'context', 'token', 'too long', 'overflow',
+        'maximum length', 'exceeded', 'truncated'
+    ]
+    is_overflow = any(p in error_lower for p in overflow_patterns)
+    
+    # Permission errors
+    permission_patterns = [
+        'permission', 'access denied', 'forbidden', 'unauthorized',
+        'not allowed', 'blocked', '403', '401'
+    ]
+    is_permission = any(p in error_lower for p in permission_patterns)
+    
+    # Tool bugs (usually implementation errors)
+    bug_patterns = [
+        'keyerror', 'typeerror', 'attributeerror', 'indexerror',
+        'valueerror', 'not found', 'does not exist', 'invalid'
+    ]
+    is_bug = any(p in error_lower for p in bug_patterns)
+    
+    return ToolCallError(
+        tool_name=tool_name,
+        error_message=error_msg,
+        is_transient=is_transient,
+        is_context_overflow=is_overflow,
+        is_permission=is_permission,
+        is_tool_bug=is_bug,
+        retry_count=retry_count,
+    )
+
 
 # Try imports
 try:
@@ -56,6 +173,7 @@ class AgentResult:
     tier_used: str = ""     # fast / smart
     model_used: str = ""    # Model ID used
     elapsed_ms: float = 0   # Total processing time
+    recovery_used: str = "" # Recovery strategy used (if any)
 
 
 # ============================================================
@@ -389,7 +507,10 @@ class AICommandAgent:
     def _run_native_tool_loop(self, text: str, model_id: str,
                                provider, tools_schema: list) -> tuple:
         """
-        Run tool-calling loop using native function calling (OpenAI-compatible).
+        LADA master tool-calling loop with 7 recovery paths.
+        
+        Uses while(tool_call) pattern with error classification and automatic
+        recovery for transient failures, context overflow, and tool bugs.
 
         Returns: (response_text, tool_call_count, model_id)
         """
@@ -401,9 +522,17 @@ class AICommandAgent:
             {"role": "user", "content": text},
         ]
 
-        total_tool_calls = 0
-
-        for round_num in range(self.max_rounds):
+        # Initialize loop state
+        state = LoopState()
+        recovery_used = ""
+        
+        # Track retry counts per tool for backoff
+        tool_retry_counts: Dict[str, int] = {}
+        
+        # Master loop: while(tool_call or can_recover)
+        while state.can_retry(self.max_rounds):
+            state.round_num += 1
+            
             try:
                 response = provider.complete_with_retry(
                     messages, model_id,
@@ -412,27 +541,58 @@ class AICommandAgent:
                     max_tokens=1024,
                 )
             except Exception as e:
-                logger.error(f"[Agent] Provider call failed round {round_num}: {e}")
+                error = classify_error("provider", str(e), state.round_num)
+                strategy = error.get_recovery_strategy()
+                
+                logger.warning(f"[Agent] Provider error: {e}, strategy: {strategy.value}")
+                
+                if strategy == RecoveryStrategy.RETRY_WITH_BACKOFF:
+                    # Exponential backoff: 1s, 2s, 4s
+                    delay = min(2 ** (state.round_num - 1), 8)
+                    time.sleep(delay)
+                    recovery_used = "backoff"
+                    continue
+                    
+                elif strategy == RecoveryStrategy.COLLAPSE_AND_RETRY:
+                    # Collapse context by removing older messages
+                    if len(messages) > 4:
+                        messages = [messages[0], messages[1], messages[-1]]
+                        state.context_collapsed = True
+                        recovery_used = "collapse"
+                        continue
+                        
+                elif strategy == RecoveryStrategy.SWITCH_MODEL:
+                    # Try switching to a different model (fallback)
+                    if not state.model_switched and self.provider_manager:
+                        fallback = self._get_fallback_model(model_id)
+                        if fallback:
+                            model_id = fallback
+                            state.model_switched = True
+                            recovery_used = "model_switch"
+                            continue
+                
+                # Can't recover, break
+                state.failed_tools.append(error)
                 break
 
-            # No tool calls → final response
+            # No tool calls → final response (exit condition)
             if not response.tool_calls:
                 if response.success and response.content:
-                    return response.content.strip(), total_tool_calls, model_id
+                    return response.content.strip(), state.total_tool_calls, model_id
                 break
 
             # Process tool calls
-            # Append assistant message with tool calls
             messages.append({
                 "role": "assistant",
                 "content": response.content or "",
                 "tool_calls": response.tool_calls,
             })
 
+            # Execute each tool call with error recovery
             for call in response.tool_calls:
                 fn_name = call.get("function", {}).get("name", "")
                 fn_args_raw = call.get("function", {}).get("arguments", "{}")
-                call_id = call.get("id", f"call_{fn_name}_{round_num}")
+                call_id = call.get("id", f"call_{fn_name}_{state.round_num}")
 
                 # Parse arguments
                 try:
@@ -440,15 +600,11 @@ class AICommandAgent:
                 except (json.JSONDecodeError, TypeError):
                     fn_args = {}
 
-                # Execute tool
+                # Execute tool with retry logic
                 logger.info(f"[Agent] Tool call: {fn_name}({fn_args})")
-                try:
-                    tool_result = self.tool_registry.execute(fn_name, fn_args)
-                    result_text = tool_result.output if tool_result.output else (tool_result.error or "done")
-                    total_tool_calls += 1
-                except Exception as e:
-                    result_text = f"Tool error: {e}"
-                    logger.error(f"[Agent] Tool {fn_name} error: {e}")
+                result_text = self._execute_tool_with_recovery(
+                    fn_name, fn_args, tool_retry_counts, state
+                )
 
                 # Append tool result
                 messages.append({
@@ -457,10 +613,11 @@ class AICommandAgent:
                     "content": result_text,
                 })
 
-            logger.info(f"[Agent] Round {round_num + 1}: {len(response.tool_calls)} tool calls executed")
+            logger.info(f"[Agent] Round {state.round_num}: {len(response.tool_calls)} tool calls, "
+                       f"total: {state.total_tool_calls}, failed: {len(state.failed_tools)}")
 
-        # If we exhausted rounds, try one final call without tools to get summary
-        if total_tool_calls > 0:
+        # If we executed tools, get final summary
+        if state.total_tool_calls > 0:
             try:
                 messages.append({
                     "role": "user",
@@ -472,16 +629,87 @@ class AICommandAgent:
                     max_tokens=256,
                 )
                 if final.success and final.content:
-                    return final.content.strip(), total_tool_calls, model_id
+                    return final.content.strip(), state.total_tool_calls, model_id
             except Exception:
                 pass
 
-        return None, total_tool_calls, model_id
+        return None, state.total_tool_calls, model_id
+
+    def _execute_tool_with_recovery(self, fn_name: str, fn_args: dict,
+                                     retry_counts: Dict[str, int],
+                                     state: LoopState) -> str:
+        """
+        Execute a single tool with automatic retry and recovery.
+        
+        Implements:
+        - Simple retry for transient failures
+        - Exponential backoff for rate limits
+        - Drain and retry for tool bugs
+        """
+        max_retries = 3
+        retry_key = f"{fn_name}:{json.dumps(fn_args, sort_keys=True)}"
+        current_retry = retry_counts.get(retry_key, 0)
+        
+        while current_retry < max_retries:
+            try:
+                tool_result = self.tool_registry.execute(fn_name, fn_args)
+                result_text = tool_result.output if tool_result.output else (tool_result.error or "done")
+                state.total_tool_calls += 1
+                return result_text
+                
+            except Exception as e:
+                error_msg = str(e)
+                error = classify_error(fn_name, error_msg, current_retry)
+                strategy = error.get_recovery_strategy()
+                
+                logger.warning(f"[Agent] Tool {fn_name} error: {e}, strategy: {strategy.value}")
+                
+                if strategy == RecoveryStrategy.RETRY_SIMPLE:
+                    current_retry += 1
+                    retry_counts[retry_key] = current_retry
+                    continue
+                    
+                elif strategy == RecoveryStrategy.RETRY_WITH_BACKOFF:
+                    delay = min(2 ** current_retry, 8)
+                    time.sleep(delay)
+                    current_retry += 1
+                    retry_counts[retry_key] = current_retry
+                    continue
+                    
+                elif strategy == RecoveryStrategy.DRAIN_AND_RETRY:
+                    # Clear any pending state and retry once
+                    if current_retry == 0:
+                        current_retry += 1
+                        retry_counts[retry_key] = current_retry
+                        continue
+                
+                # Can't recover, return error
+                state.failed_tools.append(error)
+                return f"Tool error: {error_msg}"
+        
+        # Exhausted retries
+        return f"Tool {fn_name} failed after {max_retries} retries"
+
+    def _get_fallback_model(self, current_model: str) -> Optional[str]:
+        """Get a fallback model when the current one fails."""
+        if not self.provider_manager:
+            return None
+            
+        try:
+            # Try to get another model in the same tier
+            available = self.provider_manager.get_all_available_models()
+            for model in available:
+                if model['id'] != current_model and model.get('available', True):
+                    return model['id']
+        except Exception:
+            pass
+        
+        return None
 
     def _run_prompt_tool_loop(self, text: str, model_id: str,
                                provider, tools_schema: list) -> tuple:
         """
-        Run tool-calling loop using prompt-based approach.
+        Run tool-calling loop using prompt-based approach with recovery.
         For providers that don't support native function calling (Gemini, Ollama, Anthropic).
 
         The AI outputs TOOL_CALL: {"name": "...", "arguments": {...}} which we parse and execute.
@@ -509,9 +737,13 @@ class AICommandAgent:
             {"role": "user", "content": text},
         ]
 
-        total_tool_calls = 0
+        # Initialize loop state for recovery
+        state = LoopState()
+        tool_retry_counts: Dict[str, int] = {}
 
-        for round_num in range(self.max_rounds):
+        while state.can_retry(self.max_rounds):
+            state.round_num += 1
+            
             try:
                 response = provider.complete_with_retry(
                     messages, model_id,
@@ -519,7 +751,22 @@ class AICommandAgent:
                     max_tokens=1024,
                 )
             except Exception as e:
-                logger.error(f"[Agent] Prompt-based call failed round {round_num}: {e}")
+                error = classify_error("provider", str(e), state.round_num)
+                strategy = error.get_recovery_strategy()
+                
+                logger.warning(f"[Agent] Prompt-based error: {e}, strategy: {strategy.value}")
+                
+                if strategy == RecoveryStrategy.RETRY_WITH_BACKOFF:
+                    delay = min(2 ** (state.round_num - 1), 8)
+                    time.sleep(delay)
+                    continue
+                elif strategy == RecoveryStrategy.COLLAPSE_AND_RETRY:
+                    if len(messages) > 4:
+                        messages = [messages[0], messages[1], messages[-1]]
+                        state.context_collapsed = True
+                        continue
+                
+                state.failed_tools.append(error)
                 break
 
             if not response.success or not response.content:
@@ -532,24 +779,18 @@ class AICommandAgent:
 
             if not tool_calls:
                 # No tool calls — this is the final response
-                # Remove any stray TOOL_CALL text if present
                 clean = re.sub(r'TOOL_CALL:.*', '', content).strip()
-                return clean or content, total_tool_calls, model_id
+                return clean or content, state.total_tool_calls, model_id
 
-            # Execute each tool call and collect results
+            # Execute each tool call with recovery
             messages.append({"role": "assistant", "content": content})
 
             results = []
             for fn_name, fn_args in tool_calls:
                 logger.info(f"[Agent] Prompt tool call: {fn_name}({fn_args})")
-                try:
-                    tool_result = self.tool_registry.execute(fn_name, fn_args)
-                    result_text = tool_result.output if tool_result.output else (tool_result.error or "done")
-                    total_tool_calls += 1
-                except Exception as e:
-                    result_text = f"Tool error: {e}"
-                    logger.error(f"[Agent] Tool {fn_name} error: {e}")
-
+                result_text = self._execute_tool_with_recovery(
+                    fn_name, fn_args, tool_retry_counts, state
+                )
                 results.append(f"[Result of {fn_name}]: {result_text}")
 
             # Feed results back as a user message
@@ -559,10 +800,11 @@ class AICommandAgent:
                 "content": f"Tool results:\n{results_msg}\n\nBased on these results, provide a brief summary of what was done. If more tools are needed, call them."
             })
 
-            logger.info(f"[Agent] Prompt round {round_num + 1}: {len(tool_calls)} tool calls")
+            logger.info(f"[Agent] Prompt round {state.round_num}: {len(tool_calls)} tool calls, "
+                       f"total: {state.total_tool_calls}")
 
         # Final attempt to get a summary
-        if total_tool_calls > 0:
+        if state.total_tool_calls > 0:
             try:
                 messages.append({
                     "role": "user",
@@ -575,11 +817,11 @@ class AICommandAgent:
                 )
                 if final.success and final.content:
                     clean = re.sub(r'TOOL_CALL:.*', '', final.content).strip()
-                    return clean, total_tool_calls, model_id
+                    return clean, state.total_tool_calls, model_id
             except Exception:
                 pass
 
-        return None, total_tool_calls, model_id
+        return None, state.total_tool_calls, model_id
 
     def _format_tools_for_prompt(self, tools_schema: list) -> str:
         """Format tools schema into human-readable text for prompt injection."""

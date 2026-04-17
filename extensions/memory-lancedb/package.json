@@ -1,0 +1,35 @@
+{
+  "name": "@lada/memory-lancedb",
+  "version": "2026.4.6",
+  "description": "LADA LanceDB-backed long-term memory plugin with auto-recall/capture",
+  "type": "module",
+  "dependencies": {
+    "@lancedb/lancedb": "^0.27.2",
+    "@sinclair/typebox": "0.34.49",
+    "openai": "^6.33.0"
+  },
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@lada/memory-lancedb",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.6"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.6"
+    },
+    "build": {
+      "ladaVersion": "2026.4.6"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
+

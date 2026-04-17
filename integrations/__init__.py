@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .alexa_server import AlexaSkillServer
-    from .openclaw_adapter import OpenClawAdapter
+    from .lada_browser_adapter import LadaBrowserAdapter
 
 __all__ = [
     "AlexaSkillServer",
-    "OpenClawAdapter",
+    "LadaBrowserAdapter",
 ]

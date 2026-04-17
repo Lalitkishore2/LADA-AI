@@ -108,6 +108,7 @@ class FreeNaturalVoice:
         self.auto_detect = auto_detect
         self.recognizer = sr.Recognizer()
         self.current_language = 'en'  # Default language
+        self.mic_device_index = self._resolve_microphone_device_index()
 
         # Local STT (Faster-Whisper for RTX 3050 6GB)
         self._hybrid_stt = None
@@ -206,6 +207,31 @@ class FreeNaturalVoice:
         logger.info(f"TTS engine locked to: {self._locked_tts}")
 
         logger.info(f"✅ FreeNaturalVoice initialized (Tamil: {tamil_mode}, Voice: Karen-style)")
+
+    def _resolve_microphone_device_index(self) -> Optional[int]:
+        """Resolve preferred microphone device index from env var."""
+        raw = os.getenv("LADA_MIC_DEVICE_INDEX", "").strip()
+        if not raw:
+            return None
+        try:
+            idx = int(raw)
+            if idx < 0:
+                logger.warning("LADA_MIC_DEVICE_INDEX must be >= 0, ignoring invalid value")
+                return None
+            return idx
+        except ValueError:
+            logger.warning("LADA_MIC_DEVICE_INDEX is not an integer, ignoring value")
+            return None
+
+    def _open_microphone(self):
+        """Open microphone with configured device index, fallback to default."""
+        if self.mic_device_index is None:
+            return sr.Microphone()
+        try:
+            return sr.Microphone(device_index=self.mic_device_index)
+        except Exception as exc:
+            logger.warning(f"Configured microphone index {self.mic_device_index} unavailable: {exc}")
+            return sr.Microphone()
     
     def detect_language(self, text: str) -> str:
         """
@@ -327,31 +353,6 @@ class FreeNaturalVoice:
         lang_emoji = "🇮🇳" if language == 'ta' else "🇬🇧"
         print(f"\n{lang_emoji} 🔊 LADA: {text}")
 
-        # Use locked TTS engine first, with emergency fallback if it fails
-        if self._locked_tts == 'kokoro':
-            result = self._speak_kokoro(text, language)
-            if result:
-                return True
-            # Kokoro failed — try emergency fallback so user still hears something
-            logger.warning("Kokoro TTS failed, trying emergency fallback")
-            tts_text = text
-            tts_language = language
-            if language == 'ta' and self.speak_thanglish_for_tamil:
-                tts_text = self.tamil_to_thanglish(text)
-                tts_language = 'en'
-            if self.use_gtts and GTTS_AVAILABLE:
-                try:
-                    if self._speak_gtts(tts_text, tts_language, blocking):
-                        return True
-                except Exception:
-                    pass
-            if self.offline_engine:
-                try:
-                    return self._speak_offline(tts_text, blocking)
-                except Exception:
-                    pass
-            return False
-
         # For non-Kokoro engines, apply Thanglish conversion if needed
         tts_text = text
         tts_language = language
@@ -359,21 +360,28 @@ class FreeNaturalVoice:
             tts_text = self.tamil_to_thanglish(text)
             tts_language = 'en'
 
-        if self._locked_tts == 'gtts':
-            try:
-                return self._speak_gtts(tts_text, tts_language, blocking)
-            except Exception as e:
-                logger.warning(f"gTTS failed: {e}")
-                return False
+        # Fallback chain order requested for reliability:
+        # gTTS -> pyttsx3 -> Kokoro
+        tts_chain = []
+        if self.use_gtts and GTTS_AVAILABLE:
+            tts_chain.append(("gtts", lambda: self._speak_gtts(tts_text, tts_language, blocking)))
+        if self.offline_engine:
+            tts_chain.append(("pyttsx3", lambda: self._speak_offline(tts_text, blocking)))
+        if self._kokoro_enabled and KOKORO_AVAILABLE:
+            tts_chain.append(("kokoro", lambda: self._speak_kokoro(text, language)))
 
-        if self._locked_tts == 'pyttsx3':
-            try:
-                return self._speak_offline(tts_text, blocking)
-            except Exception as e:
-                logger.error(f"Offline TTS failed: {e}")
-                return False
+        # Bias first attempt toward locked engine when available.
+        if self._locked_tts:
+            tts_chain.sort(key=lambda item: 0 if item[0] == self._locked_tts else 1)
 
-        logger.error("No TTS engine available!")
+        for engine_name, speak_fn in tts_chain:
+            try:
+                if speak_fn():
+                    return True
+            except Exception as exc:
+                logger.warning(f"{engine_name} TTS failed: {exc}")
+
+        logger.error("No TTS engine succeeded")
         return False
     
     def _speak_gtts(self, text: str, language: str, blocking: bool) -> bool:
@@ -457,7 +465,7 @@ class FreeNaturalVoice:
             Recognized text or None
         """
         try:
-            with sr.Microphone() as source:
+            with self._open_microphone() as source:
                 print("\n[Voice] Listening...")
                 
                 # Adjust for ambient noise
@@ -562,7 +570,7 @@ class FreeNaturalVoice:
 
         # ── Legacy fallback: Google STT ────────────────────────────────
         try:
-            with sr.Microphone() as source:
+            with self._open_microphone() as source:
                 self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
                 audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=3)
 

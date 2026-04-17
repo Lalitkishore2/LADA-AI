@@ -1,0 +1,16 @@
+{
+  "name": "@lada/open-prose",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

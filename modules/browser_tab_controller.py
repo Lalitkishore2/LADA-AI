@@ -112,7 +112,7 @@ class BrowserTabController:
         'netflix': 'https://www.netflix.com',
         'spotify': 'https://open.spotify.com',
         'chatgpt': 'https://chat.openai.com',
-        'claude': 'https://claude.ai',
+        'anthropic': 'https://claude.ai',
         'stackoverflow': 'https://stackoverflow.com',
     }
     

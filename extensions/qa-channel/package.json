@@ -1,0 +1,47 @@
+{
+  "name": "@lada/qa-channel",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA QA synthetic channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*",
+    "lada": "workspace:*"
+  },
+  "peerDependencies": {
+    "lada": ">=2026.4.6"
+  },
+  "peerDependenciesMeta": {
+    "lada": {
+      "optional": true
+    }
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "qa-channel",
+      "label": "QA Channel",
+      "selectionLabel": "QA Channel (Synthetic)",
+      "detailLabel": "QA Channel",
+      "docsPath": "/channels/qa-channel",
+      "docsLabel": "qa-channel",
+      "blurb": "Synthetic Slack-class transport for automated LADA QA scenarios.",
+      "systemImage": "checklist",
+      "order": 999,
+      "exposure": {
+        "configured": false,
+        "setup": false,
+        "docs": false
+      }
+    },
+    "install": {
+      "npmSpec": "@lada/qa-channel",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.6"
+    }
+  }
+}
+

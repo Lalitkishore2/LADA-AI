@@ -1,0 +1,19 @@
+{
+  "name": "@lada/openai-provider",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA OpenAI provider plugins",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

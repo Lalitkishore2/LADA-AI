@@ -1,0 +1,16 @@
+{
+  "name": "@lada/deepgram-provider",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA Deepgram media-understanding provider",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

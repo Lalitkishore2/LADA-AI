@@ -315,6 +315,182 @@ class LADA:
         logger.info("LADA shutdown complete")
 
 
+def run_doctor_command(args):
+    """Run doctor diagnostics command."""
+    from modules.doctor import DiagnosticsRunner, get_health_registry, AutoFixEngine
+    
+    subcommand = args[0] if args else "run"
+    
+    if subcommand == "run":
+        # Run all diagnostics
+        print("\n🩺 LADA Doctor - Running Diagnostics...\n")
+        runner = DiagnosticsRunner()
+        report = runner.run_all()
+        
+        # Print results
+        is_healthy = report.failed == 0
+        print(f"{'='*60}")
+        print(f"📊 Diagnostics Report")
+        print(f"{'='*60}")
+        print(f"Status: {'✅ HEALTHY' if is_healthy else '❌ UNHEALTHY'}")
+        print(f"Checks: {report.passed}/{report.total_checks} passed")
+        print(f"Duration: {report.duration_ms:.0f}ms")
+        
+        failed_results = [r for r in report.results if not r.passed]
+        warning_results = [r for r in report.results if r.severity.value == 'warning']
+        
+        if failed_results:
+            print(f"\n❌ Failed Checks:")
+            for check in failed_results:
+                print(f"   • {check.name}: {check.message}")
+                if check.details:
+                    print(f"     Details: {check.details}")
+        
+        if warning_results:
+            print(f"\n⚠️ Warnings:")
+            for check in warning_results:
+                print(f"   • {check.name}: {check.message}")
+        
+        print(f"\n{'='*60}")
+        return 0 if is_healthy else 1
+    
+    elif subcommand == "list":
+        # List available checks
+        print("\n🩺 LADA Doctor - Available Diagnostics\n")
+        runner = DiagnosticsRunner()
+        checks = runner.list_diagnostics()
+        
+        for check in checks:
+            print(f"   • {check.name}: {check.description}")
+        
+        print(f"\nTotal: {len(checks)} checks available")
+        return 0
+    
+    elif subcommand == "health":
+        # Show health status
+        print("\n🩺 LADA Doctor - Health Status\n")
+        registry = get_health_registry()
+        status = registry.get_status()
+        
+        print(f"Overall: {'✅ HEALTHY' if status['healthy'] else '❌ UNHEALTHY'}")
+        print(f"\nComponents:")
+        for name, check in status['checks'].items():
+            emoji = "✅" if check['healthy'] else "❌"
+            print(f"   {emoji} {name}: {check.get('message', 'OK')}")
+        
+        return 0 if status['healthy'] else 1
+    
+    elif subcommand == "fix":
+        # Run auto-fix
+        fix_id = args[1] if len(args) > 1 else None
+        
+        if not fix_id:
+            print("\n🔧 LADA Doctor - Available Fixes\n")
+            engine = AutoFixEngine()
+            fixes = engine.list_fixes()
+            
+            for fix in fixes:
+                print(f"   • {fix.id}: {fix.description}")
+                print(f"     Risk: {fix.risk.value}, Requires approval: {fix.requires_approval}")
+            
+            print(f"\nUsage: python main.py doctor fix <fix_id>")
+            return 0
+        
+        print(f"\n🔧 Running fix: {fix_id}...")
+        engine = AutoFixEngine()
+        result = engine.execute(fix_id)
+        
+        if result.success:
+            print(f"✅ Fix applied successfully!")
+            if result.changes:
+                print(f"   Changes: {result.changes}")
+        else:
+            print(f"❌ Fix failed: {result.error}")
+        
+        return 0 if result.success else 1
+    
+    else:
+        print(f"❌ Unknown doctor subcommand: {subcommand}")
+        print("Available: run, list, health, fix")
+        return 1
+
+
+def run_security_scan_command(args):
+    """Run security scan command for plugins."""
+    from modules.plugins import PluginScanner, get_trust_registry
+    
+    plugin_id = args[0] if args else None
+    
+    if not plugin_id:
+        # List all plugins and their scan status
+        print("\n🔒 LADA Security Scanner\n")
+        registry = get_trust_registry()
+        entries = registry.list_all()
+        
+        if not entries:
+            print("No plugins registered. Use: python main.py scan <plugin_id>")
+            return 0
+        
+        print(f"{'Plugin':<30} {'Trust Level':<15} {'Scanned':<10} {'Risk':<10}")
+        print("-" * 65)
+        for entry in entries:
+            scanned = "✅" if entry.scan_passed else "❌" if entry.last_scanned else "⏳"
+            print(f"{entry.plugin_id:<30} {entry.trust_level.value:<15} {scanned:<10} {entry.risk_level.value:<10}")
+        
+        print(f"\nTo scan a plugin: python main.py scan <plugin_id>")
+        return 0
+    
+    # Scan specific plugin
+    print(f"\n🔒 Scanning plugin: {plugin_id}...\n")
+    
+    scanner = PluginScanner()
+    result = scanner.scan(plugin_id)
+    
+    print(f"{'='*60}")
+    print(f"📊 Scan Report: {plugin_id}")
+    print(f"{'='*60}")
+    print(f"Status: {'✅ PASSED' if result.passed else '❌ FAILED'}")
+    print(f"Risk Level: {result.risk_level.value.upper()}")
+    print(f"Files Scanned: {result.files_scanned}")
+    print(f"Lines Scanned: {result.lines_scanned}")
+    print(f"Duration: {result.scan_duration_ms}ms")
+    
+    if result.findings:
+        print(f"\n🔍 Findings ({len(result.findings)}):")
+        
+        # Group by severity
+        by_severity = {}
+        for finding in result.findings:
+            sev = finding.severity.value
+            if sev not in by_severity:
+                by_severity[sev] = []
+            by_severity[sev].append(finding)
+        
+        severity_order = ['critical', 'error', 'warning', 'info']
+        emoji_map = {'critical': '🔴', 'error': '🟠', 'warning': '🟡', 'info': '🔵'}
+        
+        for sev in severity_order:
+            if sev in by_severity:
+                print(f"\n{emoji_map[sev]} {sev.upper()} ({len(by_severity[sev])}):")
+                for finding in by_severity[sev]:
+                    loc = f"{finding.file_path}:{finding.line_number}" if finding.file_path else ""
+                    print(f"   • {finding.message}")
+                    if loc:
+                        print(f"     Location: {loc}")
+                    if finding.code_snippet:
+                        print(f"     Code: {finding.code_snippet[:60]}...")
+    else:
+        print("\n✅ No security issues found!")
+    
+    print(f"\n{'='*60}")
+    
+    # Update trust registry
+    registry = get_trust_registry()
+    registry.mark_scanned(plugin_id, result.passed, [f.message for f in result.findings])
+    
+    return 0 if result.passed else 1
+
+
 def print_help():
     """Print usage help"""
     print("""
@@ -329,8 +505,23 @@ Modes:
     text    - Text mode (type commands)
     gui     - Desktop GUI mode
     webui   - Web UI mode (browser-based chat)
+    daemon  - Headless gateway daemon mode (API + WS, no browser)
     verify  - Verify all module connections and configuration
     status  - Show system status and exit
+    doctor  - Run system diagnostics
+    scan    - Security scan plugins
+
+Doctor Commands:
+    python main.py doctor           # Run all diagnostics
+    python main.py doctor run       # Run all diagnostics
+    python main.py doctor list      # List available checks
+    python main.py doctor health    # Show health status
+    python main.py doctor fix       # List available fixes
+    python main.py doctor fix <id>  # Apply a specific fix
+
+Security Scanner:
+    python main.py scan             # List plugins and scan status
+    python main.py scan <plugin>    # Scan a specific plugin
 
 Examples:
     python main.py          # Start in voice mode
@@ -338,13 +529,18 @@ Examples:
     python main.py text     # Start in text mode
     python main.py gui      # Start desktop app
     python main.py webui    # Start web UI in browser
+    python main.py daemon   # Start headless gateway daemon on port 18790
     python main.py verify   # Test all module connections
+    python main.py doctor   # Run system diagnostics
+    python main.py scan my-plugin  # Scan a plugin
 
 Features:
     🎤 Tamil + English voice support
     🧠 Multiple AI backends (Ollama, Gemini, Colab)
     💾 Long-term memory
     🔄 Auto language detection
+    🩺 System diagnostics and auto-fix
+    🔒 Plugin security scanning
     """)
 
 
@@ -366,6 +562,26 @@ def main():
             lada = LADA(init_voice=False, init_ai=True, init_memory=True)
             lada._show_status()
             return
+
+        if arg == 'doctor':
+            # Doctor diagnostics
+            try:
+                exit_code = run_doctor_command(sys.argv[2:])
+                sys.exit(exit_code)
+            except Exception as e:
+                logger.error(f"Doctor error: {e}")
+                print(f"\n❌ Doctor error: {e}")
+                sys.exit(1)
+
+        if arg == 'scan':
+            # Security scanner
+            try:
+                exit_code = run_security_scan_command(sys.argv[2:])
+                sys.exit(exit_code)
+            except Exception as e:
+                logger.error(f"Scan error: {e}")
+                print(f"\n❌ Scan error: {e}")
+                sys.exit(1)
 
         if arg == 'gui':
             # GUI mode should start fast without initializing the full CLI stack.
@@ -393,6 +609,17 @@ def main():
                 print(f"\n💡 Check the error details above and try again.")
                 return
 
+        if arg == 'daemon':
+            try:
+                from modules.gateway_daemon import run_gateway_daemon
+                run_gateway_daemon()
+                return
+            except Exception as e:
+                logger.error(f"Gateway daemon launch error: {e}")
+                print(f"\n❌ Gateway daemon launch error: {e}")
+                print("\n💡 Ensure fastapi/uvicorn dependencies are installed.")
+                return
+
         if arg == 'verify':
             try:
                 from modules.connection_verifier import verify_all
@@ -401,7 +628,7 @@ def main():
                 print(f"\n❌ Verifier error: {e}")
             return
 
-        if arg in ['voice', 'text', 'gui']:
+        if arg in ['voice', 'text', 'gui', 'daemon']:
             mode = arg
         else:
             print(f"❌ Unknown mode: {arg}")

@@ -1,0 +1,5 @@
+interface:
+  display_name: "QA Test LADA"
+  short_description: "Run and debug qa-lab and qa-channel scenarios"
+  default_prompt: "Use $lada-qa-testing to run or extend the LADA QA suite with qa-lab and qa-channel, using regular openai/gpt-5.4 in fast mode for live OpenAI runs."
+

@@ -1,0 +1,16 @@
+{
+  "name": "@lada/tavily-plugin",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA Tavily plugin",
+  "type": "module",
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

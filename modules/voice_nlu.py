@@ -135,7 +135,7 @@ class VoiceCommandProcessor:
             'hotstar': 'https://hotstar.com',
             'chatgpt': 'https://chat.openai.com',
             'gemini': 'https://gemini.google.com',
-            'claude': 'https://claude.ai',
+            'anthropic': 'https://claude.ai',
             'stackoverflow': 'https://stackoverflow.com',
             'wikipedia': 'https://wikipedia.org',
         }

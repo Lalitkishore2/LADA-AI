@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: lada
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: LADA_GATEWAY_PORT
+        value: "8080"
+      - key: LADA_STATE_DIR
+        value: /data/.lada
+      - key: LADA_WORKSPACE_DIR
+        value: /data/workspace
+      - key: LADA_GATEWAY_TOKEN
+        generateValue: true
+    disk:
+      name: lada-data
+      mountPath: /data
+      sizeGB: 1
+

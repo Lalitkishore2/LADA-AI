@@ -1,6 +1,6 @@
 """
 LADA v11.0 - Smart Home Control Framework
-Unified smart home device management inspired by OpenClaw's integrations.
+Unified smart home device management for LADA integrations.
 
 Features:
 - Multi-backend hub: Philips Hue, Home Assistant, Tuya

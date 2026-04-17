@@ -174,6 +174,12 @@ class TestCometAgent:
         success, message = agent._execute_action(action)
         assert success == True
         assert "Waited" in message
+
+    def test_execute_type_action_without_value_or_target(self, agent):
+        action = Action(type=ActionType.TYPE)
+        success, message = agent._execute_action(action)
+        assert success is False
+        assert "No text provided" in message
         
     def test_execute_complete_action(self, agent):
         action = Action(type=ActionType.COMPLETE)
@@ -200,6 +206,21 @@ class TestCometAgent:
         agent.is_running = True
         agent.stop()
         assert agent.is_running == False
+
+    def test_capture_screen_state_uses_gui_screenshot_fallback(self, agent):
+        class _FakeGUI:
+            def screenshot(self):
+                return {"success": True, "path": "screenshots\\fallback.png"}
+
+            def get_active_window_title(self):
+                return "Window"
+
+        agent.screenshot_analyzer = None
+        agent.gui = _FakeGUI()
+        agent.screen_vision = None
+        with patch("modules.comet_agent.PYAUTOGUI_OK", False):
+            state = agent._capture_screen_state()
+        assert state.screenshot_path == "screenshots\\fallback.png"
 
 
 class TestCometAgentAsync:

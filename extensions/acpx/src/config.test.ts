@@ -1,0 +1,71 @@
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
+
+describe("embedded acpx plugin config", () => {
+  it("resolves workspace stateDir and cwd by default", () => {
+    const workspaceDir = "/tmp/lada-acpx";
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: undefined,
+      workspaceDir,
+    });
+
+    expect(resolved.cwd).toBe(workspaceDir);
+    expect(resolved.stateDir).toBe(path.join(workspaceDir, "state"));
+    expect(resolved.permissionMode).toBe("approve-reads");
+    expect(resolved.nonInteractivePermissions).toBe("fail");
+    expect(resolved.agents).toEqual({});
+  });
+
+  it("accepts agent command overrides", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          lada: { command: "lada --acp" },
+          codex: { command: "codex custom-acp" },
+        },
+      },
+      workspaceDir: "/tmp/lada-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      lada: "lada --acp",
+      codex: "codex custom-acp",
+    });
+  });
+
+  it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        pluginToolsMcpBridge: true,
+      },
+      workspaceDir: "/tmp/lada-acpx",
+    });
+
+    const server = resolved.mcpServers["lada-plugin-tools"];
+    expect(server).toBeDefined();
+    expect(server.command).toBe(process.execPath);
+    expect(Array.isArray(server.args)).toBe(true);
+    expect(server.args?.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const pluginRoot = resolveAcpxPluginRoot();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginRoot, "lada.plugin.json"), "utf8"),
+    ) as { configSchema?: unknown };
+
+    expect(manifest.configSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: expect.objectContaining({
+        cwd: expect.any(Object),
+        stateDir: expect.any(Object),
+        agents: expect.any(Object),
+        mcpServers: expect.any(Object),
+      }),
+    });
+  });
+});
+

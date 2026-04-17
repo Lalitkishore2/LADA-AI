@@ -1,6 +1,6 @@
 """
 LADA - Context Auto-Compaction System
-OpenClaw-inspired context management for long-running conversations.
+LADA-native context management for long-running conversations.
 
 Monitors conversation token count and auto-triggers compaction when
 approaching the model's context window limit. Before compacting, flushes

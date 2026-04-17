@@ -85,6 +85,25 @@ def create_chat_router(state):
             else:
                 conversation = None
 
+            if state.jarvis:
+                loop = asyncio.get_event_loop()
+                handled, system_response = await loop.run_in_executor(
+                    None, state.jarvis.process, request.message
+                )
+                if handled:
+                    conv_id = request.conversation_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+                    if state.chat_manager:
+                        state.chat_manager.add_message(conv_id, "user", request.message)
+                        state.chat_manager.add_message(conv_id, "assistant", system_response or "Command executed.")
+                    return ChatResponse(
+                        success=True,
+                        response=system_response or "Command executed.",
+                        conversation_id=conv_id,
+                        model="system-command",
+                        sources=[],
+                        timestamp=datetime.now().isoformat(),
+                    )
+
             effective_model = request.model if request.model and request.model != 'auto' else None
             ai_response = await _run_query_with_timeout(
                 lambda: state.ai_router.query(
@@ -133,6 +152,17 @@ def create_chat_router(state):
 
         async def generate():
             try:
+                if state.jarvis:
+                    loop = asyncio.get_event_loop()
+                    handled, system_response = await loop.run_in_executor(
+                        None, state.jarvis.process, request.message
+                    )
+                    if handled:
+                        yield f"data: {json.dumps({'type': 'chat.chunk', 'data': {'chunk': system_response or 'Command executed.', 'request_id': request_id, 'is_system_command': True}})}\n\n"
+                        yield f"data: {json.dumps({'type': 'chat.done', 'data': {'done': True, 'request_id': request_id, 'is_system_command': True}})}\n\n"
+                        return
+
+                last_metadata = {}
                 if hasattr(state.ai_router, 'stream_query'):
                     q = asyncio.Queue()
                     loop = asyncio.get_event_loop()
@@ -164,25 +194,59 @@ def create_chat_router(state):
                             raise item
 
                         if isinstance(item, dict):
-                            payload = dict(item)
-                            payload.setdefault('request_id', request_id)
-                        else:
-                            payload = {'chunk': item}
+                            if item.get("sources"):
+                                yield f"data: {json.dumps({'type': 'chat.sources', 'data': {'sources': item.get('sources', []), 'request_id': request_id}})}\n\n"
+                                continue
 
-                        yield f"data: {json.dumps(payload)}\n\n"
+                            metadata = item.get("metadata", {})
+                            metadata = metadata if isinstance(metadata, dict) else {}
+                            if metadata:
+                                last_metadata = metadata
+
+                            if item.get("chunk"):
+                                payload = {
+                                    "type": "chat.chunk",
+                                    "data": {
+                                        "chunk": item.get("chunk", ""),
+                                        "request_id": request_id,
+                                    },
+                                }
+                                if metadata:
+                                    payload["data"]["metadata"] = metadata
+                                yield f"data: {json.dumps(payload)}\n\n"
+
+                            if item.get("done"):
+                                done_payload = {
+                                    "type": "chat.done",
+                                    "data": {"done": True, "request_id": request_id},
+                                }
+                                if metadata:
+                                    done_payload["data"]["metadata"] = metadata
+                                yield f"data: {json.dumps(done_payload)}\n\n"
+                                return
+                        else:
+                            payload = {
+                                "type": "chat.chunk",
+                                "data": {"chunk": item, "request_id": request_id},
+                            }
+                            yield f"data: {json.dumps(payload)}\n\n"
                 else:
                     response = await _run_query_with_timeout(
                         lambda: state.ai_router.query(request.message),
                         "Streaming request timed out. Please try again.",
                     )
-                    yield f"data: {json.dumps({'chunk': response})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'request_id': request_id})}\n\n"
+                    yield f"data: {json.dumps({'type': 'chat.chunk', 'data': {'chunk': response, 'request_id': request_id}})}\n\n"
+
+                done_payload = {"type": "chat.done", "data": {"done": True, "request_id": request_id}}
+                if last_metadata:
+                    done_payload["data"]["metadata"] = last_metadata
+                yield f"data: {json.dumps(done_payload)}\n\n"
             except SafeErrorResponse as e:
-                yield f"data: {json.dumps({'error': e.message, 'status_code': e.status_code, 'request_id': request_id})}\n\n"
+                yield f"data: {json.dumps({'type': 'chat.error', 'data': {'error': e.message, 'status_code': e.status_code, 'request_id': request_id}})}\n\n"
             except Exception as e:
                 error_info = safe_error_response(e, operation="chat_stream")
                 logger.error(f"[APIServer] Chat stream error ({request_id}): {type(e).__name__}")
-                yield f"data: {json.dumps({'error': error_info['error'], 'status_code': error_info['status_code'], 'request_id': request_id})}\n\n"
+                yield f"data: {json.dumps({'type': 'chat.error', 'data': {'error': error_info['error'], 'status_code': error_info['status_code'], 'request_id': request_id}})}\n\n"
 
         return StreamingResponse(
             generate(),

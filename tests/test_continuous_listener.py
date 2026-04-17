@@ -40,3 +40,9 @@ def test_listen_once_online_success_triggers_callback(monkeypatch):
 
     listener._listen_once()
     assert heard == ["Hello LADA"]
+
+
+def test_invalid_mic_device_index_ignored(monkeypatch):
+    monkeypatch.setenv("LADA_MIC_DEVICE_INDEX", "invalid")
+    listener = continuous_listener.ContinuousListener()
+    assert listener.mic_device_index is None

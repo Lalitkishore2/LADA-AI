@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+IMAGE_NAME="${LADA_IMAGE:-lada:local}"
+LIVE_IMAGE_NAME="${LADA_LIVE_IMAGE:-${IMAGE_NAME}-live}"
+
+if [[ "${LADA_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
+  echo "==> Reuse live-test image: $LIVE_IMAGE_NAME"
+  exit 0
+fi
+
+echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
+docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+

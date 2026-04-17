@@ -1,7 +1,7 @@
 """
 Workflow Pipelines - Lobster-style deterministic multi-step pipeline system.
 
-Inspired by OpenClaw's composable pipeline architecture. Replaces token-expensive
+Built with composable pipeline architecture. Replaces token-expensive
 sequential LLM calls with single deterministic operations gated by human approval
 checkpoints. Steps execute in strict order, piping output forward (stdin/stdout
 pattern), and the entire pipeline can pause at ApprovalGates, persist its state to

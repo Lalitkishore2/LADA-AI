@@ -230,7 +230,7 @@ def build_default_registry() -> ServiceRegistry:
                   'DesktopController', 'get_file_finder', 'get_window_controller',
                   'get_smart_browser', 'get_desktop_controller'])
 
-    # OpenClaw-inspired
+    # Browser-gateway inspired
     svc.register('heartbeat', 'modules.heartbeat_system',
                  ['HeartbeatSystem', 'DailyMemoryLog', 'get_heartbeat_system'])
     svc.register('context_compact', 'modules.context_compaction',
@@ -248,8 +248,8 @@ def build_default_registry() -> ServiceRegistry:
     svc.register('spotify', 'modules.spotify_controller', ['SpotifyController'])
     svc.register('smart_home', 'modules.smart_home', ['SmartHomeHub'])
     svc.register('alexa_server', 'integrations.alexa_server', ['AlexaSkillServer'])
-    svc.register('openclaw_adapter', 'integrations.openclaw_adapter',
-                 ['OpenClawAdapter', 'get_openclaw_adapter', 'openclaw_adapter_enabled'])
+    svc.register('lada_browser_adapter', 'integrations.lada_browser_adapter',
+                 ['LadaBrowserAdapter', 'get_lada_browser_adapter', 'lada_browser_adapter_enabled'])
     svc.register('stealth_browser', 'modules.stealth_browser',
                  ['StealthBrowser', 'StealthConfig', 'get_stealth_browser'])
 

@@ -1,0 +1,18 @@
+{
+  "name": "@lada/acpx",
+  "version": "2026.4.6",
+  "description": "LADA ACP runtime backend",
+  "type": "module",
+  "dependencies": {
+    "acpx": "0.5.2"
+  },
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

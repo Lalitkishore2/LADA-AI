@@ -1,6 +1,6 @@
 """
 LADA - Plugin System
-OpenClaw-style extensible plugin architecture with manifest-based discovery,
+Extensible plugin architecture with manifest-based discovery,
 capability registry, and lifecycle management.
 
 Features:
@@ -242,7 +242,7 @@ class PluginRegistry:
 
             manifest = self._load_manifest(item)
             if manifest is None:
-                # OpenClaw SKILL.md compatibility: support custom *.skill.md naming too.
+                # SKILL.md compatibility: support custom *.skill.md naming too.
                 skill_candidates = sorted(item.glob('*.skill.md'))
                 if skill_candidates:
                     manifest = self._load_skill_manifest(skill_candidates[0], item)
@@ -284,7 +284,7 @@ class PluginRegistry:
         return None
 
     def _load_skill_manifest(self, skill_path: Path, plugin_dir: Path) -> Optional[PluginManifest]:
-        """Parse OpenClaw-style SKILL.md and adapt it to PluginManifest."""
+        """Parse SKILL.md and adapt it to PluginManifest."""
         try:
             content = skill_path.read_text(encoding='utf-8')
 

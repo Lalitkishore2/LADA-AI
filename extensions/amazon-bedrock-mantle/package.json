@@ -1,0 +1,22 @@
+{
+  "name": "@lada/amazon-bedrock-mantle-provider",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "LADA Amazon Bedrock Mantle (OpenAI-compatible) provider plugin",
+  "type": "module",
+  "dependencies": {
+    "@aws/bedrock-token-generator": "^1.1.0"
+  },
+  "devDependencies": {
+    "@lada/plugin-sdk": "workspace:*"
+  },
+  "lada": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+

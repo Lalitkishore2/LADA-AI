@@ -140,7 +140,7 @@ class LADAAPIServer:
         from modules.api.routers.app import create_app_router
         from modules.api.routers.orchestration import create_orchestration_router
         from modules.api.routers.openai_compat import create_openai_compat_router
-        from modules.api.routers.openclaw_compat import create_openclaw_compat_router
+        from modules.api.routers.lada_browser_compat import create_lada_browser_compat_router
         from modules.api.routers.websocket import create_ws_router
 
         self.app.include_router(create_auth_router(self._state))
@@ -149,7 +149,7 @@ class LADAAPIServer:
         self.app.include_router(create_app_router(self._state))
         self.app.include_router(create_orchestration_router(self._state))
         self.app.include_router(create_openai_compat_router(self._state))
-        self.app.include_router(create_openclaw_compat_router(self._state))
+        self.app.include_router(create_lada_browser_compat_router(self._state))
         self.app.include_router(create_ws_router(self._state))
 
         # Mount static files

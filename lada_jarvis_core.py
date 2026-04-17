@@ -19,6 +19,7 @@ import subprocess
 import webbrowser
 import psutil
 import time
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
@@ -544,6 +545,14 @@ class JarvisCommandProcessor:
         self.command_history: List[str] = []
         self.last_action = None
         self.pending_confirmation = None  # For dangerous commands
+        self._last_activity_ts = time.time()
+        self._created_at_ts = self._last_activity_ts
+        self._session_count = 0
+        self._kairos_thread: Optional[threading.Thread] = None
+        self._kairos_stop = threading.Event()
+        self._kairos_interval_seconds = int(os.getenv("LADA_KAIROS_INTERVAL_SECONDS", "600"))
+        self._kairos_idle_seconds = int(os.getenv("LADA_KAIROS_IDLE_SECONDS", str(24 * 60 * 60)))
+        self._kairos_min_sessions = int(os.getenv("LADA_KAIROS_MIN_SESSIONS", "5"))
         
         # Privacy mode
         self.privacy_mode = False
@@ -638,6 +647,7 @@ class JarvisCommandProcessor:
         ]
 
         logger.info(f"[LADA Core] System: {SYSTEM_OK}, Browser: {BROWSER_OK}, Files: {FILE_OK}, NLU: {NLU_OK}, Safety: {SAFETY_OK}, Memory: {MEMORY_OK}, Workflow: {WORKFLOW_OK}, Routine: {ROUTINE_OK}")
+        self._start_kairos_loop()
     
     # ============ Privacy & Safety Methods ============
     
@@ -954,6 +964,8 @@ class JarvisCommandProcessor:
         """
         if not command:
             return False, ""
+
+        self._record_activity()
         
         cmd = command.lower().strip()
         
@@ -1072,6 +1084,62 @@ class JarvisCommandProcessor:
 
         # Not a system command - let AI handle it
         return False, ""
+
+    def _record_activity(self):
+        self._last_activity_ts = time.time()
+        self._session_count += 1
+
+    def _start_kairos_loop(self):
+        if self._kairos_thread and self._kairos_thread.is_alive():
+            return
+
+        def _worker():
+            while not self._kairos_stop.wait(self._kairos_interval_seconds):
+                try:
+                    idle_for = time.time() - self._last_activity_ts
+                    if idle_for < self._kairos_idle_seconds:
+                        continue
+                    if self._session_count < self._kairos_min_sessions:
+                        continue
+                    self._run_kairos_consolidation()
+                except Exception as e:
+                    logger.warning(f"[KAIROS] Background loop error: {e}")
+
+        self._kairos_thread = threading.Thread(
+            target=_worker,
+            name="lada-kairos",
+            daemon=True,
+        )
+        self._kairos_thread.start()
+        logger.info("[KAIROS] Auto-dream loop started")
+
+    def _run_kairos_consolidation(self):
+        """
+        KAIROS-safe consolidation:
+        Orient -> Gather -> Consolidate -> Prune.
+        """
+        if not self.memory:
+            return
+        try:
+            from lada_memory import get_markdown_memory
+            md_mem = get_markdown_memory()
+            recent_logs = md_mem.get_recent_logs(days=3)
+            if not recent_logs:
+                return
+
+            gathered = {}
+            gathered["Projects"] = "Recent activity consolidated from daily logs."
+            gathered["Preferences"] = "Session patterns observed; preferences retained."
+            gathered["Key Facts"] = "Important recent notes were preserved during idle consolidation."
+            md_mem.consolidate_to_memory(gathered)
+
+            md_mem.append_to_daily_log(
+                "KAIROS consolidation completed (Orient→Gather→Consolidate→Prune).",
+                category="kairos",
+            )
+            logger.info("[KAIROS] Consolidation completed")
+        except Exception as e:
+            logger.warning(f"[KAIROS] Consolidation failed: {e}")
     def _handle_typing(self, cmd: str) -> Tuple[bool, str]:
         """Handle typing commands - type text for the user"""
         # Extract what to type

@@ -8,7 +8,7 @@ its own isolated session with:
 - Token budget
 - Session-specific state (attached files, preferences)
 
-Inspired by OpenClaw's per-channel session isolation.
+Built around per-channel session isolation.
 """
 
 import os
@@ -51,6 +51,7 @@ class Session:
     """
     Isolated conversation session.
     Each session has its own history, context, and state.
+    Sessions are namespaced by agent_id for multi-agent isolation.
     """
     session_id: str
     session_type: SessionType
@@ -60,6 +61,7 @@ class Session:
     max_context_tokens: int = 8192  # Updated per model
     metadata: Dict[str, Any] = field(default_factory=dict)
     active: bool = True
+    agent_id: str = "default"  # Agent namespace for isolation
 
     def add_message(self, role: str, content: str, token_count: int = 0,
                     metadata: Optional[Dict] = None) -> SessionMessage:
@@ -120,6 +122,7 @@ class Session:
             'message_count': len(self.messages),
             'total_tokens': self.total_tokens,
             'active': self.active,
+            'agent_id': self.agent_id,
             'metadata': self.metadata,
             'messages': [
                 {
@@ -158,23 +161,26 @@ class SessionManager:
     def create_session(self, session_type: SessionType = SessionType.GUI_CHAT,
                        session_id: str = None,
                        max_context_tokens: int = 8192,
-                       metadata: Optional[Dict] = None) -> Session:
-        """Create a new conversation session"""
+                       metadata: Optional[Dict] = None,
+                       agent_id: str = "default") -> Session:
+        """Create a new conversation session, namespaced by agent_id"""
         with self._lock:
             if not session_id:
                 self._counter += 1
                 ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-                session_id = f"{session_type.value}_{ts}_{self._counter}"
+                # Include agent_id in session_id for namespacing
+                session_id = f"{agent_id}_{session_type.value}_{ts}_{self._counter}"
 
             session = Session(
                 session_id=session_id,
                 session_type=session_type,
                 max_context_tokens=max_context_tokens,
                 metadata=metadata or {},
+                agent_id=agent_id,
             )
             self.sessions[session_id] = session
 
-        logger.info(f"[SessionManager] Created session: {session_id} ({session_type.value})")
+        logger.info(f"[SessionManager] Created session: {session_id} (agent={agent_id}, type={session_type.value})")
         return session
 
     def get_session(self, session_id: str) -> Optional[Session]:
@@ -183,8 +189,9 @@ class SessionManager:
 
     def get_or_create(self, session_id: str,
                       session_type: SessionType = SessionType.GUI_CHAT,
-                      max_context_tokens: int = 8192) -> Session:
-        """Get existing session or create new one"""
+                      max_context_tokens: int = 8192,
+                      agent_id: str = "default") -> Session:
+        """Get existing session or create new one (namespaced by agent_id)"""
         session = self.sessions.get(session_id)
         if session:
             return session
@@ -192,6 +199,7 @@ class SessionManager:
             session_type=session_type,
             session_id=session_id,
             max_context_tokens=max_context_tokens,
+            agent_id=agent_id,
         )
 
     def close_session(self, session_id: str) -> bool:
@@ -213,6 +221,17 @@ class SessionManager:
             if active_only and not s.active:
                 continue
             if session_type and s.session_type != session_type:
+                continue
+            results.append(s)
+        return results
+
+    def list_sessions_for_agent(self, agent_id: str, active_only: bool = True) -> List[Session]:
+        """List sessions belonging to a specific agent"""
+        results = []
+        for s in self.sessions.values():
+            if s.agent_id != agent_id:
+                continue
+            if active_only and not s.active:
                 continue
             results.append(s)
         return results
@@ -257,6 +276,7 @@ class SessionManager:
                 total_tokens=data.get('total_tokens', 0),
                 active=data.get('active', True),
                 metadata=data.get('metadata', {}),
+                agent_id=data.get('agent_id', 'default'),
             )
 
             for m in data.get('messages', []):

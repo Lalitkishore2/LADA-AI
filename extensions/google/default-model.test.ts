@@ -1,0 +1,30 @@
+import type { LADAConfig } from "lada/plugin-sdk/provider-onboard";
+import { describe, expect, it } from "vitest";
+import { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./api.js";
+
+describe("google default model", () => {
+  it("sets defaults when model is unset", () => {
+    const cfg: LADAConfig = { agents: { defaults: {} } };
+    const applied = applyGoogleGeminiModelDefault(cfg);
+    expect(applied.changed).toBe(true);
+    expect(applied.next.agents?.defaults?.model).toEqual({ primary: GOOGLE_GEMINI_DEFAULT_MODEL });
+  });
+
+  it("overrides existing models", () => {
+    const applied = applyGoogleGeminiModelDefault({
+      agents: { defaults: { model: { primary: "anthropic/lada-opus-4-6" } } },
+    } as LADAConfig);
+    expect(applied.changed).toBe(true);
+    expect(applied.next.agents?.defaults?.model).toEqual({ primary: GOOGLE_GEMINI_DEFAULT_MODEL });
+  });
+
+  it("no-ops when already on the target default", () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: GOOGLE_GEMINI_DEFAULT_MODEL } } },
+    } as LADAConfig;
+    const applied = applyGoogleGeminiModelDefault(cfg);
+    expect(applied.changed).toBe(false);
+    expect(applied.next).toEqual(cfg);
+  });
+});
+

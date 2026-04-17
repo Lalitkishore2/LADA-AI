@@ -1,0 +1,10 @@
+import type { PluginRuntime } from "lada/plugin-sdk/core";
+import { createPluginRuntimeStore } from "lada/plugin-sdk/runtime-store";
+
+const {
+  setRuntime: setSignalRuntime,
+  clearRuntime: clearSignalRuntime,
+  getRuntime: getSignalRuntime,
+} = createPluginRuntimeStore<PluginRuntime>("Signal runtime not initialized");
+export { clearSignalRuntime, getSignalRuntime, setSignalRuntime };
+

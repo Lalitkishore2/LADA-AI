@@ -5,7 +5,7 @@ Tracks token usage per conversation and enforces per-model context window
 limits. When a conversation approaches the limit, automatically compacts
 older messages by summarizing them.
 
-Superior to OpenClaw's approach:
+LADA improvements in this approach:
 - Per-model context limits (not one-size-fits-all)
 - Smart summarization (not just truncation)
 - Token budget tracking with alerts
@@ -313,7 +313,7 @@ class ContextManager:
         Pre-compaction flush: Extract critical notes before context is trimmed.
         
         This is a "silent agentic turn" where the AI is prompted to identify
-        and preserve important facts before history is pruned (OpenClaw pattern).
+        and preserve important facts before history is pruned.
         
         Args:
             messages: Full message list about to be compacted

@@ -121,6 +121,12 @@ class _FakeJarvis:
         self.workflow_engine = _FakeWorkflowEngine()
         self.tasks = _FakeTaskController()
 
+    def process(self, command: str):
+        cmd = (command or "").lower().strip()
+        if cmd.startswith("open ") or cmd.startswith("run "):
+            return True, "Command executed."
+        return False, ""
+
 
 class _FakeState:
     def __init__(self, ai_router=None):
@@ -157,6 +163,24 @@ class _FakeState:
 
     def invalidate_token(self, token):
         self._tokens.pop(token, None)
+
+
+class _JwtStyleFakeState(_FakeState):
+    def create_session_token(self):
+        raw = super().create_session_token()
+        return f"header.payload.{raw}"
+
+    def validate_session_token(self, token):
+        if isinstance(token, str) and token.count(".") == 2:
+            base = token.split(".")[-1]
+            return super().validate_session_token(base)
+        return super().validate_session_token(token)
+
+    def invalidate_token(self, token):
+        if isinstance(token, str) and token.count(".") == 2:
+            base = token.split(".")[-1]
+            return super().invalidate_token(base)
+        return super().invalidate_token(token)
 
 
 def _build_client(*routers):
@@ -266,9 +290,9 @@ def test_chat_stream_sse_contract_contains_chunks_and_done():
     assert response.headers["x-request-id"] == request_id
 
     body = response.text
-    assert 'data: {"chunk": "part-1"}' in body
-    assert 'data: {"chunk": "part-2"}' in body
-    assert f'data: {{"done": true, "request_id": "{request_id}"}}' in body
+    assert 'data: {"type": "chat.chunk", "data": {"chunk": "part-1", "request_id": "chat-stream-req-1"}}' in body
+    assert 'data: {"type": "chat.chunk", "data": {"chunk": "part-2", "request_id": "chat-stream-req-1"}}' in body
+    assert f'data: {{"type": "chat.done", "data": {{"done": true, "request_id": "{request_id}"}}}}' in body
 
 
 def test_chat_timeout_returns_504(monkeypatch):
@@ -341,10 +365,48 @@ def test_chat_stream_sse_passes_through_dict_chunk_metadata():
 
     assert response.status_code == 200
     body = response.text
+    assert '"type": "chat.chunk"' in body
     assert '"chunk": "part-1"' in body
     assert '"metadata": {"phase": "one"}' in body
+    assert '"type": "chat.done"' in body
     assert '"providers_tried": ["provider"]' in body
     assert '"request_id": "chat-stream-meta-req-1"' in body
+
+
+def test_chat_routes_system_command_to_jarvis():
+    state = _FakeState()
+    state.jarvis = _FakeJarvis()
+    client = _build_client(create_chat_router(state))
+
+    response = client.post(
+        "/chat",
+        json={"message": "open calculator"},
+        headers={"X-Request-ID": "chat-system-req-1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["response"] == "Command executed."
+    assert payload["model"] == "system-command"
+
+
+def test_chat_stream_routes_system_command_to_jarvis():
+    state = _FakeState()
+    state.jarvis = _FakeJarvis()
+    client = _build_client(create_chat_router(state))
+
+    response = client.post(
+        "/chat/stream",
+        json={"message": "open notepad"},
+        headers={"X-Request-ID": "chat-stream-system-req-1"},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"is_system_command": true' in body
+    assert '"type": "chat.done"' in body
+    assert '"request_id": "chat-stream-system-req-1"' in body
 
 
 def test_agent_not_found_preserves_404_and_request_id_header():
@@ -399,6 +461,23 @@ def test_websocket_ping_pong_and_size_limit(monkeypatch):
         oversized = ws.receive_json()
         assert oversized["type"] == "error"
         assert "Message too large" in oversized["data"]["message"]
+
+
+def test_websocket_accepts_bearer_token_header(monkeypatch):
+    state = _JwtStyleFakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(
+        "/ws",
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": "ws-auth-header-req-1"},
+    ) as ws:
+        connected = ws.receive_json()
+        assert connected["type"] == "system.connected"
+        assert connected["data"]["request_id"] == "ws-auth-header-req-1"
 
 
 def test_websocket_chat_error_sanitizes_sensitive_details(monkeypatch):
@@ -577,6 +656,116 @@ def test_websocket_plan_workflow_task_frames_propagate_request_id(monkeypatch):
         task_frame = ws.receive_json()
         assert task_frame["type"] == "task.list"
         assert task_frame["data"]["request_id"] == "ws-task-req-1"
+
+
+def test_agent_websocket_rpc_navigate_blocks_internal_url(monkeypatch):
+    class _FakeBrowser:
+        def navigate(self, url):
+            return {"success": True, "url": url, "title": "ok"}
+
+        def click(self, selector, by="css"):
+            return {"success": True}
+
+        def type_text(self, selector, text, by="css"):
+            return {"success": True}
+
+        def scroll(self, direction="down", amount=500):
+            return {"success": True}
+
+    state = _FakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    import modules.stealth_browser as stealth_browser_mod
+    monkeypatch.setattr(stealth_browser_mod, "get_stealth_browser", lambda: _FakeBrowser())
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/agent?token={token}") as ws:
+        connected = ws.receive_json()
+        assert connected["type"] == "agent.connected"
+
+        ws.send_json(
+            {
+                "id": "agent-1",
+                "request_id": "agent-rpc-req-1",
+                "data": {"action": "navigate", "url": "chrome://settings"},
+            }
+        )
+        blocked = ws.receive_json()
+        assert blocked["type"] == "agent.rpc.error"
+        assert "Blocked or invalid URL" in blocked["data"]["message"]
+        assert blocked["data"]["request_id"] == "agent-rpc-req-1"
+
+
+def test_agent_websocket_rpc_click_success(monkeypatch):
+    class _FakeBrowser:
+        def navigate(self, url):
+            return {"success": True, "url": url}
+
+        def click(self, selector, by="css"):
+            return {"success": True, "selector": selector, "by": by}
+
+        def type_text(self, selector, text, by="css"):
+            return {"success": True}
+
+        def scroll(self, direction="down", amount=500):
+            return {"success": True}
+
+    state = _FakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    import modules.stealth_browser as stealth_browser_mod
+    monkeypatch.setattr(stealth_browser_mod, "get_stealth_browser", lambda: _FakeBrowser())
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/agent?token={token}") as ws:
+        ws.receive_json()  # agent.connected
+        ws.send_json(
+            {
+                "id": "agent-2",
+                "request_id": "agent-rpc-req-2",
+                "data": {"action": "click", "selector": "#submit", "by": "css"},
+            }
+        )
+        done = ws.receive_json()
+        assert done["type"] == "agent.rpc.done"
+        assert done["data"]["success"] is True
+        assert done["data"]["action"] == "click"
+        assert done["data"]["request_id"] == "agent-rpc-req-2"
+
+
+def test_agent_websocket_accepts_bearer_token_header(monkeypatch):
+    class _FakeBrowser:
+        def navigate(self, url):
+            return {"success": True, "url": url}
+
+        def click(self, selector, by="css"):
+            return {"success": True, "selector": selector, "by": by}
+
+        def type_text(self, selector, text, by="css"):
+            return {"success": True}
+
+        def scroll(self, direction="down", amount=500):
+            return {"success": True}
+
+    state = _JwtStyleFakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    import modules.stealth_browser as stealth_browser_mod
+    monkeypatch.setattr(stealth_browser_mod, "get_stealth_browser", lambda: _FakeBrowser())
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect("/agent", headers={"Authorization": f"Bearer {token}"}) as ws:
+        connected = ws.receive_json()
+        assert connected["type"] == "agent.connected"
 
 
 def test_voice_direct_unauthorized_preserves_401():

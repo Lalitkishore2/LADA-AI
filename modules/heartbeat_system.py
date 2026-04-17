@@ -1,5 +1,5 @@
 """
-LADA - Heartbeat System (OpenClaw-Inspired)
+LADA - Heartbeat System
 Periodic proactive check-ins where the AI agent reviews pending work
 and surfaces anything needing the user's attention.
 
@@ -304,7 +304,7 @@ class DailyMemoryLog:
 
 class HeartbeatSystem:
     """
-    OpenClaw-inspired periodic heartbeat for LADA.
+    LADA-native periodic heartbeat.
 
     Every N minutes (during active hours) the system:
     1. Reads the HEARTBEAT.md checklist

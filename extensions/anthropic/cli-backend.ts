@@ -1,0 +1,79 @@
+import type { CliBackendPlugin } from "lada/plugin-sdk/cli-backend";
+import {
+  CLI_FRESH_WATCHDOG_DEFAULTS,
+  CLI_RESUME_WATCHDOG_DEFAULTS,
+} from "lada/plugin-sdk/cli-backend";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_CLEAR_ENV,
+  CLAUDE_CLI_HOST_MANAGED_ENV,
+  CLAUDE_CLI_MODEL_ALIASES,
+  CLAUDE_CLI_SESSION_ID_FIELDS,
+  normalizeLADABackendConfig,
+} from "./cli-shared.js";
+
+export function buildAnthropicCliBackend(): CliBackendPlugin {
+  return {
+    id: CLAUDE_CLI_BACKEND_ID,
+    liveTest: {
+      defaultModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
+      defaultImageProbe: true,
+      defaultMcpProbe: true,
+      docker: {
+        npmPackage: "@anthropic-ai/lada-code",
+        binaryName: "lada",
+      },
+    },
+    bundleMcp: true,
+    bundleMcpMode: "lada-config-file",
+    config: {
+      command: "lada",
+      args: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--setting-sources",
+        "user",
+        "--permission-mode",
+        "bypassPermissions",
+      ],
+      resumeArgs: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--setting-sources",
+        "user",
+        "--permission-mode",
+        "bypassPermissions",
+        "--resume",
+        "{sessionId}",
+      ],
+      output: "jsonl",
+      input: "stdin",
+      modelArg: "--model",
+      modelAliases: CLAUDE_CLI_MODEL_ALIASES,
+      sessionArg: "--session-id",
+      sessionMode: "always",
+      sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
+      systemPromptArg: "--append-system-prompt",
+      systemPromptMode: "append",
+      systemPromptWhen: "first",
+      env: { ...CLAUDE_CLI_HOST_MANAGED_ENV },
+      clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      serialize: true,
+    },
+    normalizeConfig: normalizeLADABackendConfig,
+  };
+}
+
