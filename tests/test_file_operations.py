@@ -107,7 +107,8 @@ class TestFileDeletion:
         test_file = tmp_path / "delete_me.txt"
         test_file.write_text("delete this")
         
-        with patch('send2trash.send2trash'):
+        with patch('modules.file_operations._send2trash') as mock_send2trash:
+            mock_send2trash.send2trash = MagicMock()
             result = controller.delete_file(str(test_file), permanent=False)
         
         # Check result

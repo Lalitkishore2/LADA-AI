@@ -86,10 +86,8 @@ class WakeWordDetector:
         """Start listening for wake word."""
         if self.is_listening:
             return
-        
+
         self._stop_event.clear()
-        self.is_listening = True
-        
         if PVPORCUPINE_OK and self.porcupine_key:
             self._thread = threading.Thread(target=self._listen_porcupine, daemon=True)
         elif SPEECH_RECOGNITION_OK:
@@ -98,7 +96,8 @@ class WakeWordDetector:
             logger.error("[WakeWord] No audio library available")
             self.is_listening = False
             return
-        
+
+        self.is_listening = True
         self._thread.start()
         logger.info(f"[WakeWord] Started listening for: {self.wake_words}")
     

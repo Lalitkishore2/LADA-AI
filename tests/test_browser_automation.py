@@ -1,4 +1,5 @@
 import pytest
+import pytest_asyncio
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 from modules.browser_automation import CometBrowserAgent
@@ -45,7 +46,7 @@ class TestCometBrowserAgent:
             
             yield mock_pw
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def browser_agent(self):
         agent = CometBrowserAgent()
         yield agent
