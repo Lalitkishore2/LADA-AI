@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -19,6 +20,7 @@ class _FakeAIRouter:
         self.current_model = "test-model"
         self.current_backend_name = "test-backend"
         self.last_query = None
+        self.last_stream_query = None
 
     def query(self, message, model=None, use_web_search=False):
         self.last_query = {
@@ -28,7 +30,12 @@ class _FakeAIRouter:
         }
         return f"echo:{message}"
 
-    def stream_query(self, message):
+    def stream_query(self, message, model=None, use_web_search=False):
+        self.last_stream_query = {
+            "message": message,
+            "model": model,
+            "use_web_search": use_web_search,
+        }
         yield "part-1"
         yield "part-2"
 
@@ -126,6 +133,29 @@ class _FakeJarvis:
         if cmd.startswith("open ") or cmd.startswith("run "):
             return True, "Command executed."
         return False, ""
+
+
+class _FakeChatManager:
+    def __init__(self):
+        self._counter = 0
+        self.conversations = {}
+
+    def _next_id(self) -> str:
+        self._counter += 1
+        return f"conv-{self._counter}"
+
+    def add_message(self, conversation_id: str, role: str, content: str, **kwargs):
+        conv_id = (conversation_id or "").strip() or self._next_id()
+        conv = self.conversations.setdefault(conv_id, {"id": conv_id, "messages": []})
+        conv["messages"].append(
+            {
+                "role": role,
+                "content": content,
+                "model_used": kwargs.get("model_used"),
+                "sources": kwargs.get("sources", []),
+            }
+        )
+        return SimpleNamespace(id=conv_id)
 
 
 class _FakeState:
@@ -293,6 +323,28 @@ def test_chat_stream_sse_contract_contains_chunks_and_done():
     assert 'data: {"type": "chat.chunk", "data": {"chunk": "part-1", "request_id": "chat-stream-req-1"}}' in body
     assert 'data: {"type": "chat.chunk", "data": {"chunk": "part-2", "request_id": "chat-stream-req-1"}}' in body
     assert f'data: {{"type": "chat.done", "data": {{"done": true, "request_id": "{request_id}"}}}}' in body
+
+
+def test_chat_stream_forwards_model_and_web_flag():
+    state = _FakeState()
+    client = _build_client(create_chat_router(state))
+
+    response = client.post(
+        "/chat/stream",
+        json={
+            "message": "stream with model",
+            "model": "gpt-4o-mini",
+            "use_web_search": True,
+        },
+        headers={"X-Request-ID": "chat-stream-model-req-1"},
+    )
+
+    assert response.status_code == 200
+    assert state.ai_router.last_stream_query == {
+        "message": "stream with model",
+        "model": "gpt-4o-mini",
+        "use_web_search": True,
+    }
 
 
 def test_chat_timeout_returns_504(monkeypatch):
@@ -573,6 +625,83 @@ def test_websocket_chat_stream_propagates_metadata(monkeypatch):
     assert chat_done["data"]["request_id"] == "ws-chat-meta-req-1"
 
 
+def test_websocket_chat_stream_done_uses_metadata_error_when_content_empty(monkeypatch):
+    class _DoneOnlyMetadataStreamAIRouter(_FakeAIRouter):
+        def stream_query(self, message, model=None, use_web_search=False):
+            yield {
+                "chunk": "",
+                "source": "error",
+                "done": True,
+                "metadata": {"error": "Local model is offline"},
+            }
+
+    state = _FakeState(ai_router=_DoneOnlyMetadataStreamAIRouter())
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        ws.receive_json()  # system.connected
+        ws.send_json(
+            {
+                "type": "chat",
+                "id": "msg-meta-2",
+                "request_id": "ws-chat-meta-req-2",
+                "data": {"message": "trigger", "stream": True},
+            }
+        )
+
+        chat_start = ws.receive_json()
+        chat_done = ws.receive_json()
+
+    assert chat_start["type"] == "chat.start"
+    assert chat_done["type"] == "chat.done"
+    assert chat_done["data"]["content"] == "Local model is offline"
+    assert chat_done["data"]["metadata"]["error"] == "Local model is offline"
+    assert chat_done["data"]["request_id"] == "ws-chat-meta-req-2"
+
+
+def test_websocket_chat_persists_history_with_conversation_id(monkeypatch):
+    state = _FakeState()
+    state.chat_manager = _FakeChatManager()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        ws.receive_json()  # system.connected
+        ws.send_json(
+            {
+                "type": "chat",
+                "id": "msg-conv-1",
+                "request_id": "ws-chat-conv-req-1",
+                "data": {"message": "remember this", "stream": True},
+            }
+        )
+
+        chat_start = ws.receive_json()
+        chunk_1 = ws.receive_json()
+        chunk_2 = ws.receive_json()
+        chat_done = ws.receive_json()
+
+    assert chat_start["type"] == "chat.start"
+    assert chunk_1["type"] == "chat.chunk"
+    assert chunk_2["type"] == "chat.chunk"
+    assert chat_done["type"] == "chat.done"
+    assert chat_done["data"]["request_id"] == "ws-chat-conv-req-1"
+    conversation_id = chat_done["data"]["conversation_id"]
+    assert conversation_id
+
+    stored_messages = state.chat_manager.conversations[conversation_id]["messages"]
+    assert [entry["role"] for entry in stored_messages] == ["user", "assistant"]
+    assert stored_messages[0]["content"] == "remember this"
+    assert stored_messages[1]["content"] == "part-1part-2"
+
+
 def test_websocket_system_frames_propagate_request_id(monkeypatch):
     state = _FakeState()
     token = state.create_session_token()
@@ -656,6 +785,205 @@ def test_websocket_plan_workflow_task_frames_propagate_request_id(monkeypatch):
         task_frame = ws.receive_json()
         assert task_frame["type"] == "task.list"
         assert task_frame["data"]["request_id"] == "ws-task-req-1"
+
+
+def test_websocket_workflow_and_task_list_use_registry_when_jarvis_missing(monkeypatch):
+    class _FakeFlow:
+        def __init__(self):
+            self.id = "flow-reg-1"
+
+        def to_dict(self):
+            return {
+                "id": "flow-reg-1",
+                "name": "Registry Flow WS",
+                "total_steps": 2,
+                "status": "pending",
+            }
+
+    class _FakeFlowRegistry:
+        def list_flows(self):
+            return [_FakeFlow()]
+
+        def get_task(self, flow_id):
+            return SimpleNamespace(steps=[SimpleNamespace(action="open_url"), SimpleNamespace(action="extract_text")])
+
+    class _FakeRegistryTask:
+        def to_dict(self):
+            return {
+                "id": "task-reg-1",
+                "name": "Registry Task WS",
+                "status": "running",
+                "progress": 0.5,
+                "current_step_index": 1,
+                "steps": [{"id": "step-1"}, {"id": "step-2"}],
+                "started_at": "2026-04-19T12:00:00",
+                "completed_at": None,
+                "error": None,
+                "result": None,
+            }
+
+    class _FakeRegistry:
+        def list_tasks(self, active_only=False):
+            if active_only:
+                return [_FakeRegistryTask()]
+            return []
+
+    state = _FakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr("modules.tasks.get_flow_registry", lambda: _FakeFlowRegistry())
+    monkeypatch.setattr("modules.tasks.get_registry", lambda: _FakeRegistry())
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        ws.receive_json()  # system.connected
+
+        ws.send_json(
+            {
+                "type": "workflow",
+                "id": "wf-reg-1",
+                "request_id": "ws-reg-workflow-req-1",
+                "data": {"action": "list"},
+            }
+        )
+        workflow_frame = ws.receive_json()
+        assert workflow_frame["type"] == "workflow.list"
+        assert workflow_frame["data"]["request_id"] == "ws-reg-workflow-req-1"
+        assert workflow_frame["data"]["workflows"][0]["source"] == "registry"
+
+        ws.send_json(
+            {
+                "type": "task",
+                "id": "task-reg-1",
+                "request_id": "ws-reg-task-req-1",
+                "data": {"action": "list"},
+            }
+        )
+        task_frame = ws.receive_json()
+        assert task_frame["type"] == "task.list"
+        assert task_frame["data"]["request_id"] == "ws-reg-task-req-1"
+        assert task_frame["data"]["active_tasks"][0]["execution_id"] == "task-reg-1"
+
+
+def test_websocket_task_lifecycle_routes_fallback_to_registry_when_jarvis_missing(monkeypatch):
+    class _FakeRegistryTask:
+        def __init__(self):
+            self.id = "task-reg-lifecycle"
+            self.resume_token = "resume-token-1"
+            self.status = SimpleNamespace(value="paused")
+            self._status = "paused"
+
+        def to_dict(self):
+            return {
+                "id": self.id,
+                "name": "Registry Lifecycle WS Task",
+                "status": self._status,
+                "progress": 0.2,
+                "current_step_index": 1,
+                "steps": [{"id": "step-1"}, {"id": "step-2"}],
+                "started_at": "2026-04-19T12:30:00",
+                "completed_at": None,
+                "error": None,
+                "result": None,
+            }
+
+    class _FakeRegistry:
+        def __init__(self):
+            self.task = _FakeRegistryTask()
+
+        def get(self, task_id):
+            if task_id == self.task.id:
+                return self.task
+            return None
+
+        def pause(self, task_id):
+            if task_id != self.task.id:
+                return None
+            self.task._status = "paused"
+            self.task.status = SimpleNamespace(value="paused")
+            self.task.resume_token = "resume-token-1"
+            return "resume-token-1"
+
+        def resume(self, token):
+            if token == "resume-token-1":
+                self.task._status = "running"
+                self.task.status = SimpleNamespace(value="running")
+                self.task.resume_token = None
+                return self.task
+            return None
+
+        def cancel(self, task_id, reason=None):
+            if task_id != self.task.id:
+                return False
+            self.task._status = "cancelled"
+            self.task.status = SimpleNamespace(value="cancelled")
+            return True
+
+    fake_registry = _FakeRegistry()
+    state = _FakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr("modules.tasks.get_registry", lambda: fake_registry)
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        ws.receive_json()  # system.connected
+
+        ws.send_json(
+            {
+                "type": "task",
+                "id": "task-status-1",
+                "request_id": "ws-task-status-reg-1",
+                "data": {"action": "status", "execution_id": "task-reg-lifecycle"},
+            }
+        )
+        status_frame = ws.receive_json()
+        assert status_frame["type"] == "task.status"
+        assert status_frame["data"]["request_id"] == "ws-task-status-reg-1"
+        assert status_frame["data"]["execution_id"] == "task-reg-lifecycle"
+
+        ws.send_json(
+            {
+                "type": "task",
+                "id": "task-pause-1",
+                "request_id": "ws-task-pause-reg-1",
+                "data": {"action": "pause", "execution_id": "task-reg-lifecycle"},
+            }
+        )
+        pause_frame = ws.receive_json()
+        assert pause_frame["type"] == "task.paused"
+        assert pause_frame["data"]["request_id"] == "ws-task-pause-reg-1"
+        assert pause_frame["data"]["resume_token"] == "resume-token-1"
+
+        ws.send_json(
+            {
+                "type": "task",
+                "id": "task-resume-1",
+                "request_id": "ws-task-resume-reg-1",
+                "data": {"action": "resume", "execution_id": "task-reg-lifecycle"},
+            }
+        )
+        resume_frame = ws.receive_json()
+        assert resume_frame["type"] == "task.resumed"
+        assert resume_frame["data"]["request_id"] == "ws-task-resume-reg-1"
+        assert resume_frame["data"]["status"] == "running"
+
+        ws.send_json(
+            {
+                "type": "task",
+                "id": "task-cancel-1",
+                "request_id": "ws-task-cancel-reg-1",
+                "data": {"action": "cancel", "execution_id": "task-reg-lifecycle"},
+            }
+        )
+        cancel_frame = ws.receive_json()
+        assert cancel_frame["type"] == "task.cancelled"
+        assert cancel_frame["data"]["request_id"] == "ws-task-cancel-reg-1"
+        assert cancel_frame["data"]["status"] == "cancelled"
 
 
 def test_agent_websocket_rpc_navigate_blocks_internal_url(monkeypatch):

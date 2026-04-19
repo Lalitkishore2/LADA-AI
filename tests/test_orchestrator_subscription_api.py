@@ -1,5 +1,8 @@
 """Tests for orchestrator subscription observability endpoint."""
 
+from types import SimpleNamespace
+from typing import Optional
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -133,3 +136,159 @@ def test_create_plan_sanitizes_internal_error():
     assert response.status_code == 500
     detail = response.json().get("detail", "")
     assert sensitive_key not in detail
+
+
+def test_legacy_list_routes_use_registry_payloads_when_available(monkeypatch):
+    class _FakeRegistryTask:
+        def __init__(self, task_id: str, name: str, status: str, progress: float = 0.0):
+            self._data = {
+                "id": task_id,
+                "name": name,
+                "status": status,
+                "progress": progress,
+                "current_step_index": 1,
+                "steps": [{"id": "step-1"}, {"id": "step-2"}],
+                "started_at": "2026-04-19T10:00:00",
+                "completed_at": None,
+                "error": None,
+            }
+
+        def to_dict(self):
+            return dict(self._data)
+
+    class _FakeRegistry:
+        def list_tasks(self, active_only=False):
+            if active_only:
+                return [_FakeRegistryTask("task-reg-1", "Registry Active Task", "running", 0.5)]
+            return []
+
+        def get_history(self, limit=20):
+            return [
+                {
+                    "id": "task-reg-2",
+                    "name": "Registry Completed Task",
+                    "status": "completed",
+                    "started_at": "2026-04-19T09:00:00",
+                    "completed_at": "2026-04-19T09:01:00",
+                    "error": None,
+                }
+            ]
+
+    class _FakeFlow:
+        def __init__(self):
+            self.id = "flow-reg-1"
+
+        def to_dict(self):
+            return {
+                "id": "flow-reg-1",
+                "name": "Registry Flow",
+                "total_steps": 2,
+                "status": "pending",
+            }
+
+    class _FakeFlowRegistry:
+        def list_flows(self):
+            return [_FakeFlow()]
+
+        def get_task(self, flow_id):
+            return SimpleNamespace(steps=[SimpleNamespace(action="open_url"), SimpleNamespace(action="extract_text")])
+
+    monkeypatch.setattr("modules.tasks.get_registry", lambda: _FakeRegistry())
+    monkeypatch.setattr("modules.tasks.get_flow_registry", lambda: _FakeFlowRegistry())
+
+    state = _FakeState()
+    state.jarvis = None
+    client = _build_client(state)
+
+    tasks_response = client.get("/tasks")
+    assert tasks_response.status_code == 200
+    tasks_payload = tasks_response.json()
+    assert tasks_payload["active_count"] == 1
+    assert tasks_payload["completed_count"] == 1
+    assert tasks_payload["active"][0]["execution_id"] == "task-reg-1"
+    assert tasks_payload["completed"][0]["execution_id"] == "task-reg-2"
+
+    workflows_response = client.get("/workflows")
+    assert workflows_response.status_code == 200
+    workflows_payload = workflows_response.json()
+    assert workflows_payload["count"] == 1
+    assert workflows_payload["workflows"][0]["name"] == "Registry Flow"
+    assert workflows_payload["workflows"][0]["source"] == "registry"
+
+
+def test_legacy_task_lifecycle_routes_fallback_to_registry(monkeypatch):
+    class _FakeRegistryTask:
+        def __init__(self, task_id: str, status: str = "paused", resume_token: Optional[str] = "resume-1"):
+            self.id = task_id
+            self.status = SimpleNamespace(value=status)
+            self.resume_token = resume_token
+            self._status = status
+
+        def to_dict(self):
+            return {
+                "id": self.id,
+                "name": "Registry Lifecycle Task",
+                "status": self._status,
+                "progress": 0.25,
+                "current_step_index": 1,
+                "steps": [{"id": "step-1"}, {"id": "step-2"}],
+                "started_at": "2026-04-19T11:00:00",
+                "completed_at": None,
+                "error": None,
+                "result": None,
+            }
+
+    class _FakeRegistry:
+        def __init__(self):
+            self._task = _FakeRegistryTask("task-reg-lifecycle")
+
+        def get(self, task_id):
+            if task_id == "task-reg-lifecycle":
+                return self._task
+            return None
+
+        def pause(self, task_id):
+            if task_id != "task-reg-lifecycle":
+                return None
+            self._task._status = "paused"
+            self._task.status = SimpleNamespace(value="paused")
+            self._task.resume_token = "resume-1"
+            return "resume-1"
+
+        def resume(self, token):
+            if token == "resume-1":
+                self._task._status = "running"
+                self._task.status = SimpleNamespace(value="running")
+                self._task.resume_token = None
+                return self._task
+            return None
+
+        def cancel(self, task_id, reason=None):
+            if task_id != "task-reg-lifecycle":
+                return False
+            self._task._status = "cancelled"
+            self._task.status = SimpleNamespace(value="cancelled")
+            return True
+
+    fake_registry = _FakeRegistry()
+    monkeypatch.setattr("modules.tasks.get_registry", lambda: fake_registry)
+
+    state = _FakeState()
+    state.jarvis = None
+    client = _build_client(state)
+
+    status_response = client.get("/tasks/task-reg-lifecycle")
+    assert status_response.status_code == 200
+    assert status_response.json()["execution_id"] == "task-reg-lifecycle"
+
+    pause_response = client.post("/tasks/task-reg-lifecycle/pause")
+    assert pause_response.status_code == 200
+    assert pause_response.json()["resume_token"] == "resume-1"
+
+    resume_response = client.post("/tasks/task-reg-lifecycle/resume")
+    assert resume_response.status_code == 200
+    assert resume_response.json()["status"] == "running"
+
+    cancel_response = client.post("/tasks/task-reg-lifecycle/cancel")
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["status"] == "cancelled"

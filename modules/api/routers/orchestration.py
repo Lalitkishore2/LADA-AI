@@ -4,7 +4,7 @@ LADA API — Orchestration routes (/plans/*, /workflows/*, /tasks/*, /skills/*, 
 
 import asyncio
 import logging
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks, Request, Response, Depends
 from modules.api.deps import set_request_id_header
@@ -24,6 +24,119 @@ def create_orchestration_router(state):
         error_info = safe_error_response(exc, operation=operation)
         logger.error(f"[APIServer] {operation} error: {type(exc).__name__}")
         raise HTTPException(status_code=status_code, detail=error_info["error"])
+
+    def _progress_percent(value: Any) -> str:
+        try:
+            progress = float(value)
+        except (TypeError, ValueError):
+            progress = 0.0
+        if progress <= 1.0:
+            progress *= 100.0
+        progress = max(0.0, min(progress, 100.0))
+        return f"{int(progress)}%"
+
+    def _legacy_active_from_registry(task_data: Dict[str, Any]) -> Dict[str, Any]:
+        steps = task_data.get("steps", [])
+        total_steps = len(steps) if isinstance(steps, list) and steps else 1
+        current_index = task_data.get("current_step_index", 0)
+        try:
+            current_step = int(current_index)
+        except (TypeError, ValueError):
+            current_step = 0
+        current_step = max(0, min(current_step, total_steps))
+        return {
+            "execution_id": task_data.get("id", ""),
+            "task_name": task_data.get("name", ""),
+            "status": task_data.get("status", "pending"),
+            "progress": _progress_percent(task_data.get("progress", 0.0)),
+            "current_step": f"{current_step}/{total_steps}",
+            "started_at": task_data.get("started_at"),
+        }
+
+    def _legacy_completed_from_registry(task_data: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "execution_id": task_data.get("id", ""),
+            "task_name": task_data.get("name", ""),
+            "status": task_data.get("status", "completed"),
+            "started_at": task_data.get("started_at"),
+            "completed_at": task_data.get("completed_at"),
+            "error": task_data.get("error"),
+        }
+
+    def _merge_task_entries(primary: List[Dict[str, Any]], fallback: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        for entry in primary + fallback:
+            if not isinstance(entry, dict):
+                continue
+            execution_id = str(entry.get("execution_id", "")).strip()
+            dedupe_key = execution_id or str(entry.get("task_name", "")).strip()
+            if dedupe_key and dedupe_key in seen:
+                continue
+            if dedupe_key:
+                seen.add(dedupe_key)
+            merged.append(entry)
+        return merged
+
+    def _list_registry_tasks_for_legacy(limit: int = 20) -> Dict[str, Any]:
+        from modules.tasks import get_registry
+
+        registry = get_registry()
+        active_tasks = [_legacy_active_from_registry(task.to_dict()) for task in registry.list_tasks(active_only=True)]
+        history = [_legacy_completed_from_registry(entry) for entry in registry.get_history(limit=limit)]
+        return {
+            "active": active_tasks,
+            "completed": history,
+            "active_count": len(active_tasks),
+            "completed_count": len(history),
+        }
+
+    def _legacy_workflow_from_registry(flow_data: Dict[str, Any], actions: List[str]) -> Dict[str, Any]:
+        return {
+            "name": flow_data.get("name") or flow_data.get("id", ""),
+            "steps": int(flow_data.get("total_steps", 0) or 0),
+            "actions": actions,
+            "status": flow_data.get("status", "pending"),
+            "flow_id": flow_data.get("id"),
+            "source": "registry",
+        }
+
+    def _list_registry_workflows_for_legacy() -> List[Dict[str, Any]]:
+        from modules.tasks import get_flow_registry
+
+        flow_registry = get_flow_registry()
+        workflows: List[Dict[str, Any]] = []
+        for flow in flow_registry.list_flows():
+            flow_data = flow.to_dict()
+            flow_task = flow_registry.get_task(flow.id)
+            actions: List[str] = []
+            if flow_task and getattr(flow_task, "steps", None):
+                actions = [str(step.action) for step in flow_task.steps if getattr(step, "action", None)]
+            workflows.append(_legacy_workflow_from_registry(flow_data, actions))
+        return workflows
+
+    def _merge_workflow_lists(primary: List[Dict[str, Any]], fallback: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        for workflow in primary + fallback:
+            if not isinstance(workflow, dict):
+                continue
+            name = str(workflow.get("name", "")).strip()
+            flow_id = str(workflow.get("flow_id", workflow.get("id", ""))).strip()
+            dedupe_key = name or flow_id
+            if dedupe_key and dedupe_key in seen:
+                continue
+            if dedupe_key:
+                seen.add(dedupe_key)
+            merged.append(workflow)
+        return merged
+
+    def _registry_task_status_payload(task_data: Dict[str, Any]) -> Dict[str, Any]:
+        payload = _legacy_active_from_registry(task_data)
+        payload["completed_at"] = task_data.get("completed_at")
+        payload["error"] = task_data.get("error")
+        payload["result"] = task_data.get("result")
+        return payload
 
     @r.get("/orchestrator/subscriptions")
     async def get_orchestrator_subscriptions(include_sessions: bool = Query(True)):
@@ -214,11 +327,16 @@ def create_orchestration_router(state):
     @r.get("/workflows")
     async def list_workflows():
         state.load_components()
+        registry_workflows: List[Dict[str, Any]] = []
+        try:
+            registry_workflows = _list_registry_workflows_for_legacy()
+        except Exception as e:
+            logger.warning(f"[APIServer] list_workflows registry fallback: {type(e).__name__}")
+
         wf = getattr(state.jarvis, 'workflow_engine', None) if state.jarvis else None
-        if not wf:
-            return {"workflows": [], "count": 0}
-        workflows = wf.list_workflows()
-        return {"workflows": workflows, "count": len(workflows)}
+        legacy_workflows = wf.list_workflows() if wf else []
+        merged_workflows = _merge_workflow_lists(registry_workflows, legacy_workflows)
+        return {"workflows": merged_workflows, "count": len(merged_workflows)}
 
     @r.post("/workflows")
     async def create_workflow(body: dict = Body(default={})):
@@ -273,16 +391,28 @@ def create_orchestration_router(state):
     @r.get("/tasks")
     async def list_tasks():
         state.load_components()
+        registry_payload = {"active": [], "completed": [], "active_count": 0, "completed_count": 0}
+        try:
+            registry_payload = _list_registry_tasks_for_legacy(limit=20)
+        except Exception as e:
+            logger.warning(f"[APIServer] list_tasks registry fallback: {type(e).__name__}")
+
         tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
-        if not tc:
-            return {"active": [], "completed": [], "active_count": 0, "completed_count": 0}
-        active = tc.get_active_tasks()
-        completed = tc.get_completed_tasks(20)
-        return {
+        active = tc.get_active_tasks() if tc else {}
+        completed = tc.get_completed_tasks(20) if tc else {}
+        legacy_payload = {
             "active": active.get("active_tasks", []),
             "completed": completed.get("completed_tasks", []),
             "active_count": active.get("count", 0),
             "completed_count": completed.get("count", 0),
+        }
+        merged_active = _merge_task_entries(registry_payload.get("active", []), legacy_payload["active"])
+        merged_completed = _merge_task_entries(registry_payload.get("completed", []), legacy_payload["completed"])
+        return {
+            "active": merged_active,
+            "completed": merged_completed,
+            "active_count": len(merged_active),
+            "completed_count": len(merged_completed),
         }
 
     @r.post("/tasks")
@@ -304,33 +434,82 @@ def create_orchestration_router(state):
     async def get_task_status(execution_id: str):
         state.load_components()
         tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
-        if not tc:
-            raise HTTPException(status_code=503, detail="Task automation not available")
-        return tc.get_task_status(execution_id)
+        if tc:
+            return tc.get_task_status(execution_id)
+        try:
+            from modules.tasks import get_registry
+
+            task = get_registry().get(execution_id)
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task '{execution_id}' not found")
+            return _registry_task_status_payload(task.to_dict())
+        except HTTPException:
+            raise
+        except Exception as e:
+            _raise_sanitized_error(e, "get_task_status", status_code=500)
 
     @r.post("/tasks/{execution_id}/pause")
     async def pause_task(execution_id: str):
         state.load_components()
         tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
-        if not tc:
-            raise HTTPException(status_code=503, detail="Task automation not available")
-        return tc.pause_task(execution_id)
+        if tc:
+            return tc.pause_task(execution_id)
+        try:
+            from modules.tasks import get_registry
+
+            token = get_registry().pause(execution_id)
+            if not token:
+                raise HTTPException(status_code=400, detail="Cannot pause task")
+            return {"success": True, "execution_id": execution_id, "status": "paused", "resume_token": token}
+        except HTTPException:
+            raise
+        except Exception as e:
+            _raise_sanitized_error(e, "pause_task", status_code=500)
 
     @r.post("/tasks/{execution_id}/resume")
     async def resume_task(execution_id: str):
         state.load_components()
         tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
-        if not tc:
-            raise HTTPException(status_code=503, detail="Task automation not available")
-        return tc.resume_task(execution_id)
+        if tc:
+            return tc.resume_task(execution_id)
+        try:
+            from modules.tasks import get_registry
+
+            registry = get_registry()
+            resumed = registry.resume(execution_id)
+            if not resumed:
+                existing = registry.get(execution_id)
+                if existing and existing.resume_token:
+                    resumed = registry.resume(existing.resume_token)
+            if not resumed:
+                raise HTTPException(status_code=404, detail="Task or resume token not found")
+            return {
+                "success": True,
+                "execution_id": resumed.id,
+                "status": resumed.status.value,
+                "resume_token": resumed.resume_token,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            _raise_sanitized_error(e, "resume_task", status_code=500)
 
     @r.post("/tasks/{execution_id}/cancel")
     async def cancel_task(execution_id: str):
         state.load_components()
         tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
-        if not tc:
-            raise HTTPException(status_code=503, detail="Task automation not available")
-        return tc.cancel_task(execution_id)
+        if tc:
+            return tc.cancel_task(execution_id)
+        try:
+            from modules.tasks import get_registry
+
+            if not get_registry().cancel(execution_id):
+                raise HTTPException(status_code=400, detail="Cannot cancel task")
+            return {"success": True, "execution_id": execution_id, "status": "cancelled"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            _raise_sanitized_error(e, "cancel_task", status_code=500)
 
     # ── Skills ───────────────────────────────────────────────
 

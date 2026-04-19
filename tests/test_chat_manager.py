@@ -266,3 +266,33 @@ class TestMessageEdgeCases:
         content = "Line 1\nLine 2\nLine 3"
         msg = cm.Message(role="user", content=content)
         assert "\n" in msg.content
+
+
+class TestChatManagerAddMessage:
+    """Coverage for ChatManager.add_message convenience API."""
+
+    def test_add_message_creates_and_persists_conversation(self, tmp_path, mock_renderer):
+        from modules import chat_manager as cm
+
+        manager = cm.ChatManager(data_dir=str(tmp_path))
+        conv = manager.add_message("", "user", "Hello LADA")
+        manager.add_message(
+            conv.id,
+            "assistant",
+            "Hi there!",
+            model_used="test-model",
+            sources=[{"title": "Docs", "url": "https://example.com"}],
+        )
+
+        loaded = manager.load_conversation(conv.id)
+        assert loaded is not None
+        assert [msg.role for msg in loaded.messages] == ["user", "assistant"]
+        assert loaded.messages[1].model_used == "test-model"
+        assert loaded.messages[1].sources == [{"title": "Docs", "url": "https://example.com"}]
+
+    def test_add_message_rejects_invalid_role(self, tmp_path, mock_renderer):
+        from modules import chat_manager as cm
+
+        manager = cm.ChatManager(data_dir=str(tmp_path))
+        with pytest.raises(ValueError):
+            manager.add_message("", "invalid-role", "nope")

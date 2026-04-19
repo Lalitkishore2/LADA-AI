@@ -1,5 +1,10 @@
 # LADA x OpenClaw Verified Implementation Plan
 
+> **Historical snapshot:** This document is preserved for traceability.
+> **Canonical active parity status now lives in:** `docs/LADA_PARITY_MASTER_PLAN_2026-04-07.md`
+>  
+> Use the parity master matrix for current implementation state and remaining work sequencing.
+
 Date: 2026-04-07
 Status: Verified from local codebases
 
