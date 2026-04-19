@@ -289,7 +289,7 @@ If security breach suspected:
 ## 📞 Security Contact
 
 For security vulnerabilities, please do NOT create public GitHub issues.  
-Email security concerns to: security@lada-ai.dev
+Email security concerns to: svlalitk2k@gmail.com 
 
 > **Note:** This is a project-specific security contact. If no dedicated security email exists for your deployment, consider setting up a dedicated mailbox monitored by your security team.
 
