@@ -49,6 +49,13 @@ import threading
 import logging
 import base64
 
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
 # Global hotkey support
 try:
     import keyboard as kb_global
@@ -89,18 +96,29 @@ if not VOICE_OK:
             """Simple voice wrapper using pyttsx3 for TTS and speech_recognition for STT"""
             def __init__(self, tamil_mode=False, auto_detect=False):
                 self._engine = pyttsx3.init()
-                self._engine.setProperty('rate', 180)
+                self._engine.setProperty('rate', int(os.getenv("VOICE_RATE", "205")))
                 self._engine.setProperty('volume', 0.9)
+                try:
+                    voices = self._engine.getProperty('voices') or []
+                    for voice in voices:
+                        voice_name = str(getattr(voice, "name", "")).lower()
+                        if "zira" in voice_name or "female" in voice_name:
+                            self._engine.setProperty('voice', voice.id)
+                            break
+                except Exception:
+                    pass
                 self._recognizer = _sr.Recognizer()
                 self._recognizer.dynamic_energy_threshold = True
                 self._recognizer.energy_threshold = 300
+                self._speak_lock = threading.Lock()
 
             def speak(self, text: str):
                 if not text:
                     return
                 try:
-                    self._engine.say(text)
-                    self._engine.runAndWait()
+                    with self._speak_lock:
+                        self._engine.say(text)
+                        self._engine.runAndWait()
                 except Exception as e:
                     print(f"[Voice] TTS error: {e}")
 
@@ -254,6 +272,15 @@ except Exception as e:
     create_canvas = None
     CANVAS_OK = False
     print(f"[LADA] Canvas not loaded: {e}")
+
+# Remote bridge client (Render -> local device)
+try:
+    from modules.remote_bridge_client import RemoteBridgeClient
+    REMOTE_BRIDGE_OK = True
+except Exception as e:
+    RemoteBridgeClient = None
+    REMOTE_BRIDGE_OK = False
+    print(f"[LADA] Remote bridge not loaded: {e}")
 
 
 # ============ Settings Dialog ============
@@ -673,7 +700,10 @@ class SettingsDialog(QDialog):
         # Apply voice speed if voice available
         if self.voice:
             try:
-                self.voice.voice_speed = self.spd_spin.value()
+                if hasattr(self.voice, "set_voice_speed"):
+                    self.voice.set_voice_speed(self.spd_spin.value())
+                elif hasattr(self.voice, "voice_speed"):
+                    self.voice.voice_speed = self.spd_spin.value()
             except:
                 pass
         
@@ -1061,15 +1091,10 @@ class AIWorker(QThread):
             self.error.emit("AI not initialized")
             return
 
-        # Get backend from name if specified
-        backend = None
-        if self.preferred_backend:
-            backend = self.router.get_backend_from_name(self.preferred_backend)
-        
         # Try up to 2 times
         for attempt in range(2):
             try:
-                r = self.router.query(ctx, prefer_backend=backend)
+                r = self.router.query(ctx, model=self.preferred_backend)
                 if r:
                     self.done.emit(r)
                     return
@@ -1115,15 +1140,10 @@ class StreamingAIWorker(QThread):
             self.error.emit("AI not initialized")
             return
 
-        # Get backend from name if specified
-        backend = None
-        if self.preferred_backend:
-            backend = self.router.get_backend_from_name(self.preferred_backend)
-        
         try:
             # Check if router supports streaming
             if hasattr(self.router, 'stream_query'):
-                for data in self.router.stream_query(ctx, prefer_backend=backend):
+                for data in self.router.stream_query(ctx, model=self.preferred_backend):
                     if self._cancelled:
                         break
                     
@@ -1153,7 +1173,7 @@ class StreamingAIWorker(QThread):
                     self.done.emit(self.full_response)
             else:
                 # Fallback to non-streaming
-                r = self.router.query(ctx, prefer_backend=backend)
+                r = self.router.query(ctx, model=self.preferred_backend)
                 if r and not self._cancelled:
                     self.full_response = r
                     self.chunk_received.emit(r)  # Emit all at once
@@ -1198,6 +1218,30 @@ class VoiceWorker(QThread):
         except Exception as e:
             if not self._stop:
                 self.error.emit(str(e))
+
+
+class RemoteBridgeWorker(QThread):
+    running_changed = pyqtSignal(bool)
+    error = pyqtSignal(str)
+
+    def __init__(self, client):
+        super().__init__()
+        self.client = client
+
+    def stop(self):
+        try:
+            self.client.stop()
+        except Exception:
+            pass
+
+    def run(self):
+        self.running_changed.emit(True)
+        try:
+            self.client.run_forever()
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self.running_changed.emit(False)
 
 
 # ============ In-App Face Authentication Widget ============
@@ -3953,9 +3997,16 @@ class LadaApp(QMainWindow):
         self._last_prompt = ""
         self._wakeup_active = False
         self._voice_enabled = True  # Master voice on/off flag (starts ON)
+        self._wake_signal_connected = False
+        self._voice_overlay_paused_listener = False
         self._autonomous_event_log = []
         self._sidebar_auto_collapsed = False
         self._sidebar_responsive_adjusting = False
+        self._remote_bridge_enabled = False
+        self._remote_bridge_auto_start = _env_enabled("LADA_REMOTE_BRIDGE_AUTO_START_APP", True)
+        self.remote_bridge_client = None
+        self.remote_bridge_worker = None
+        self._stream_cancelled = False
 
         # Standalone bus/orchestrator (feature-gated)
         self._standalone_orchestrator_enabled = os.getenv(
@@ -4131,7 +4182,10 @@ class LadaApp(QMainWindow):
         # Voice engine
         if VOICE_OK and FreeNaturalVoice:
             try:
-                self.voice = FreeNaturalVoice(tamil_mode=False, auto_detect=False)
+                self.voice = FreeNaturalVoice(
+                    tamil_mode=_env_enabled("TAMIL_MODE", default=True),
+                    auto_detect=_env_enabled("AUTO_DETECT_LANGUAGE", default=True),
+                )
                 print("[LADA] Voice engine initialized")
             except Exception as e:
                 logger.error(f"Voice init: {e}")
@@ -4191,6 +4245,9 @@ class LadaApp(QMainWindow):
 
         self._optional_init_complete = True
         print("[LADA] Ready.")
+
+        # Optional: auto-start remote bridge when desktop app opens.
+        QTimer.singleShot(250, self._maybe_auto_start_remote_bridge)
 
         # Start wake word detection
         QTimer.singleShot(800, self._start_wake_detection)
@@ -4535,6 +4592,8 @@ class LadaApp(QMainWindow):
                 print("[LADA] Continuous listener ready - always listening")
             except Exception as e:
                 print(f"[LADA] Continuous listener init error: {e}")
+        if self.continuous_listener and self._voice_enabled:
+            self._start_wake_detection()
         
         # Google Calendar
         self.calendar = None
@@ -4712,8 +4771,9 @@ class LadaApp(QMainWindow):
         """
         if not self.continuous_listener:
             return
-        
-        self.wake_triggered.connect(self._on_wake_command)
+        if not self._wake_signal_connected:
+            self.wake_triggered.connect(self._on_wake_command)
+            self._wake_signal_connected = True
         
         def on_command(cmd):
             """Called when any speech is recognized"""
@@ -4734,7 +4794,15 @@ class LadaApp(QMainWindow):
         self.continuous_listener.on_processing = on_processing
         
         try:
-            self.continuous_listener.start()
+            started = True
+            if not getattr(self.continuous_listener, "running", False):
+                started = bool(self.continuous_listener.start())
+            if not started:
+                self._set_wakeup_active(False)
+                if hasattr(self, "statusbar") and self.statusbar:
+                    self.statusbar.showMessage("Voice listener could not start. Check microphone/SpeechRecognition setup.", 5000)
+                print("[LADA] Continuous listening failed to start")
+                return
             # Start in ACTIVE mode so voice works immediately (better UX)
             self._set_wakeup_active(True)
             print("[LADA] Voice control ACTIVE - speak any command")
@@ -4866,6 +4934,8 @@ class LadaApp(QMainWindow):
         """Handle command from continuous listener - execute and speak response"""
         if not cmd:
             return
+        if not self._voice_enabled:
+            return
 
         normalized = self._normalize_voice_text(cmd)
 
@@ -4886,7 +4956,6 @@ class LadaApp(QMainWindow):
             else:
                 if hasattr(self, 'continuous_listener') and self.continuous_listener:
                     self.continuous_listener.resume()
-            return
             return
 
         # While ACTIVE, allow explicit turn-off.
@@ -4957,11 +5026,8 @@ class LadaApp(QMainWindow):
                     try:
                         if self.router:
                             selected_model = self.model.currentData() if hasattr(self, 'model') else None
-                            if selected_model and selected_model != 'auto':
-                                backend = self.router.get_backend_from_name(selected_model)
-                            else:
-                                backend = None
-                            ai_response = self.router.query(clean_cmd, prefer_backend=backend)
+                            model_id = selected_model if selected_model and selected_model != 'auto' else None
+                            ai_response = self.router.query(clean_cmd, model=model_id)
                             print(f"[LADA] AI: {ai_response[:100]}...")
                             QTimer.singleShot(0, lambda r=ai_response: self._show_voice_response_in_chat(r))
                             if self.voice and self._voice_enabled:
@@ -5729,6 +5795,15 @@ class LadaApp(QMainWindow):
         self._header_timer.start(30000)
         QTimer.singleShot(500, self._update_header_status)
 
+        # Remote bridge toggle button (Render -> local laptop control)
+        self.remote_bridge_toggle_btn = QPushButton("Bridge OFF")
+        self.remote_bridge_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.remote_bridge_toggle_btn.setFixedHeight(26)
+        self.remote_bridge_toggle_btn.setMinimumWidth(92)
+        self.remote_bridge_toggle_btn.setToolTip("Toggle remote bridge for laptop control")
+        self.remote_bridge_toggle_btn.clicked.connect(self._toggle_remote_bridge)
+        hl.addWidget(self.remote_bridge_toggle_btn)
+
         # Voice always-on toggle button
         self.voice_toggle_btn = QPushButton("Voice ON")
         self.voice_toggle_btn.setCursor(Qt.PointingHandCursor)
@@ -5776,6 +5851,7 @@ class LadaApp(QMainWindow):
         self.model.currentIndexChanged.connect(self._on_model_selector_changed)
         self._load_models()
         self._update_header_model_label()
+        self._update_remote_bridge_button()
 
         main.addWidget(content, 1)
 
@@ -5840,6 +5916,9 @@ class LadaApp(QMainWindow):
     
     def _setup_global_hotkeys(self):
         """Setup global keyboard shortcuts that work system-wide"""
+        if not _env_enabled("LADA_GLOBAL_HOTKEYS_ENABLED", False):
+            print("[LADA] Global hotkeys disabled (set LADA_GLOBAL_HOTKEYS_ENABLED=true to enable)")
+            return
         if not HOTKEY_OK or not kb_global:
             print("[LADA] Global hotkeys disabled - keyboard module not available")
             return
@@ -5962,6 +6041,7 @@ class LadaApp(QMainWindow):
         """Actually quit the application"""
         self._save()
         self._close_voice()
+        self._stop_remote_bridge()
 
         # Stop standalone command bus/orchestrator if enabled
         self._stop_standalone_orchestrator()
@@ -6078,6 +6158,8 @@ class LadaApp(QMainWindow):
     def _update_header_status(self):
         """Update header status bar with battery, time, and connection info."""
         parts = []
+        if self._remote_bridge_enabled:
+            parts.append("Bridge: ON")
         try:
             if self.router:
                 status = self.router.get_status()
@@ -6105,6 +6187,133 @@ class LadaApp(QMainWindow):
             self._status_label.setText("  |  ".join(parts))
         else:
             self._status_label.setText("")
+
+    def _remote_bridge_is_configured(self):
+        return bool(os.getenv("LADA_REMOTE_BRIDGE_SERVER_URL", "").strip()) and bool(
+            os.getenv("LADA_REMOTE_BRIDGE_PASSWORD", "").strip()
+        )
+
+    def _update_remote_bridge_button(self):
+        if not hasattr(self, "remote_bridge_toggle_btn"):
+            return
+
+        configured = self._remote_bridge_is_configured()
+        button = self.remote_bridge_toggle_btn
+        if not configured:
+            button.setText("Bridge N/A")
+            button.setEnabled(False)
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {BG_CARD}; color: {TEXT_DIM};
+                    border: 1px solid {BORDER}; border-radius: 13px; font-size: 11px;
+                    padding: 4px 14px;
+                }}
+                """
+            )
+            button.setToolTip("Set LADA_REMOTE_BRIDGE_SERVER_URL and LADA_REMOTE_BRIDGE_PASSWORD in .env")
+            return
+
+        button.setEnabled(True)
+        if self._remote_bridge_enabled:
+            button.setText("Bridge ON")
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {SUCCESS}; color: white;
+                    border: none; border-radius: 13px; font-size: 11px;
+                    padding: 4px 14px;
+                }}
+                QPushButton:hover {{ background: #059669; }}
+                """
+            )
+            button.setToolTip("Click to stop remote bridge")
+        else:
+            button.setText("Bridge OFF")
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: transparent; color: {TEXT_DIM};
+                    border: 1px solid {BORDER}; border-radius: 13px; font-size: 11px;
+                    padding: 4px 14px;
+                }}
+                QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; border-color: {TEXT_DIM}; }}
+                """
+            )
+            button.setToolTip("Click to start remote bridge")
+
+    def _set_remote_bridge_running_state(self, running: bool):
+        self._remote_bridge_enabled = bool(running)
+        self._update_remote_bridge_button()
+        self._update_header_status()
+        if not running:
+            self.remote_bridge_worker = None
+            self.remote_bridge_client = None
+
+    def _on_remote_bridge_error(self, message: str):
+        self._set_remote_bridge_running_state(False)
+        if hasattr(self, "statusbar") and self.statusbar:
+            self.statusbar.showMessage(f"Remote bridge error: {message}", 7000)
+
+    def _start_remote_bridge(self):
+        if self._remote_bridge_enabled:
+            return
+        existing_worker = getattr(self, "remote_bridge_worker", None)
+        if existing_worker and existing_worker.isRunning():
+            self.statusbar.showMessage("Remote bridge is still shutting down. Please wait a moment.", 4000)
+            return
+        if not REMOTE_BRIDGE_OK or RemoteBridgeClient is None:
+            self.statusbar.showMessage("Remote bridge module unavailable.", 5000)
+            return
+        if not self._remote_bridge_is_configured():
+            self.statusbar.showMessage("Remote bridge is not configured in .env.", 5000)
+            return
+
+        try:
+            client = RemoteBridgeClient()
+        except Exception as e:
+            self.statusbar.showMessage(f"Remote bridge config error: {e}", 7000)
+            return
+
+        worker = RemoteBridgeWorker(client)
+        worker.running_changed.connect(self._set_remote_bridge_running_state)
+        worker.error.connect(self._on_remote_bridge_error)
+        self.remote_bridge_client = client
+        self.remote_bridge_worker = worker
+        worker.start()
+        self.statusbar.showMessage("Starting remote bridge...", 3000)
+
+    def _stop_remote_bridge(self):
+        worker = getattr(self, "remote_bridge_worker", None)
+        client = getattr(self, "remote_bridge_client", None)
+        if worker:
+            worker.stop()
+            self._remote_bridge_enabled = False
+            self._update_remote_bridge_button()
+            self._update_header_status()
+            self.statusbar.showMessage("Stopping remote bridge...", 3000)
+            return
+        elif client:
+            try:
+                client.stop()
+            except Exception:
+                pass
+        self.remote_bridge_client = None
+        self._set_remote_bridge_running_state(False)
+        self.statusbar.showMessage("Remote bridge stopped.", 3000)
+
+    def _toggle_remote_bridge(self):
+        if self._remote_bridge_enabled:
+            self._stop_remote_bridge()
+        else:
+            self._start_remote_bridge()
+
+    def _maybe_auto_start_remote_bridge(self):
+        if not self._remote_bridge_auto_start:
+            return
+        if not self._remote_bridge_is_configured():
+            return
+        self._start_remote_bridge()
 
     def _get_selected_model_label(self):
         """Return a clean display label for the currently selected model."""
@@ -6231,7 +6440,9 @@ class LadaApp(QMainWindow):
         
         # Apply voice settings
         if self.voice:
-            if hasattr(self.voice, 'voice_speed'):
+            if hasattr(self.voice, 'set_voice_speed'):
+                self.voice.set_voice_speed(settings.get('voice_speed', 175))
+            elif hasattr(self.voice, 'voice_speed'):
                 self.voice.voice_speed = settings.get('voice_speed', 175)
         
         # Apply font size to chat messages
@@ -6320,13 +6531,7 @@ class LadaApp(QMainWindow):
 
         current_provider = None
         added = 0
-        any_available = any(m.get('available', False) for m in normalized)
-
         for model in normalized:
-            # If at least one model is available, suppress offline rows to reduce confusion.
-            if any_available and not model.get('available', False):
-                continue
-
             provider = model.get('provider', '')
             if provider != current_provider:
                 current_provider = provider
@@ -6341,9 +6546,6 @@ class LadaApp(QMainWindow):
                 display_name = f"{display_name} (offline)"
 
             self.model.addItem(f"  {display_name}", model.get('id', ''))
-            idx = self.model.count() - 1
-            if not model.get('available', False):
-                self.model.setItemData(idx, 0, Qt.UserRole - 1)
             added += 1
 
         print(f"[LADA] Model dropdown: {added} models loaded")
@@ -6358,11 +6560,10 @@ class LadaApp(QMainWindow):
         # Skip provider separator rows if selected accidentally.
         text = (self.model.itemText(index) or "").strip()
         data = self.model.itemData(index)
-        if text.startswith("──") or not isinstance(data, str) or not data or '(offline)' in text.lower():
+        if text.startswith("──") or not isinstance(data, str) or not data:
             for i in range(index + 1, self.model.count()):
                 next_data = self.model.itemData(i)
-                next_text = (self.model.itemText(i) or "").strip().lower()
-                if isinstance(next_data, str) and next_data and '(offline)' not in next_text:
+                if isinstance(next_data, str) and next_data:
                     self.model.setCurrentIndex(i)
                     return
             self.model.setCurrentIndex(0)
@@ -6632,6 +6833,7 @@ class LadaApp(QMainWindow):
 
         # Use StreamingAIWorker for ChatGPT-style typing effect
         self._last_prompt = text  # Track for cost recording
+        self._stream_cancelled = False
         self.ai_worker = StreamingAIWorker(text, self.router, files, preferred_backend=selected_model)
         self.ai_worker.chunk_received.connect(self._on_ai_chunk)
         self.ai_worker.done.connect(self._on_ai_done)
@@ -6648,11 +6850,15 @@ class LadaApp(QMainWindow):
 
     def _on_ai_chunk(self, chunk):
         """Handle streaming chunk - update the typing message."""
+        if self._stream_cancelled:
+            return
         self.chat.update_streaming(getattr(self, '_streaming_text', '') + chunk)
         self._streaming_text = getattr(self, '_streaming_text', '') + chunk
 
     def _on_ai_done(self, full_response):
         """Handle streaming completion - finalize message with toolbar."""
+        if self._stream_cancelled:
+            return
         self._streaming_text = ''  # Reset
 
         # If we have pending sources, append them to the response
@@ -7007,6 +7213,8 @@ class LadaApp(QMainWindow):
             threading.Thread(target=speak, daemon=True).start()
 
     def _on_ai_err(self, e):
+        if self._stream_cancelled:
+            return
         if self.chat.lay.count() > 1:
             w = self.chat.lay.itemAt(self.chat.lay.count() - 2).widget()
             if w:
@@ -7020,12 +7228,36 @@ class LadaApp(QMainWindow):
     def _stop_generation(self):
         """Stop AI generation immediately"""
         if hasattr(self, 'ai_worker') and self.ai_worker and self.ai_worker.isRunning():
-            # For StreamingAIWorker, use cancel() for graceful stop
+            self._stream_cancelled = True
+            # For StreamingAIWorker, use cooperative cancellation first.
             if hasattr(self.ai_worker, 'cancel'):
                 self.ai_worker.cancel()
-            self.ai_worker.terminate()  # Then force terminate
-            self.ai_worker.wait(500)  # Wait up to 500ms
-            
+            # Avoid blocking the UI thread while the worker winds down.
+            try:
+                self.ai_worker.chunk_received.disconnect(self._on_ai_chunk)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.done.disconnect(self._on_ai_done)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.error.disconnect(self._on_ai_err)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.source_detected.disconnect(self._on_ai_source)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.web_sources.disconnect(self._on_web_sources)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.finished.connect(self.ai_worker.deleteLater)
+            except Exception:
+                pass
+             
             # Finalize with partial response or stopped message
             partial_text = getattr(self, '_streaming_text', '')
             self._streaming_text = ''  # Reset
@@ -7040,9 +7272,10 @@ class LadaApp(QMainWindow):
                 self.chat.add("assistant", f"{partial_text}\n\n*[Generation stopped]*")
             else:
                 self.chat.add("assistant", "⚠️ **Generation stopped by user**")
-            
+             
             self.inp.enable(True)
             self.inp.hide_stop()
+            self.ai_worker = None
             if self.vlay.isVisible():
                 self._set_v(VState.IDLE)
 
@@ -7510,6 +7743,12 @@ If not specified, use reasonable defaults. Return ONLY the JSON."""
         if self.vlay.isVisible():
             self._close_voice()
         else:
+            if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                try:
+                    self.continuous_listener.pause()
+                    self._voice_overlay_paused_listener = True
+                except Exception:
+                    self._voice_overlay_paused_listener = False
             # Start new voice session
             self.voice_session = []
             if hasattr(self, 'voice_session_file'):
@@ -7528,6 +7767,18 @@ If not specified, use reasonable defaults. Return ONLY the JSON."""
         if self.v_worker:
             self.v_worker.stop()
         self._set_v(VState.IDLE)
+        if (
+            self._voice_overlay_paused_listener
+            and self._voice_enabled
+            and self._wakeup_active
+            and hasattr(self, 'continuous_listener')
+            and self.continuous_listener
+        ):
+            try:
+                self.continuous_listener.resume()
+            except Exception:
+                pass
+        self._voice_overlay_paused_listener = False
         # Refresh sidebar to show new voice session
         self.side.refresh()
 
@@ -7543,6 +7794,8 @@ If not specified, use reasonable defaults. Return ONLY the JSON."""
         if not self._voice_enabled:
             return
         if not self.vlay.isVisible():
+            return
+        if self.v_worker and self.v_worker.isRunning():
             return
         self._set_v(VState.LISTEN)
         self.vlay.set_text("")

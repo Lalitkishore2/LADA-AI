@@ -193,6 +193,40 @@ class ChatManager:
         
         # Try to load from file
         return self.load_conversation(conversation_id)
+
+    def add_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        *,
+        model_used: Optional[str] = None,
+        sources: Optional[List[Dict]] = None,
+    ) -> Conversation:
+        """Append a message to a conversation, creating it when missing."""
+        normalized_role = str(role or "").strip().lower()
+        if normalized_role not in {"user", "assistant", "system"}:
+            raise ValueError(f"Unsupported role: {role}")
+
+        target_id = str(conversation_id or "").strip()
+        if target_id:
+            conversation = self.get_conversation(target_id)
+            if conversation is None:
+                conversation = Conversation(conversation_id=target_id)
+                self.conversations[conversation.id] = conversation
+        else:
+            conversation = self.create_conversation()
+
+        message = Message(
+            role=normalized_role,
+            content=str(content or ""),
+            model_used=model_used,
+            sources=sources or [],
+        )
+        conversation.add_message(message)
+        self.current_conversation = conversation
+        self.save_conversation(conversation)
+        return conversation
     
     def load_conversation(self, conversation_id: str) -> Optional[Conversation]:
         """Load a conversation from file."""

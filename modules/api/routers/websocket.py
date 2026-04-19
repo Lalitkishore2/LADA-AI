@@ -1171,6 +1171,41 @@ def create_ws_router(state):
     return r
 
 
+def _next_ws_conversation_id() -> str:
+    """Generate a conversation id when persistence is unavailable."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+def _persist_ws_chat_turn(
+    state,
+    conversation_id: str,
+    user_message: str,
+    assistant_message: str,
+    *,
+    model_used: Optional[str] = None,
+    sources: Optional[list] = None,
+) -> str:
+    """Persist a chat turn and return the resolved conversation id."""
+    resolved_id = str(conversation_id or "").strip()
+    chat_manager = getattr(state, "chat_manager", None)
+    if chat_manager is None:
+        return resolved_id or _next_ws_conversation_id()
+
+    user_conv = chat_manager.add_message(resolved_id, "user", user_message)
+    resolved_id = str(getattr(user_conv, "id", "") or resolved_id).strip()
+    if not resolved_id:
+        resolved_id = _next_ws_conversation_id()
+
+    chat_manager.add_message(
+        resolved_id,
+        "assistant",
+        assistant_message,
+        model_used=model_used,
+        sources=sources or [],
+    )
+    return resolved_id
+
+
 async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""):
     """Handle chat messages over WebSocket.
     
@@ -1183,6 +1218,7 @@ async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""
     stream = data.get("stream", True)
     model = data.get("model")
     use_web_search = data.get("use_web_search", False)
+    conversation_id = str(data.get("conversation_id") or "").strip()
     effective_model = model if model and model != 'auto' else None
 
     if not message:
@@ -1203,14 +1239,25 @@ async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""
                 None, state.jarvis.process, message
             )
             if handled:
+                assistant_text = response or "Command executed."
+                conversation_id = _persist_ws_chat_turn(
+                    state,
+                    conversation_id,
+                    message,
+                    assistant_text,
+                    model_used="system-command",
+                )
                 # System command was handled - send response and done
                 await ws.send_json({
                     "type": "chat.response",
                     "id": msg_id,
                     "data": {
-                        "response": response or "Command executed.",
+                        "response": assistant_text,
+                        "content": assistant_text,
                         "sources": [],
+                        "model": "system-command",
                         "is_system_command": True,
+                        "conversation_id": conversation_id,
                         "request_id": request_id,
                     },
                 })
@@ -1321,12 +1368,41 @@ async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""
                         if done_metadata:
                             last_stream_metadata = done_metadata
                         break
+                else:
+                    text_chunk = str(chunk_data)
+                    if text_chunk:
+                        full_response += text_chunk
+                        await ws.send_json(
+                            {
+                                "type": "chat.chunk",
+                                "id": msg_id,
+                                "data": {"chunk": text_chunk, "request_id": request_id},
+                            }
+                        )
 
             if not error_sent:
+                final_content = full_response
+                if (not final_content or not str(final_content).strip()) and last_stream_metadata:
+                    metadata_error = str(last_stream_metadata.get("error", "")).strip()
+                    if metadata_error:
+                        final_content = metadata_error
+                if not final_content or not str(final_content).strip():
+                    final_content = "No response generated."
+
+                backend_name = getattr(state.ai_router, 'current_backend_name', 'unknown')
+                conversation_id = _persist_ws_chat_turn(
+                    state,
+                    conversation_id,
+                    message,
+                    final_content,
+                    model_used=backend_name,
+                    sources=sources,
+                )
                 done_payload = {
-                    "content": full_response,
-                    "model": getattr(state.ai_router, 'current_backend_name', 'unknown'),
+                    "content": final_content,
+                    "model": backend_name,
                     "sources": sources,
+                    "conversation_id": conversation_id,
                     "request_id": request_id,
                 }
                 if last_stream_metadata:
@@ -1342,10 +1418,19 @@ async def _handle_chat(state, ws, session_id, msg_id, data, request_id: str = ""
 
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, _query_sync)
+            backend_name = getattr(state.ai_router, 'current_backend_name', 'unknown')
+            conversation_id = _persist_ws_chat_turn(
+                state,
+                conversation_id,
+                message,
+                response,
+                model_used=backend_name,
+            )
             await ws.send_json({
                 "type": "chat.response", "id": msg_id,
                 "data": {"content": response,
-                         "model": getattr(state.ai_router, 'current_backend_name', 'unknown'),
+                         "model": backend_name,
+                         "conversation_id": conversation_id,
                          "request_id": request_id},
             })
 
@@ -1664,15 +1749,84 @@ async def _handle_plan(state, ws, msg_id, data, request_id: str = ""):
                             "data": {"message": f"Unknown plan action: {action}", "request_id": request_id}})
 
 
+def _ws_task_progress_percent(value: Any) -> str:
+    try:
+        progress = float(value)
+    except (TypeError, ValueError):
+        progress = 0.0
+    if progress <= 1.0:
+        progress *= 100.0
+    progress = max(0.0, min(progress, 100.0))
+    return f"{int(progress)}%"
+
+
+def _ws_task_payload_from_registry(task_data: Dict[str, Any]) -> Dict[str, Any]:
+    steps = task_data.get("steps", [])
+    total_steps = len(steps) if isinstance(steps, list) and steps else 1
+    current_index = task_data.get("current_step_index", 0)
+    try:
+        current_step = int(current_index)
+    except (TypeError, ValueError):
+        current_step = 0
+    current_step = max(0, min(current_step, total_steps))
+    return {
+        "execution_id": task_data.get("id", ""),
+        "task_name": task_data.get("name", ""),
+        "status": task_data.get("status", "pending"),
+        "progress": _ws_task_progress_percent(task_data.get("progress", 0.0)),
+        "current_step": f"{current_step}/{total_steps}",
+        "started_at": task_data.get("started_at"),
+        "completed_at": task_data.get("completed_at"),
+        "error": task_data.get("error"),
+        "result": task_data.get("result"),
+    }
+
+
 async def _handle_workflow(state, ws, msg_id, data, request_id: str = ""):
     state.load_components()
     action = data.get("action", "")
-    wf = getattr(state.jarvis, 'workflow_engine', None) if state.jarvis else None
-    if not wf:
-        await ws.send_json({"type": "error", "id": msg_id,
-                            "data": {"message": "Workflow engine not available", "request_id": request_id}})
-        return
+
     if action == "list":
+        try:
+            from modules.tasks import get_flow_registry
+
+            flow_registry = get_flow_registry()
+            flows = flow_registry.list_flows()
+            if flows:
+                workflows = []
+                for flow in flows:
+                    flow_data = flow.to_dict()
+                    flow_task = flow_registry.get_task(flow.id)
+                    actions = []
+                    if flow_task and getattr(flow_task, "steps", None):
+                        actions = [str(step.action) for step in flow_task.steps if getattr(step, "action", None)]
+                    workflows.append(
+                        {
+                            "name": flow_data.get("name") or flow_data.get("id", ""),
+                            "steps": int(flow_data.get("total_steps", 0) or 0),
+                            "actions": actions,
+                            "status": flow_data.get("status", "pending"),
+                            "flow_id": flow_data.get("id"),
+                            "source": "registry",
+                        }
+                    )
+                await _send_ws_response(
+                    ws,
+                    "workflow.list",
+                    msg_id,
+                    {"workflows": workflows},
+                    request_id=request_id,
+                )
+                return
+        except Exception as e:
+            logger.warning(f"[WS] workflow list registry fallback: {type(e).__name__}")
+
+        wf = getattr(state.jarvis, 'workflow_engine', None) if state.jarvis else None
+        if not wf:
+            await ws.send_json({"type": "error", "id": msg_id,
+                                "data": {"message": "Workflow engine not available", "request_id": request_id}})
+            return
+
         workflows = wf.list_workflows()
         await _send_ws_response(
             ws,
@@ -1682,6 +1836,11 @@ async def _handle_workflow(state, ws, msg_id, data, request_id: str = ""):
             request_id=request_id,
         )
     elif action == "create":
+        wf = getattr(state.jarvis, 'workflow_engine', None) if state.jarvis else None
+        if not wf:
+            await ws.send_json({"type": "error", "id": msg_id,
+                                "data": {"message": "Workflow engine not available", "request_id": request_id}})
+            return
         success = wf.register_workflow(data.get("name", ""), data.get("steps", []))
         await _send_ws_response(
             ws,
@@ -1691,6 +1850,11 @@ async def _handle_workflow(state, ws, msg_id, data, request_id: str = ""):
             request_id=request_id,
         )
     elif action == "execute":
+        wf = getattr(state.jarvis, 'workflow_engine', None) if state.jarvis else None
+        if not wf:
+            await ws.send_json({"type": "error", "id": msg_id,
+                                "data": {"message": "Workflow engine not available", "request_id": request_id}})
+            return
         try:
             result = await wf.execute_workflow(data.get("name", ""), data.get("context", {}))
             await _send_ws_response(
@@ -1722,50 +1886,179 @@ async def _handle_workflow(state, ws, msg_id, data, request_id: str = ""):
 async def _handle_task(state, ws, msg_id, data, request_id: str = ""):
     state.load_components()
     action = data.get("action", "")
-    tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
-    if not tc:
-        await ws.send_json({"type": "error", "id": msg_id,
-                            "data": {"message": "Task automation not available", "request_id": request_id}})
-        return
     if action == "list":
+        try:
+            from modules.tasks import get_registry
+
+            registry_tasks = get_registry().list_tasks(active_only=True)
+            if registry_tasks:
+                payload = {
+                    "success": True,
+                    "active_tasks": [_ws_task_payload_from_registry(task.to_dict()) for task in registry_tasks],
+                }
+                payload["count"] = len(payload["active_tasks"])
+                await _send_ws_response(ws, "task.list", msg_id, payload, request_id=request_id)
+                return
+        except Exception as e:
+            logger.warning(f"[WS] task list registry fallback: {type(e).__name__}")
+
+        tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
+        if not tc:
+            await ws.send_json({"type": "error", "id": msg_id,
+                                "data": {"message": "Task automation not available", "request_id": request_id}})
+            return
         await _send_ws_response(ws, "task.list", msg_id, tc.get_active_tasks(), request_id=request_id)
     elif action == "create":
+        tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
+        if not tc:
+            await ws.send_json({"type": "error", "id": msg_id,
+                                "data": {"message": "Task automation not available", "request_id": request_id}})
+            return
         task_def = tc.parse_complex_command(data.get("command", ""))
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, lambda: tc.execute_task(task_def))
         await _send_ws_response(ws, "task.created", msg_id, result, request_id=request_id)
     elif action == "status":
-        await _send_ws_response(
-            ws,
-            "task.status",
-            msg_id,
-            tc.get_task_status(data.get("execution_id", "")),
-            request_id=request_id,
-        )
+        tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
+        if tc:
+            await _send_ws_response(
+                ws,
+                "task.status",
+                msg_id,
+                tc.get_task_status(data.get("execution_id", "")),
+                request_id=request_id,
+            )
+            return
+        try:
+            from modules.tasks import get_registry
+
+            execution_id = data.get("execution_id", "")
+            task = get_registry().get(execution_id)
+            if not task:
+                await ws.send_json({"type": "error", "id": msg_id,
+                                    "data": {"message": f"Task '{execution_id}' not found", "request_id": request_id}})
+                return
+            await _send_ws_response(
+                ws,
+                "task.status",
+                msg_id,
+                _ws_task_payload_from_registry(task.to_dict()),
+                request_id=request_id,
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_task_status")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
     elif action == "pause":
-        await _send_ws_response(
-            ws,
-            "task.paused",
-            msg_id,
-            tc.pause_task(data.get("execution_id", "")),
-            request_id=request_id,
-        )
+        tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
+        if tc:
+            await _send_ws_response(
+                ws,
+                "task.paused",
+                msg_id,
+                tc.pause_task(data.get("execution_id", "")),
+                request_id=request_id,
+            )
+            return
+        try:
+            from modules.tasks import get_registry
+
+            execution_id = data.get("execution_id", "")
+            token = get_registry().pause(execution_id)
+            if not token:
+                await ws.send_json({"type": "error", "id": msg_id,
+                                    "data": {"message": "Cannot pause task", "request_id": request_id}})
+                return
+            await _send_ws_response(
+                ws,
+                "task.paused",
+                msg_id,
+                {"success": True, "execution_id": execution_id, "status": "paused", "resume_token": token},
+                request_id=request_id,
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_task_pause")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
     elif action == "resume":
-        await _send_ws_response(
-            ws,
-            "task.resumed",
-            msg_id,
-            tc.resume_task(data.get("execution_id", "")),
-            request_id=request_id,
-        )
+        tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
+        if tc:
+            await _send_ws_response(
+                ws,
+                "task.resumed",
+                msg_id,
+                tc.resume_task(data.get("execution_id", "")),
+                request_id=request_id,
+            )
+            return
+        try:
+            from modules.tasks import get_registry
+
+            execution_id = data.get("execution_id", "")
+            registry = get_registry()
+            resumed = registry.resume(execution_id)
+            if not resumed:
+                existing = registry.get(execution_id)
+                if existing and existing.resume_token:
+                    resumed = registry.resume(existing.resume_token)
+            if not resumed:
+                await ws.send_json({"type": "error", "id": msg_id,
+                                    "data": {"message": "Task or resume token not found", "request_id": request_id}})
+                return
+            await _send_ws_response(
+                ws,
+                "task.resumed",
+                msg_id,
+                {"success": True, "execution_id": resumed.id, "status": resumed.status.value},
+                request_id=request_id,
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_task_resume")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
     elif action == "cancel":
-        await _send_ws_response(
-            ws,
-            "task.cancelled",
-            msg_id,
-            tc.cancel_task(data.get("execution_id", "")),
-            request_id=request_id,
-        )
+        tc = getattr(state.jarvis, 'tasks', None) if state.jarvis else None
+        if tc:
+            await _send_ws_response(
+                ws,
+                "task.cancelled",
+                msg_id,
+                tc.cancel_task(data.get("execution_id", "")),
+                request_id=request_id,
+            )
+            return
+        try:
+            from modules.tasks import get_registry
+
+            execution_id = data.get("execution_id", "")
+            reason = data.get("reason")
+            if not get_registry().cancel(execution_id, reason):
+                await ws.send_json({"type": "error", "id": msg_id,
+                                    "data": {"message": "Cannot cancel task", "request_id": request_id}})
+                return
+            await _send_ws_response(
+                ws,
+                "task.cancelled",
+                msg_id,
+                {"success": True, "execution_id": execution_id, "status": "cancelled"},
+                request_id=request_id,
+            )
+        except Exception as e:
+            safe_message = _sanitize_ws_error_message(e, "ws_task_cancel")
+            await ws.send_json({
+                "type": "error",
+                "id": msg_id,
+                "data": {"message": safe_message, "request_id": request_id},
+            })
     else:
         await ws.send_json({"type": "error", "id": msg_id,
                             "data": {"message": f"Unknown task action: {action}", "request_id": request_id}})

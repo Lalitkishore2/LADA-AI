@@ -87,13 +87,22 @@ class WakeWordDetector:
         if self.is_listening:
             return
 
+        if self._thread and self._thread.is_alive():
+            # Avoid spawning parallel microphone listeners if a prior thread
+            # is still winding down.
+            logger.info("[WakeWord] Listener thread already active")
+            self.is_listening = True
+            return
+
         self._stop_event.clear()
-        if PVPORCUPINE_OK and self.porcupine_key:
+        # Wake-word backends require microphone input. Guard startup so we don't
+        # report "listening" when audio capture cannot start.
+        if PVPORCUPINE_OK and PYAUDIO_OK and self.porcupine_key:
             self._thread = threading.Thread(target=self._listen_porcupine, daemon=True)
-        elif SPEECH_RECOGNITION_OK:
+        elif SPEECH_RECOGNITION_OK and PYAUDIO_OK:
             self._thread = threading.Thread(target=self._listen_speech_recognition, daemon=True)
         else:
-            logger.error("[WakeWord] No audio library available")
+            logger.error("[WakeWord] No usable wake-word audio backend available")
             self.is_listening = False
             return
 
@@ -105,16 +114,39 @@ class WakeWordDetector:
         """Stop listening for wake word."""
         self._stop_event.set()
         self.is_listening = False
-        
-        if self.porcupine:
-            self.porcupine.delete()
-            self.porcupine = None
-        
+
+        thread = self._thread
+
         if self.audio_stream:
-            self.audio_stream.close()
-        
+            try:
+                self.audio_stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.audio_stream.close()
+            except Exception:
+                pass
+            self.audio_stream = None
+
         if self.pa:
-            self.pa.terminate()
+            try:
+                self.pa.terminate()
+            except Exception:
+                pass
+            self.pa = None
+
+        if self.porcupine:
+            try:
+                self.porcupine.delete()
+            except Exception:
+                pass
+            self.porcupine = None
+
+        if thread and thread.is_alive():
+            if thread is not threading.current_thread():
+                thread.join(timeout=2)
+        if thread and not thread.is_alive():
+            self._thread = None
         
         logger.info("[WakeWord] Stopped listening")
     
@@ -137,7 +169,16 @@ class WakeWordDetector:
             )
             
             while not self._stop_event.is_set():
-                pcm = self.audio_stream.read(self.porcupine.frame_length)
+                try:
+                    pcm = self.audio_stream.read(
+                        self.porcupine.frame_length,
+                        exception_on_overflow=False
+                    )
+                except Exception as read_err:
+                    if self._stop_event.is_set():
+                        break
+                    logger.warning(f"[WakeWord] Audio read error: {read_err}")
+                    continue
                 pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
                 
                 keyword_index = self.porcupine.process(pcm)
@@ -148,6 +189,8 @@ class WakeWordDetector:
                         
         except Exception as e:
             logger.error(f"[WakeWord] Porcupine error: {e}")
+        finally:
+            self.is_listening = False
     
     def _listen_speech_recognition(self):
         """Listen using speech_recognition library with keyword spotting."""
@@ -185,6 +228,8 @@ class WakeWordDetector:
                         
         except Exception as e:
             logger.error(f"[WakeWord] Error: {e}")
+        finally:
+            self.is_listening = False
 
 
 class ContinuousListener:
@@ -229,6 +274,13 @@ class ContinuousListener:
         if not SPEECH_RECOGNITION_OK:
             logger.error("[Voice] speech_recognition not available")
             return
+
+        if self.is_listening:
+            return
+        if self._thread and self._thread.is_alive():
+            logger.info("[Voice] Command listener thread already active")
+            self.is_listening = True
+            return
         
         self._stop_event.clear()
         self.is_listening = True
@@ -244,6 +296,11 @@ class ContinuousListener:
         """Stop listening."""
         self._stop_event.set()
         self.is_listening = False
+        if self._thread and self._thread.is_alive():
+            if self._thread is not threading.current_thread():
+                self._thread.join(timeout=2)
+        if self._thread and not self._thread.is_alive():
+            self._thread = None
     
     def _listen_loop(self, duration: float, callback: Callable):
         """Main listening loop."""

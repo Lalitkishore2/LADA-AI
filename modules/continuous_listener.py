@@ -15,6 +15,7 @@ import threading
 import time
 import logging
 import socket
+import os
 from typing import Callable, Optional
 from datetime import datetime
 
@@ -80,6 +81,11 @@ class ContinuousListener:
         self.offline_mode = False
         self.consecutive_errors = 0
         self.max_errors_before_offline = 3
+        (
+            self.google_primary_language,
+            self.google_secondary_language,
+            self.google_auto_detect,
+        ) = self._resolve_google_language_config()
         
         # Adjust recognition settings
         if self.recognizer:
@@ -90,7 +96,6 @@ class ContinuousListener:
 
     def _resolve_microphone_device_index(self) -> Optional[int]:
         """Resolve preferred microphone index from env var."""
-        import os
         raw = os.getenv("LADA_MIC_DEVICE_INDEX", "").strip()
         if not raw:
             return None
@@ -100,6 +105,41 @@ class ContinuousListener:
         except ValueError:
             logger.warning("LADA_MIC_DEVICE_INDEX is invalid, ignoring value")
             return None
+
+    def _resolve_google_language_config(self) -> tuple[str, str, bool]:
+        """Resolve Google STT language preferences from env."""
+        primary = os.getenv("LADA_STT_GOOGLE_LANGUAGE", "en-IN").strip() or "en-IN"
+        secondary = os.getenv("LADA_STT_GOOGLE_SECONDARY_LANGUAGE", "ta-IN").strip() or "ta-IN"
+        auto_detect = os.getenv("LADA_STT_GOOGLE_AUTO_DETECT", "1").strip().lower() in {"1", "true", "yes", "on"}
+        return primary, secondary, auto_detect
+
+    def _recognize_google(self, audio) -> Optional[str]:
+        """Recognize speech with optional mixed-language probing."""
+        if not self.recognizer:
+            return None
+
+        primary = self.google_primary_language
+        secondary = self.google_secondary_language
+
+        if (
+            not self.google_auto_detect
+            or not secondary
+            or secondary.lower() == primary.lower()
+        ):
+            return self.recognizer.recognize_google(audio, language=primary)
+
+        candidates = []
+        for lang in (primary, secondary):
+            try:
+                text = self.recognizer.recognize_google(audio, language=lang)
+            except sr.UnknownValueError:
+                continue
+            if text and text.strip():
+                candidates.append(text.strip())
+
+        if not candidates:
+            return None
+        return max(candidates, key=len)
     
     def _load_hybrid_stt(self):
         """Load Hybrid STT model for offline recognition (Faster-Whisper on RTX 3050 6GB)"""
@@ -134,8 +174,17 @@ class ContinuousListener:
         
         if self.running:
             return True
+
+        # If stop() was called while a listen cycle was still blocking on mic input,
+        # reuse the same thread on quick re-enable instead of spawning a duplicate.
+        if self.thread and self.thread.is_alive():
+            self.running = True
+            self.paused = False
+            logger.info("[Listener] Reusing existing listener thread")
+            return True
         
         self.running = True
+        self.paused = False
         self.thread = threading.Thread(target=self._listen_loop, daemon=True)
         self.thread.start()
         logger.info("[Listener] Continuous listener started - always listening")
@@ -144,9 +193,14 @@ class ContinuousListener:
     
     def stop(self):
         """Stop listening"""
+        self.paused = True
         self.running = False
         if self.thread:
-            self.thread.join(timeout=2)
+            current = threading.current_thread()
+            if self.thread is not current:
+                self.thread.join(timeout=2)
+            if not self.thread.is_alive():
+                self.thread = None
         logger.info("[Listener] Continuous listener stopped")
     
     def pause(self):
@@ -155,9 +209,13 @@ class ContinuousListener:
     
     def resume(self):
         """Resume detection"""
+        if not self.running:
+            logger.debug("[Listener] Resume ignored (listener not running)")
+            return False
         self.paused = False
         self.consecutive_errors = 0  # Reset error count
         print("\n[Listener] Listening...")
+        return True
     
     def _listen_loop(self):
         """Main listening loop"""
@@ -202,6 +260,9 @@ class ContinuousListener:
                 
                 # Listen for audio with longer timeout for natural speech
                 audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=15)
+
+            if not self.running or self.paused:
+                return
             
             # Signal processing (only once, not spamming)
             if self.on_processing:
@@ -212,7 +273,7 @@ class ContinuousListener:
             # Try Google first (better accuracy) if online
             if not self.offline_mode:
                 try:
-                    text = self.recognizer.recognize_google(audio, language='en-US')
+                    text = self._recognize_google(audio)
                     self.consecutive_errors = 0  # Reset on success
                     
                 except sr.RequestError as e:
@@ -261,6 +322,8 @@ class ContinuousListener:
             
             # Process recognized text
             if text and text.strip():
+                if not self.running or self.paused:
+                    return
                 mode = "[Offline]" if self.offline_mode else "[Online]"
                 logger.info(f"[Listener] Heard: '{text}'")
                 print(f"{mode} You said: {text}")

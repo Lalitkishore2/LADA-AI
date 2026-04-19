@@ -53,6 +53,17 @@ class TestWakeWordDetector:
         detector.start()
         assert detector.is_listening is False
 
+    def test_start_without_pyaudio(self, monkeypatch):
+        monkeypatch.setattr("modules.advanced_voice.PYAUDIO_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.SPEECH_RECOGNITION_OK", True)
+        monkeypatch.setattr("modules.advanced_voice.PVPORCUPINE_OK", False)
+
+        from modules.advanced_voice import WakeWordDetector
+
+        detector = WakeWordDetector()
+        detector.start()
+        assert detector.is_listening is False
+
     def test_stop(self, monkeypatch):
         monkeypatch.setattr("modules.advanced_voice.PYAUDIO_OK", False)
         monkeypatch.setattr("modules.advanced_voice.SPEECH_RECOGNITION_OK", False)
@@ -62,6 +73,86 @@ class TestWakeWordDetector:
 
         detector = WakeWordDetector()
         detector.is_listening = True
+        detector.stop()
+        assert detector._stop_event.is_set()
+
+    def test_stop_releases_audio_resources_and_joins_thread(self, monkeypatch):
+        monkeypatch.setattr("modules.advanced_voice.PYAUDIO_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.SPEECH_RECOGNITION_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.PVPORCUPINE_OK", False)
+
+        from modules.advanced_voice import WakeWordDetector
+
+        class _FakeThread:
+            def __init__(self):
+                self._alive = True
+                self.join_calls = []
+
+            def is_alive(self):
+                return self._alive
+
+            def join(self, timeout=None):
+                self.join_calls.append(timeout)
+                self._alive = False
+
+        class _FakeStream:
+            def __init__(self):
+                self.stop_called = False
+                self.close_called = False
+
+            def stop_stream(self):
+                self.stop_called = True
+
+            def close(self):
+                self.close_called = True
+
+        class _FakePyAudio:
+            def __init__(self):
+                self.terminated = False
+
+            def terminate(self):
+                self.terminated = True
+
+        class _FakePorcupine:
+            def __init__(self):
+                self.deleted = False
+
+            def delete(self):
+                self.deleted = True
+
+        detector = WakeWordDetector()
+        fake_thread = _FakeThread()
+        fake_stream = _FakeStream()
+        fake_pa = _FakePyAudio()
+        fake_porcupine = _FakePorcupine()
+
+        detector._thread = fake_thread
+        detector.audio_stream = fake_stream
+        detector.pa = fake_pa
+        detector.porcupine = fake_porcupine
+
+        detector.stop()
+
+        assert fake_thread.join_calls == [2]
+        assert fake_stream.stop_called is True
+        assert fake_stream.close_called is True
+        assert fake_pa.terminated is True
+        assert fake_porcupine.deleted is True
+        assert detector._thread is None
+        assert detector.audio_stream is None
+        assert detector.pa is None
+        assert detector.porcupine is None
+
+    def test_stop_from_same_thread_does_not_join_self(self, monkeypatch):
+        monkeypatch.setattr("modules.advanced_voice.PYAUDIO_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.SPEECH_RECOGNITION_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.PVPORCUPINE_OK", False)
+
+        from modules.advanced_voice import WakeWordDetector
+
+        detector = WakeWordDetector()
+        detector._thread = threading.current_thread()
+
         detector.stop()
         assert detector._stop_event.is_set()
 
@@ -117,6 +208,65 @@ class TestContinuousListener:
         assert listener.command_queue is not None
         # Should be empty initially
         assert listener.command_queue.empty()
+
+    def test_start_does_not_spawn_duplicate_threads(self, monkeypatch):
+        monkeypatch.setattr("modules.advanced_voice.PYAUDIO_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.SPEECH_RECOGNITION_OK", True)
+        monkeypatch.setattr("modules.advanced_voice.PVPORCUPINE_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.WHISPER_OK", False)
+
+        class _FakeRecognizer:
+            pass
+
+        class _FakeSR:
+            @staticmethod
+            def Recognizer():
+                return _FakeRecognizer()
+
+        thread_instances = []
+
+        class _FakeThread:
+            def __init__(self, *args, **kwargs):
+                self._alive = False
+                thread_instances.append(self)
+
+            def start(self):
+                self._alive = True
+
+            def is_alive(self):
+                return self._alive
+
+            def join(self, timeout=None):
+                self._alive = False
+
+        monkeypatch.setattr("modules.advanced_voice.sr", _FakeSR(), raising=False)
+        monkeypatch.setattr("modules.advanced_voice.threading.Thread", _FakeThread)
+
+        from modules.advanced_voice import ContinuousListener
+
+        listener = ContinuousListener()
+        listener.start()
+        listener.start()
+        assert len(thread_instances) == 1
+
+        # Simulate inconsistent state where running flag dropped while thread is still alive.
+        listener.is_listening = False
+        listener.start()
+        assert len(thread_instances) == 1
+
+    def test_stop_from_same_thread_does_not_join_self(self, monkeypatch):
+        monkeypatch.setattr("modules.advanced_voice.PYAUDIO_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.SPEECH_RECOGNITION_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.PVPORCUPINE_OK", False)
+        monkeypatch.setattr("modules.advanced_voice.WHISPER_OK", False)
+
+        from modules.advanced_voice import ContinuousListener
+
+        listener = ContinuousListener()
+        listener._thread = threading.current_thread()
+
+        listener.stop()
+        assert listener._stop_event.is_set()
 
 
 class TestVoiceModuleFlags:

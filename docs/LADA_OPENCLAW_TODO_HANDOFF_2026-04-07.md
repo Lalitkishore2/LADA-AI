@@ -1,5 +1,10 @@
 # LADA OpenClaw Parity TODO Handoff
 
+> **Historical checklist:** This handoff is preserved as a point-in-time execution checklist.
+> **Canonical active parity status now lives in:** `docs/LADA_PARITY_MASTER_PLAN_2026-04-07.md`
+>  
+> Do not use this file as the live status source.
+
 Date: 2026-04-07
 Audience: New chat / new engineer handoff
 
