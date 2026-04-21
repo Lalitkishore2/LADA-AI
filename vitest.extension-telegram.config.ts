@@ -19,7 +19,7 @@ export function createExtensionTelegramVitestConfig(
       env,
       name: "extension-telegram",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

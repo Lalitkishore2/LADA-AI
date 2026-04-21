@@ -10,7 +10,7 @@ export function createContractsVitestConfig() {
     test: {
       ...baseTest,
       isolate: false,
-      runner: "./test/non-isolated-runner.ts",
+      runner: "./tests/non-isolated-runner.ts",
       setupFiles: baseTest.setupFiles ?? [],
       include: [
         "src/channels/plugins/contracts/**/*.test.ts",

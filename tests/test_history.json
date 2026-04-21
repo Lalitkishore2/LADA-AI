@@ -185,5 +185,60 @@
     "completed_at": "2026-04-21T09:24:46.467439",
     "retries": 0,
     "error": null
+  },
+  {
+    "task_id": "task_20260421_115218_0",
+    "name": "Run Task",
+    "action": "log",
+    "status": "completed",
+    "duration": 0.001144,
+    "started_at": "2026-04-21T11:52:18.291397",
+    "completed_at": "2026-04-21T11:52:18.292541",
+    "retries": 0,
+    "error": null
+  },
+  {
+    "task_id": "task_20260421_115218_0",
+    "name": "Task 1",
+    "action": "log",
+    "status": "completed",
+    "duration": 0.001096,
+    "started_at": "2026-04-21T11:52:18.420704",
+    "completed_at": "2026-04-21T11:52:18.421800",
+    "retries": 0,
+    "error": null
+  },
+  {
+    "task_id": "task_20260421_115218_1",
+    "name": "Task 2",
+    "action": "log",
+    "status": "completed",
+    "duration": 0.002886,
+    "started_at": "2026-04-21T11:52:18.422354",
+    "completed_at": "2026-04-21T11:52:18.425240",
+    "retries": 0,
+    "error": null
+  },
+  {
+    "task_id": "task_20260421_115218_0",
+    "name": "Status Task",
+    "action": "log",
+    "status": "completed",
+    "duration": 0.002013,
+    "started_at": "2026-04-21T11:52:18.645011",
+    "completed_at": "2026-04-21T11:52:18.647024",
+    "retries": 0,
+    "error": null
+  },
+  {
+    "task_id": "task_20260421_115218_0",
+    "name": "Long Task",
+    "action": "sleep",
+    "status": "completed",
+    "duration": 5.022429,
+    "started_at": "2026-04-21T11:52:18.768091",
+    "completed_at": "2026-04-21T11:52:23.790520",
+    "retries": 0,
+    "error": null
   }
 ]

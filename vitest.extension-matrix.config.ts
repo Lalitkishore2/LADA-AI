@@ -9,7 +9,7 @@ export function createExtensionMatrixVitestConfig(env?: Record<string, string | 
       env,
       name: "extension-matrix",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

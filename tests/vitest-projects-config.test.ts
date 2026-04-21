@@ -29,7 +29,7 @@ describe("projects vitest config", () => {
   it("keeps the contracts lane on the non-isolated runner by default", () => {
     const config = createContractsVitestConfig();
     expect(config.test.isolate).toBe(false);
-    expect(config.test.runner).toBe("./test/non-isolated-runner.ts");
+    expect(config.test.runner).toBe("./tests/non-isolated-runner.ts");
   });
 
   it("keeps the root ui lane aligned with the isolated jsdom setup", () => {
@@ -45,7 +45,7 @@ describe("projects vitest config", () => {
   it("keeps the unit lane on the non-isolated runner by default", () => {
     const config = createUnitVitestConfig();
     expect(config.test.isolate).toBe(false);
-    expect(config.test.runner).toBe("./test/non-isolated-runner.ts");
+    expect(config.test.runner).toBe("./tests/non-isolated-runner.ts");
   });
 
   it("keeps the unit-fast lane on shared workers without the reset-heavy runner", () => {
@@ -57,7 +57,7 @@ describe("projects vitest config", () => {
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {
     expect(bundledConfig.test?.pool).toBe("threads");
     expect(bundledConfig.test?.isolate).toBe(false);
-    expect(bundledConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(bundledConfig.test?.runner).toBe("./tests/non-isolated-runner.ts");
   });
 });
 

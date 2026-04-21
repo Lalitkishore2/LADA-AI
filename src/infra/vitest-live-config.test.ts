@@ -10,7 +10,7 @@ describe("live vitest config", () => {
   it("keeps live tests on thread workers with the non-isolated runner", () => {
     expect(liveConfig.test?.pool).toBe("threads");
     expect(liveConfig.test?.isolate).toBe(false);
-    expect(liveConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(liveConfig.test?.runner).toBe("./tests/non-isolated-runner.ts");
   });
 
   it("includes live test globs and runtime setup", () => {

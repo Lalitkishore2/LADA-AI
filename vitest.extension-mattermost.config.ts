@@ -19,7 +19,7 @@ export function createExtensionMattermostVitestConfig(
       env,
       name: "extension-mattermost",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

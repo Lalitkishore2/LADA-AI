@@ -113,6 +113,8 @@ Then open `lada_desktop_app.py`: the top header shows a **Bridge ON/OFF** toggle
 
 ## Architecture summary
 
+See [Codebase Stabilization Audit Summary (April 2026)](docs/AUDIT_SUMMARY_2026_04.md) for details on the latest structural and modular improvements.
+
 1. Input comes from desktop UI, voice, API, connectors, or WebSocket.
 2. Command routing determines system action vs AI query.
 3. AI path goes through model/provider routing with failover and policy checks.

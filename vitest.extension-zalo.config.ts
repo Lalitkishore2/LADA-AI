@@ -18,7 +18,7 @@ export function createExtensionZaloVitestConfig(
       env,
       name: "extension-zalo",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

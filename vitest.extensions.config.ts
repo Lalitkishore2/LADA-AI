@@ -32,7 +32,7 @@ export function createExtensionsVitestConfig(
     env,
     name: "extensions",
     passWithNoTests: true,
-    setupFiles: ["test/setup.extensions.ts"],
+    setupFiles: ["tests/setup.extensions.ts"],
     // Some bundled plugins still run on the channel surface; keep those roots
     // out of the shared extensions lane.
     exclude: [

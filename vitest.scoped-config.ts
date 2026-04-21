@@ -156,11 +156,11 @@ export function createScopedVitestConfig(
     ...new Set([
       ...(baseTest.setupFiles ?? []),
       ...(options?.setupFiles ?? []),
-      ...(options?.includeLADARuntimeSetup === false ? [] : ["test/setup-lada-runtime.ts"]),
+      ...(options?.includeLADARuntimeSetup === false ? [] : ["tests/setup-lada-runtime.ts"]),
     ]),
   ];
   const useNonIsolatedRunner = options?.useNonIsolatedRunner ?? !isolate;
-  const runner = useNonIsolatedRunner ? "./test/non-isolated-runner.ts" : undefined;
+  const runner = useNonIsolatedRunner ? "./tests/non-isolated-runner.ts" : undefined;
   const scopedGroupOrder = resolveScopedProjectGroupOrder(options?.name, scopedDir, include);
 
   return defineConfig({

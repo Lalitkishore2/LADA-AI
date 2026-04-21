@@ -1,5 +1,13 @@
 from modules.desktop.common import *
 
+try:
+    from modules.markdown_renderer import MARKDOWN_OK, MarkdownRenderer
+
+    _md_renderer = MarkdownRenderer()
+except Exception:
+    MARKDOWN_OK = False
+    _md_renderer = None
+
 class VState:
     IDLE, LISTEN, PROCESS, SPEAK = 0, 1, 2, 3
 
@@ -97,7 +105,7 @@ class RichTextLabel(QTextBrowser):
                 background: transparent;
                 border: none;
                 color: {TEXT};
-                font-family: {MSG_FONT};
+                font-family: {FONT_FAMILY};
                 font-size: {RichTextLabel.font_size}px;
                 line-height: 1.7;
                 selection-background-color: {GREEN};
@@ -1643,6 +1651,3 @@ class InputBar(QFrame):
                 self._send()
                 return True
         return super().eventFilter(obj, event)
-
-
-

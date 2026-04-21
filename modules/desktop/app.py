@@ -1,9 +1,16 @@
+import logging
+from typing import Any
+
 from modules.desktop.common import *
+from modules.desktop.common import _env_enabled
 
 from modules.desktop.settings import SettingsDialog
-from modules.desktop.ui import VState, OrbWidget, RichTextLabel, Sidebar, Msg, ChatArea, QuickActionsPopup, InputBar
+from modules.desktop.ui import VState, OrbWidget, RichTextLabel, Sidebar, Msg, ChatArea, QuickActionsPopup, InputBar, _md_renderer
 from modules.desktop.workers import AIWorker, StreamingAIWorker, VoiceWorker, RemoteBridgeWorker
 from modules.desktop.overlays import FaceAuthOverlay, VoiceOverlay, ClickEffectOverlay, CometOverlay, AutonomousActionOverlay
+from PyQt5.QtWidgets import QStyle
+
+logger = logging.getLogger(__name__)
 
 class LadaApp(QMainWindow):
     wake_triggered = pyqtSignal(str)  # Signal for wake word commands
@@ -37,7 +44,7 @@ class LadaApp(QMainWindow):
         self._sidebar_auto_collapsed = False
         self._sidebar_responsive_adjusting = False
         self._remote_bridge_enabled = False
-        self._remote_bridge_auto_start = _env_enabled("LADA_REMOTE_BRIDGE_AUTO_START_APP", True)
+        self._remote_bridge_auto_start = os.getenv("LADA_REMOTE_BRIDGE_AUTO_START_APP", "true").strip().lower() in {"1", "true", "yes", "on"}
         self.remote_bridge_client = None
         self.remote_bridge_worker = None
         self._stream_cancelled = False
@@ -4054,6 +4061,3 @@ If not specified, use reasonable defaults. Return ONLY the JSON."""
                 QSystemTrayIcon.Information,
                 2000
             )
-
-
-

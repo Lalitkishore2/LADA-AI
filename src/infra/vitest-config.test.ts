@@ -208,7 +208,7 @@ describe("base vitest config", () => {
 
   it("keeps the base runner non-isolated by default", () => {
     expect(baseConfig.test?.isolate).toBe(false);
-    expect(baseConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(baseConfig.test?.runner).toBe("./tests/non-isolated-runner.ts");
   });
 });
 

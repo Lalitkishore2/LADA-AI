@@ -19,7 +19,7 @@ export function createExtensionFeishuVitestConfig(
       env,
       name: "extension-feishu",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

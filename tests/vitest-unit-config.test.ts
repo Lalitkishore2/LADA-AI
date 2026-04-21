@@ -71,7 +71,7 @@ describe("unit vitest config", () => {
   it("defaults unit tests to the non-isolated runner", () => {
     const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.isolate).toBe(false);
-    expect(unitConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(unitConfig.test?.runner).toBe("./tests/non-isolated-runner.ts");
   });
 
   it("keeps acp and ui tests out of the generic unit lane", () => {

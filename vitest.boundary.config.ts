@@ -22,7 +22,7 @@ export function createBoundaryVitestConfig(
       ...sharedVitestConfig.test,
       name: "boundary",
       isolate,
-      ...(isolate ? { runner: undefined } : { runner: "./test/non-isolated-runner.ts" }),
+      ...(isolate ? { runner: undefined } : { runner: "./tests/non-isolated-runner.ts" }),
       include: loadBoundaryIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? boundaryTestFiles,
       ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
       // Boundary workers still need the shared isolated HOME/bootstrap. Only

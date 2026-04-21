@@ -18,7 +18,7 @@ export function createExtensionAcpxVitestConfig(
       env,
       name: "extension-acpx",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

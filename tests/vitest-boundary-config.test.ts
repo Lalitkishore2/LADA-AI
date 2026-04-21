@@ -16,7 +16,7 @@ describe("boundary vitest config", () => {
     const config = createBoundaryVitestConfig({});
 
     expect(config.test?.isolate).toBe(false);
-    expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(config.test?.runner).toBe("./tests/non-isolated-runner.ts");
     expect(config.test?.include).toEqual(boundaryTestFiles);
     expect(config.test?.setupFiles).toEqual(["test/setup.ts"]);
   });

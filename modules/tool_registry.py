@@ -197,8 +197,8 @@ class ToolRegistry:
         """List all tools, optionally filtered by category"""
         if category is not None:
             names = self._category_index.get(category, [])
-            return [self._tools[n] for n in names if n in self._tools]
-        return list(self._tools.values())
+            return [self._tools[n] for n in sorted(names) if n in self._tools]
+        return [self._tools[n] for n in sorted(self._tools.keys())]
 
     def match(self, text: str, threshold: float = 0.3) -> List[tuple]:
         """
@@ -206,7 +206,7 @@ class ToolRegistry:
         Returns list of (tool_name, confidence) sorted by confidence descending.
         """
         results = []
-        for name, tool in self._tools.items():
+        for name, tool in sorted(self._tools.items()):
             if not tool.enabled:
                 continue
             score = tool.matches_keywords(text)

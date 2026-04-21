@@ -65,7 +65,7 @@ export default defineConfig({
   ...sharedVitestConfig,
   test: {
     ...sharedVitestConfig.test,
-    runner: "./test/non-isolated-runner.ts",
+    runner: "./tests/non-isolated-runner.ts",
     projects: [...rootVitestProjects],
   },
 });

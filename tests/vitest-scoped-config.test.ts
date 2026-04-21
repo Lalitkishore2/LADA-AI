@@ -85,7 +85,7 @@ describe("createScopedVitestConfig", () => {
   it("applies the non-isolated runner by default", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], { env: {} });
     expect(config.test?.isolate).toBe(false);
-    expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(config.test?.runner).toBe("./tests/non-isolated-runner.ts");
     expect(config.test?.setupFiles).toEqual(["test/setup.ts", "test/setup-lada-runtime.ts"]);
   });
 
@@ -228,13 +228,13 @@ describe("scoped vitest configs", () => {
     ]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
-      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+      expect(config.test?.runner).toBe("./tests/non-isolated-runner.ts");
     }
 
     for (const config of [defaultGatewayConfig, defaultCommandsConfig, defaultAgentsConfig]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
-      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+      expect(config.test?.runner).toBe("./tests/non-isolated-runner.ts");
     }
 
     expect(defaultUiConfig.test?.pool).toBe("threads");
@@ -268,7 +268,7 @@ describe("scoped vitest configs", () => {
   it("defaults channel tests to threads with the non-isolated runner", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
     expect(defaultChannelsConfig.test?.pool).toBe("threads");
-    expect(defaultChannelsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(defaultChannelsConfig.test?.runner).toBe("./tests/non-isolated-runner.ts");
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -306,7 +306,7 @@ describe("scoped vitest configs", () => {
   it("defaults extension tests to threads with the non-isolated runner", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
     expect(defaultExtensionsConfig.test?.pool).toBe("threads");
-    expect(defaultExtensionsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(defaultExtensionsConfig.test?.runner).toBe("./tests/non-isolated-runner.ts");
   });
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {

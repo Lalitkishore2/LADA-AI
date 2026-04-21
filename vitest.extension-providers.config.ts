@@ -19,7 +19,7 @@ export function createExtensionProvidersVitestConfig(
       env,
       name: "extension-providers",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

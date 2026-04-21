@@ -3,6 +3,8 @@ LADA v7.0 - Clean ChatGPT-Style Desktop App
 """
 
 import sys
+import pathlib
+sys.path.append(str(pathlib.Path(__file__).parent))
 import json
 import os
 import math

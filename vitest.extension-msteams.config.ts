@@ -9,7 +9,7 @@ export function createExtensionMsTeamsVitestConfig(env?: Record<string, string |
       env,
       name: "extension-msteams",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }

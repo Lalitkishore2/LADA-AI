@@ -20,7 +20,7 @@ export default defineConfig({
     // Vitest's buffered per-test console capture.
     disableConsoleIntercept: true,
     maxWorkers: 1,
-    setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-lada-runtime.ts"])],
+    setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "tests/setup-lada-runtime.ts"])],
     include: ["src/**/*.live.test.ts", BUNDLED_PLUGIN_LIVE_TEST_GLOB],
     exclude,
   },

@@ -19,7 +19,7 @@ export function createExtensionMessagingVitestConfig(
       env,
       name: "extension-messaging",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      setupFiles: ["tests/setup.extensions.ts"],
     },
   );
 }
