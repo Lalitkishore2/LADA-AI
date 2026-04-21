@@ -82,7 +82,7 @@ except Exception as e:
 
 # Voice engine - try multiple backends
 try:
-    from voice_tamil_free import FreeNaturalVoice
+    from voice_tamil_free import FreeNaturalVoice  # type: ignore
     VOICE_OK = True
 except ImportError:
     FreeNaturalVoice = None  # type: ignore
