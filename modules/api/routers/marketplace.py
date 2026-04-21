@@ -40,7 +40,7 @@ def create_marketplace_router(state):
 
     @r.post("/marketplace/install", response_class=JSONResponse)
     async def marketplace_install(body: Dict = Body(...)):
-        name = body.get("name", "")
+        name = str(body.get("name", "")).strip()
         if not name:
             raise HTTPException(status_code=400, detail="Plugin name required")
         try:

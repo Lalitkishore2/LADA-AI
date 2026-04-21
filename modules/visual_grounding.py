@@ -309,7 +309,7 @@ class VisualGrounder:
             # Try to load a font, fall back to default
             try:
                 font = ImageFont.truetype("arial.ttf", 14)
-            except:
+            except Exception as e:
                 font = ImageFont.load_default()
 
             # Detect potential interactive regions by scanning for edge clusters

@@ -122,3 +122,47 @@ class TestTaskOrchestrator:
         time.sleep(0.1)
         
         assert task.result['value'] == 10
+
+    def test_shell_action_defaults_to_shellless_execution(self, orchestrator):
+        """Shell action should avoid shell=True unless explicitly requested."""
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        def _fake_run(command, **kwargs):
+            captured['command'] = command
+            captured['shell'] = kwargs.get('shell')
+            return _Proc()
+
+        with patch('subprocess.run', side_effect=_fake_run):
+            result = orchestrator._action_shell('echo hello world')
+
+        assert result['success'] is True
+        assert result['shell'] is False
+        assert captured['shell'] is False
+        assert isinstance(captured['command'], list)
+
+    def test_shell_action_supports_explicit_shell_opt_in(self, orchestrator):
+        """Advanced shell features remain available with explicit opt-in."""
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        def _fake_run(command, **kwargs):
+            captured['command'] = command
+            captured['shell'] = kwargs.get('shell')
+            return _Proc()
+
+        with patch('subprocess.run', side_effect=_fake_run):
+            result = orchestrator._action_shell('echo hi && echo there', shell=True)
+
+        assert result['success'] is True
+        assert result['shell'] is True
+        assert captured['shell'] is True
+        assert captured['command'] == 'echo hi && echo there'

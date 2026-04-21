@@ -112,3 +112,22 @@ def test_lada_browser_snapshot_from_adapter():
     assert payload["success"] is True
     assert payload["mode"] == "lada_browser_adapter"
     assert payload["snapshot"]["title"] == "Example"
+
+
+def test_lada_browser_scroll_amount_validation():
+    state = _FakeState()
+    client = _build_client(state)
+
+    non_integer = client.post(
+        "/lada/browser/action",
+        json={"action": "scroll", "direction": "down", "amount": "oops"},
+    )
+    assert non_integer.status_code == 400
+    assert "amount must be an integer" in str(non_integer.json().get("detail", ""))
+
+    non_positive = client.post(
+        "/lada/browser/action",
+        json={"action": "scroll", "direction": "down", "amount": 0},
+    )
+    assert non_positive.status_code == 400
+    assert "amount must be greater than 0" in str(non_positive.json().get("detail", ""))

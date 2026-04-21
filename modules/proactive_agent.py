@@ -782,7 +782,7 @@ class ProactiveAgent:
             battery = psutil.sensors_battery()
             if battery:
                 return int(battery.percent)
-        except:
+        except Exception as e:
             pass
         return None
     
@@ -792,7 +792,7 @@ class ProactiveAgent:
             import psutil
             disk = psutil.disk_usage('/')
             return disk.free / (1024 ** 3)  # GB
-        except:
+        except Exception as e:
             pass
         return None
     
@@ -933,7 +933,7 @@ class ProactiveAgent:
             if self.jarvis:
                 try:
                     self.jarvis.process(action)
-                except:
+                except Exception as e:
                     pass
         
         logger.info(f"[ProactiveAgent] Fired trigger: {trigger.name}")

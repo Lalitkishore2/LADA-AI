@@ -277,3 +277,45 @@ class TestMediaCommands:
         
         if hasattr(processor, 'process'):
             result = processor.process("previous track")
+
+
+class TestProcessExecutionSafety:
+    def test_handle_open_app_uses_argument_list(self):
+        from modules import voice_nlu as vn
+
+        processor = vn.VoiceCommandProcessor()
+
+        with patch('subprocess.Popen') as mock_popen:
+            handled, _ = processor._handle_open_app("open notepad")
+
+        assert handled is True
+        assert mock_popen.called
+        launch_args = mock_popen.call_args[0][0]
+        assert isinstance(launch_args, list)
+
+    def test_handle_close_app_uses_subprocess_run(self):
+        from modules import voice_nlu as vn
+
+        processor = vn.VoiceCommandProcessor()
+
+        with patch('subprocess.run') as mock_run:
+            handled, _ = processor._handle_close_app("close chrome")
+
+        assert handled is True
+        assert mock_run.called
+        kill_args = mock_run.call_args[0][0]
+        assert isinstance(kill_args, list)
+
+    def test_handle_power_confirm_shutdown_uses_subprocess_run(self):
+        from modules import voice_nlu as vn
+
+        processor = vn.VoiceCommandProcessor()
+
+        with patch('subprocess.run') as mock_run:
+            handled, _ = processor._handle_power("confirm shutdown")
+
+        assert handled is True
+        assert mock_run.called
+        shutdown_args = mock_run.call_args[0][0]
+        assert isinstance(shutdown_args, list)
+        assert shutdown_args[:2] == ["shutdown", "/s"]

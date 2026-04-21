@@ -32,9 +32,32 @@ import time
 import random
 import logging
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag_enabled(name: str, default: str = "true") -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_allowlist(raw: str) -> List[str]:
+    return [item.strip().lower() for item in str(raw).split(',') if item.strip()]
+
+
+def _safe_int(value: str, fallback: int) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return fallback
+
+
+def _safe_float(value: str, fallback: float) -> float:
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return fallback
 
 # Optional dependencies
 try:
@@ -59,9 +82,13 @@ except ImportError:
 @dataclass
 class StealthConfig:
     """Stealth browser configuration."""
+    enabled: bool = True
     headless: bool = False
     profile_path: str = ""
     human_delay: bool = True
+    domain_allowlist: List[str] = field(default_factory=list)
+    max_navigation_depth: int = 25
+    command_timeout_sec: float = 30.0
     
     # Timing delays (seconds)
     typing_delay_min: float = 0.02
@@ -84,10 +111,17 @@ class StealthConfig:
     @classmethod
     def from_env(cls) -> "StealthConfig":
         """Load config from environment."""
+        max_depth = max(1, _safe_int(os.getenv("LADA_STEALTH_MAX_NAVIGATION_DEPTH", "25"), 25))
+        command_timeout = max(1.0, _safe_float(os.getenv("LADA_STEALTH_COMMAND_TIMEOUT_SEC", "30"), 30.0))
+
         return cls(
+            enabled=_env_flag_enabled("LADA_STEALTH_BROWSER_ENABLED", "true"),
             headless=os.getenv("STEALTH_BROWSER_HEADLESS", "false").lower() == "true",
             profile_path=os.getenv("STEALTH_BROWSER_PROFILE", ""),
             human_delay=os.getenv("STEALTH_HUMAN_DELAY", "true").lower() == "true",
+            domain_allowlist=_parse_allowlist(os.getenv("LADA_STEALTH_DOMAIN_ALLOWLIST", "")),
+            max_navigation_depth=max_depth,
+            command_timeout_sec=command_timeout,
         )
 
 
@@ -106,11 +140,63 @@ class StealthBrowser:
         self.config = config or StealthConfig.from_env()
         self.driver = None
         self._initialized = False
+        self._navigation_depth = 0
         
         logger.info(
-            f"[StealthBrowser] Init: headless={self.config.headless}, "
+            f"[StealthBrowser] Init: enabled={self.config.enabled}, headless={self.config.headless}, "
             f"uc_available={UC_AVAILABLE}"
         )
+
+    def _is_domain_allowed(self, url: str) -> bool:
+        """Check host against optional allowlist (supports exact, suffix, and *.wildcard)."""
+        allowlist = [item for item in self.config.domain_allowlist if item]
+        if not allowlist:
+            return True
+
+        try:
+            host = (urlparse(url).hostname or "").lower().strip('.')
+        except Exception:
+            return False
+
+        if not host:
+            return False
+
+        for entry in allowlist:
+            item = entry.strip().lower()
+            if not item:
+                continue
+
+            if item.startswith("*."):
+                suffix = item[2:]
+                if host == suffix or host.endswith(f".{suffix}"):
+                    return True
+                continue
+
+            if host == item or host.endswith(f".{item}"):
+                return True
+
+        return False
+
+    def _normalize_url(self, url: str) -> str:
+        raw = str(url or "").strip()
+        if raw and not raw.startswith(("http://", "https://")):
+            return f"https://{raw}"
+        return raw
+
+    def _apply_timeouts(self):
+        """Apply command timeout bounds to driver operations when supported."""
+        if not self.driver:
+            return
+
+        timeout = max(1.0, float(self.config.command_timeout_sec))
+        try:
+            self.driver.set_page_load_timeout(timeout)
+        except Exception:
+            pass
+        try:
+            self.driver.set_script_timeout(timeout)
+        except Exception:
+            pass
     
     def start(self) -> bool:
         """Start the stealth browser.
@@ -120,6 +206,10 @@ class StealthBrowser:
         """
         if self._initialized:
             return True
+
+        if not self.config.enabled:
+            logger.info("[StealthBrowser] Disabled by LADA_STEALTH_BROWSER_ENABLED")
+            return False
         
         if UC_AVAILABLE:
             success = self._start_undetected()
@@ -272,24 +362,52 @@ class StealthBrowser:
         Returns:
             Result dict with success, url, title
         """
+        if not self.config.enabled:
+            return {
+                "success": False,
+                "error": "Stealth browser is disabled by LADA_STEALTH_BROWSER_ENABLED",
+            }
+
+        normalized_url = self._normalize_url(url)
+        if not normalized_url:
+            return {"success": False, "error": "URL is required"}
+
+        if not self._is_domain_allowed(normalized_url):
+            return {
+                "success": False,
+                "error": f"Domain blocked by allowlist: {normalized_url}",
+            }
+
+        if self._navigation_depth >= max(1, int(self.config.max_navigation_depth)):
+            return {
+                "success": False,
+                "error": (
+                    f"Max navigation depth ({self.config.max_navigation_depth}) reached"
+                ),
+            }
+
         if not self._ensure_started():
             return {"success": False, "error": "Browser not started"}
         
         try:
-            self.driver.get(url)
+            self._apply_timeouts()
+            self.driver.get(normalized_url)
             
             if wait_load:
-                WebDriverWait(self.driver, 30).until(
+                wait_timeout = max(1.0, float(self.config.command_timeout_sec))
+                WebDriverWait(self.driver, wait_timeout).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
             
             # Re-apply patches on new page
             self._apply_stealth_patches()
             
+            self._navigation_depth += 1
             return {
                 "success": True,
                 "url": self.driver.current_url,
-                "title": self.driver.title
+                "title": self.driver.title,
+                "depth": self._navigation_depth,
             }
             
         except Exception as e:
@@ -298,6 +416,8 @@ class StealthBrowser:
     
     def _ensure_started(self) -> bool:
         """Ensure browser is started."""
+        if not self.config.enabled:
+            return False
         if not self._initialized:
             return self.start()
         return True
@@ -325,8 +445,10 @@ class StealthBrowser:
             return {"success": False, "error": "Browser not started"}
         
         try:
+            self._apply_timeouts()
             by_method = self._get_by_method(by)
-            element = WebDriverWait(self.driver, 10).until(
+            wait_timeout = max(1.0, float(self.config.command_timeout_sec))
+            element = WebDriverWait(self.driver, wait_timeout).until(
                 EC.element_to_be_clickable((by_method, selector))
             )
             
@@ -365,8 +487,10 @@ class StealthBrowser:
             return {"success": False, "error": "Browser not started"}
         
         try:
+            self._apply_timeouts()
             by_method = self._get_by_method(by)
-            element = WebDriverWait(self.driver, 10).until(
+            wait_timeout = max(1.0, float(self.config.command_timeout_sec))
+            element = WebDriverWait(self.driver, wait_timeout).until(
                 EC.element_to_be_clickable((by_method, selector))
             )
             
@@ -449,6 +573,7 @@ class StealthBrowser:
             return {"success": False, "error": "Browser not started"}
         
         try:
+            self._apply_timeouts()
             if direction == "up":
                 amount = -amount
             
@@ -478,6 +603,7 @@ class StealthBrowser:
             return {"success": False, "error": "Browser not started"}
         
         try:
+            self._apply_timeouts()
             return {
                 "success": True,
                 "url": self.driver.current_url,
@@ -502,6 +628,7 @@ class StealthBrowser:
             return {"success": False, "error": "Browser not started"}
         
         try:
+            self._apply_timeouts()
             if not path:
                 import tempfile
                 fd, path = tempfile.mkstemp(suffix=".png")
@@ -529,6 +656,7 @@ class StealthBrowser:
             return None
         
         try:
+            self._apply_timeouts()
             return self.driver.execute_script(script, *args)
         except Exception as e:
             logger.error(f"[StealthBrowser] JS error: {e}")
@@ -561,7 +689,10 @@ class StealthBrowser:
                 EC.visibility_of_element_located if visible
                 else EC.presence_of_element_located
             )
-            WebDriverWait(self.driver, timeout).until(
+            wait_timeout = min(float(timeout), float(self.config.command_timeout_sec))
+            wait_timeout = max(1.0, wait_timeout)
+            self._apply_timeouts()
+            WebDriverWait(self.driver, wait_timeout).until(
                 condition((by_method, selector))
             )
             return True
@@ -593,6 +724,7 @@ class StealthBrowser:
                 pass
             self.driver = None
             self._initialized = False
+            self._navigation_depth = 0
             logger.info("[StealthBrowser] Closed")
     
     def __enter__(self):

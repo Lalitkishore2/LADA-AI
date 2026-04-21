@@ -4554,13 +4554,22 @@
 
         const onlineDevices = devices.filter(device => device?.online !== false);
         const keepSaved = onlineDevices.some(device => device.device_id === savedSelection);
-        const selectedDeviceId = keepSaved ? savedSelection : '';
+        const backendAutoDispatch = !!remoteState.bridge_auto_dispatch;
+        const fallbackAutoDeviceId =
+          backendAutoDispatch && onlineDevices.length
+            ? String(onlineDevices[0]?.device_id || '').trim()
+            : '';
+        const selectedDeviceId = keepSaved ? savedSelection : fallbackAutoDeviceId;
         select.value = selectedDeviceId;
         remoteState.selected_device_id = selectedDeviceId;
         localStorage.setItem('lada_remote_device_id', selectedDeviceId);
 
         if (onlineDevices.length) {
-          hint.textContent = `${onlineDevices.length} bridge device${onlineDevices.length > 1 ? 's are' : ' is'} online. Select one to run commands there.`;
+            if (selectedDeviceId) {
+              hint.textContent = `${onlineDevices.length} bridge device${onlineDevices.length > 1 ? 's are' : ' is'} online. Commands default to ${getRemoteDeviceLabel(selectedDeviceId)}.`;
+            } else {
+              hint.textContent = `${onlineDevices.length} bridge device${onlineDevices.length > 1 ? 's are' : ' is'} online. Select one to run commands there.`;
+            }
         } else {
           hint.textContent = 'No bridge devices are online. Commands run on this server.';
         }
@@ -4707,24 +4716,27 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Remote command failed');
 
-        if (data.queued && targetDeviceId && data.command_id) {
-          output.textContent = `Queued on ${targetLabel}. Waiting for result...`;
-          const resultData = await waitForRemoteCommandResult(targetDeviceId, data.command_id);
+        const resolvedDeviceId = String(data.device_id || targetDeviceId || '').trim();
+        const resolvedLabel = getRemoteDeviceLabel(resolvedDeviceId);
+
+        if (data.queued && resolvedDeviceId && data.command_id) {
+          output.textContent = `Queued on ${resolvedLabel}. Waiting for result...`;
+          const resultData = await waitForRemoteCommandResult(resolvedDeviceId, data.command_id);
           const commandResult = resultData.result || {};
           if (resultData.status === 'completed' && commandResult.success !== false) {
-            output.textContent = commandResult.response || `Command completed on ${targetLabel}.`;
-            addSystemMessage('Remote command completed on ' + targetLabel + '.');
+            output.textContent = commandResult.response || `Command completed on ${resolvedLabel}.`;
+            addSystemMessage('Remote command completed on ' + resolvedLabel + '.');
           } else {
             const errorText = commandResult.error || commandResult.response || 'Remote command failed.';
             output.textContent = 'Error: ' + errorText;
-            addSystemMessage('Remote command failed on ' + targetLabel + '.');
+            addSystemMessage('Remote command failed on ' + resolvedLabel + '.');
           }
           await loadRemoteDevices();
           return;
         }
 
         output.textContent = data.response || 'Command executed.';
-        const engine = data.engine || (targetDeviceId ? 'remote_bridge_queue' : 'unknown');
+        const engine = data.engine || (resolvedDeviceId ? 'remote_bridge_queue' : 'unknown');
         addSystemMessage('Remote command executed using ' + engine + '.');
       } catch (e) {
         output.textContent = 'Error: ' + e.message;

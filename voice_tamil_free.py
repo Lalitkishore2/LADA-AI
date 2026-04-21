@@ -8,6 +8,7 @@ Tamil + English (Thanglish) Support with Auto Language Detection
 import os
 import re
 import time
+import subprocess
 import threading
 import tempfile
 import logging
@@ -116,6 +117,9 @@ class FreeNaturalVoice:
         # Local neural TTS (Kokoro)
         self._kokoro_model = None
         self._kokoro_enabled = os.getenv('USE_KOKORO', 'true').lower() == 'true'
+        self._kokoro_assets_available = False
+        self._kokoro_unavailable_reason = ""
+        self._tts_lock = threading.Lock()
 
         # Tamil voice style
         # If enabled, when the language is Tamil ('ta'), we speak a romanized (Thanglish) version
@@ -124,7 +128,7 @@ class FreeNaturalVoice:
         self.speak_thanglish_for_tamil = self.tamil_tts_style in {'thanglish', 'romanized', 'rom', 'latin'}
         
         # Voice settings - Karen style: warm, clear, natural pace
-        self.voice_speed = int(os.getenv('VOICE_RATE', '175'))  # Slightly slower for warmth
+        self.voice_speed = int(os.getenv('VOICE_RATE', '205'))
         self.voice_volume = float(os.getenv('VOICE_VOLUME', '0.9'))
         self.use_gtts = os.getenv('USE_GTTS', 'true').lower() == 'true'
         self.gtts_slow = os.getenv('GTTS_SLOW', 'false').lower() == 'true'
@@ -190,23 +194,52 @@ class FreeNaturalVoice:
         wake_words_str = os.getenv('WAKEWORDS', 'lada,hey lada,okay lada')
         self.wake_words = [w.strip().lower() for w in wake_words_str.split(',')]
 
-        # Pre-load Kokoro model at startup to eliminate first-speak latency
         if self._kokoro_enabled and KOKORO_AVAILABLE:
-            threading.Thread(target=self._preload_kokoro, daemon=True).start()
+            self._kokoro_assets_available = self._kokoro_assets_present()
+            if not self._kokoro_assets_available:
+                model_path, voices_path = self._kokoro_model_paths()
+                self._kokoro_unavailable_reason = (
+                    f"Kokoro model files not found: {model_path.name}, {voices_path.name}. "
+                    "Using fallback TTS engines."
+                )
+                logger.info(self._kokoro_unavailable_reason)
 
-        # Lock to best available TTS engine (no runtime fallback between engines)
-        # This prevents jarring voice changes when one engine fails intermittently
-        if self._kokoro_enabled and KOKORO_AVAILABLE:
-            self._locked_tts = 'kokoro'
-        elif self.use_gtts and GTTS_AVAILABLE:
-            self._locked_tts = 'gtts'
-        elif self.offline_engine:
-            self._locked_tts = 'pyttsx3'
-        else:
-            self._locked_tts = None
+        # Lock to best available TTS engine.
+        self._locked_tts = self._select_locked_tts_engine()
         logger.info(f"TTS engine locked to: {self._locked_tts}")
 
+        # Pre-load Kokoro model at startup to eliminate first-speak latency.
+        if self._locked_tts == 'kokoro' and self._kokoro_assets_available:
+            threading.Thread(target=self._preload_kokoro, daemon=True).start()
+
         logger.info(f"✅ FreeNaturalVoice initialized (Tamil: {tamil_mode}, Voice: Karen-style)")
+
+    def _kokoro_model_paths(self) -> tuple[Path, Path]:
+        model_dir = Path(__file__).parent / "models" / "kokoro"
+        return model_dir / "kokoro-v1.0.int8.onnx", model_dir / "voices-v1.0.bin"
+
+    def _kokoro_assets_present(self) -> bool:
+        model_path, voices_path = self._kokoro_model_paths()
+        return model_path.exists() and voices_path.exists()
+
+    def _select_locked_tts_engine(self) -> Optional[str]:
+        if self._kokoro_enabled and KOKORO_AVAILABLE and self._kokoro_assets_available:
+            return 'kokoro'
+        if self.use_gtts and GTTS_AVAILABLE:
+            return 'gtts'
+        if self.offline_engine:
+            return 'pyttsx3'
+        return None
+
+    def _mark_kokoro_unavailable(self, reason: str) -> None:
+        if self._kokoro_unavailable_reason:
+            return
+        self._kokoro_assets_available = False
+        self._kokoro_unavailable_reason = reason
+        logger.warning(reason)
+        if self._locked_tts == 'kokoro':
+            self._locked_tts = self._select_locked_tts_engine()
+            logger.info(f"TTS engine locked to: {self._locked_tts}")
 
     def _resolve_microphone_device_index(self) -> Optional[int]:
         """Resolve preferred microphone device index from env var."""
@@ -349,40 +382,40 @@ class FreeNaturalVoice:
         # Update current language
         self.current_language = language
         
-        # Print what we're saying
-        lang_emoji = "🇮🇳" if language == 'ta' else "🇬🇧"
-        print(f"\n{lang_emoji} 🔊 LADA: {text}")
+        with self._tts_lock:
+            # Print what we're saying
+            lang_emoji = "🇮🇳" if language == 'ta' else "🇬🇧"
+            print(f"\n{lang_emoji} 🔊 LADA: {text}")
 
-        # For non-Kokoro engines, apply Thanglish conversion if needed
-        tts_text = text
-        tts_language = language
-        if language == 'ta' and self.speak_thanglish_for_tamil:
-            tts_text = self.tamil_to_thanglish(text)
-            tts_language = 'en'
+            # For non-Kokoro engines, apply Thanglish conversion if needed
+            tts_text = text
+            tts_language = language
+            if language == 'ta' and self.speak_thanglish_for_tamil:
+                tts_text = self.tamil_to_thanglish(text)
+                tts_language = 'en'
 
-        # Fallback chain order requested for reliability:
-        # gTTS -> pyttsx3 -> Kokoro
-        tts_chain = []
-        if self.use_gtts and GTTS_AVAILABLE:
-            tts_chain.append(("gtts", lambda: self._speak_gtts(tts_text, tts_language, blocking)))
-        if self.offline_engine:
-            tts_chain.append(("pyttsx3", lambda: self._speak_offline(tts_text, blocking)))
-        if self._kokoro_enabled and KOKORO_AVAILABLE:
-            tts_chain.append(("kokoro", lambda: self._speak_kokoro(text, language)))
+            # Build available engines then prefer the locked/default one first.
+            tts_chain = []
+            if self.use_gtts and GTTS_AVAILABLE:
+                tts_chain.append(("gtts", lambda: self._speak_gtts(tts_text, tts_language, blocking)))
+            if self.offline_engine:
+                tts_chain.append(("pyttsx3", lambda: self._speak_offline(tts_text, blocking)))
+            if self._kokoro_enabled and KOKORO_AVAILABLE and self._kokoro_assets_available:
+                tts_chain.append(("kokoro", lambda: self._speak_kokoro(text, language)))
 
-        # Bias first attempt toward locked engine when available.
-        if self._locked_tts:
-            tts_chain.sort(key=lambda item: 0 if item[0] == self._locked_tts else 1)
+            # Bias first attempt toward locked engine when available.
+            if self._locked_tts:
+                tts_chain.sort(key=lambda item: 0 if item[0] == self._locked_tts else 1)
 
-        for engine_name, speak_fn in tts_chain:
-            try:
-                if speak_fn():
-                    return True
-            except Exception as exc:
-                logger.warning(f"{engine_name} TTS failed: {exc}")
+            for engine_name, speak_fn in tts_chain:
+                try:
+                    if speak_fn():
+                        return True
+                except Exception as exc:
+                    logger.warning(f"{engine_name} TTS failed: {exc}")
 
-        logger.error("No TTS engine succeeded")
-        return False
+            logger.error("No TTS engine succeeded")
+            return False
     
     def _speak_gtts(self, text: str, language: str, blocking: bool) -> bool:
         """Speak using Google TTS (online, natural voice)"""
@@ -426,8 +459,9 @@ class FreeNaturalVoice:
     def _speak_offline_thread(self, text: str):
         """Thread wrapper for non-blocking offline speech"""
         try:
-            self.offline_engine.say(text)
-            self.offline_engine.runAndWait()
+            with self._tts_lock:
+                self.offline_engine.say(text)
+                self.offline_engine.runAndWait()
         except Exception as e:
             logger.error(f"Offline speech thread error: {e}")
     
@@ -443,7 +477,12 @@ class FreeNaturalVoice:
                 playsound(filepath)
             else:
                 # Try system player as last resort
-                os.system(f'start /min wmplayer "{filepath}"')
+                subprocess.Popen([
+                    'wmplayer',
+                    '/play',
+                    '/close',
+                    filepath,
+                ])
         except Exception as e:
             logger.error(f"Audio playback error: {e}")
         finally:
@@ -451,7 +490,7 @@ class FreeNaturalVoice:
             try:
                 if os.path.exists(filepath):
                     os.remove(filepath)
-            except:
+            except Exception as e:
                 pass
     
     def listen(self, language: str = 'auto') -> Optional[str]:
@@ -714,36 +753,43 @@ class FreeNaturalVoice:
     
     def _preload_kokoro(self) -> None:
         """Pre-load Kokoro model in a background thread at startup to avoid first-speak lag."""
+        if not self._kokoro_assets_available or not KOKORO_AVAILABLE or kokoro_onnx is None:
+            return
         try:
-            model_dir = Path(__file__).parent / "models" / "kokoro"
-            model_path = model_dir / "kokoro-v1.0.int8.onnx"
-            voices_path = model_dir / "voices-v1.0.bin"
-            if model_path.exists() and voices_path.exists():
-                self._kokoro_model = kokoro_onnx.Kokoro(str(model_path), str(voices_path))
-                logger.info("✅ Kokoro TTS model pre-loaded (int8, 88MB) - zero first-speak lag")
-            else:
-                logger.warning(f"Kokoro model files not found at {model_dir} - skipping pre-load")
+            model_path, voices_path = self._kokoro_model_paths()
+            self._kokoro_model = kokoro_onnx.Kokoro(str(model_path), str(voices_path))
+            logger.info("✅ Kokoro TTS model pre-loaded (int8, 88MB) - zero first-speak lag")
         except Exception as e:
-            logger.warning(f"Kokoro pre-load failed: {e}")
+            self._mark_kokoro_unavailable(f"Kokoro pre-load failed, switching to fallback TTS: {e}")
 
     def _speak_kokoro(self, text: str, language: str = 'en') -> bool:
         """Speak using Kokoro local neural TTS (82M parameters, studio quality)"""
-        if not KOKORO_AVAILABLE or kokoro_onnx is None:
+        if (
+            not self._kokoro_assets_available
+            or not KOKORO_AVAILABLE
+            or kokoro_onnx is None
+        ):
             return False
         
         try:
             # Load Kokoro model if not already loaded
             if self._kokoro_model is None:
-                model_dir = Path(__file__).parent / "models" / "kokoro"
-                model_path = model_dir / "kokoro-v1.0.int8.onnx"
-                voices_path = model_dir / "voices-v1.0.bin"
+                model_path, voices_path = self._kokoro_model_paths()
                 
                 if not model_path.exists() or not voices_path.exists():
-                    logger.warning(f"Kokoro model files not found at {model_dir}")
+                    self._mark_kokoro_unavailable(
+                        "Kokoro model files are missing at runtime; using fallback TTS engines."
+                    )
                     return False
                 
-                self._kokoro_model = kokoro_onnx.Kokoro(str(model_path), str(voices_path))
-                logger.info("✅ Kokoro TTS model loaded (int8, 88MB)")
+                try:
+                    self._kokoro_model = kokoro_onnx.Kokoro(str(model_path), str(voices_path))
+                    logger.info("✅ Kokoro TTS model loaded (int8, 88MB)")
+                except Exception as load_error:
+                    self._mark_kokoro_unavailable(
+                        f"Kokoro model could not be loaded, using fallback TTS: {load_error}"
+                    )
+                    return False
             
             # Kokoro currently supports English best; for Tamil, romanize it
             if language == 'ta' and self.speak_thanglish_for_tamil:

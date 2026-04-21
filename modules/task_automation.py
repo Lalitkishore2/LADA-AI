@@ -132,7 +132,7 @@ class TaskChoreographer:
                 
                 self.task_queue.task_done()
             
-            except:
+            except Exception as e:
                 continue
     
     def register_step_handler(self, 
@@ -405,7 +405,7 @@ class TaskChoreographer:
                                 execution.results[step.step_id] = result
                                 retried = True
                                 break
-                        except:
+                        except Exception as e:
                             continue
                     
                     if not retried:

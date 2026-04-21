@@ -435,7 +435,7 @@ class VoiceAssistant:
             import pyttsx3
             self.tts_engine = pyttsx3.init()
             self.tts_engine.setProperty('rate', 150)
-        except:
+        except Exception as e:
             logger.warning("[Voice] pyttsx3 not available")
     
     def start(self):

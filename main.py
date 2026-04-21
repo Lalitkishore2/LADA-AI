@@ -506,6 +506,7 @@ Modes:
     gui     - Desktop GUI mode
     webui   - Web UI mode (browser-based chat)
     daemon  - Headless gateway daemon mode (API + WS, no browser)
+    bridge  - Local remote-control bridge client (Render -> laptop, on-demand)
     verify  - Verify all module connections and configuration
     status  - Show system status and exit
     doctor  - Run system diagnostics
@@ -530,6 +531,7 @@ Examples:
     python main.py gui      # Start desktop app
     python main.py webui    # Start web UI in browser
     python main.py daemon   # Start headless gateway daemon on port 18790
+    python main.py bridge   # Start local bridge when you want laptop control
     python main.py verify   # Test all module connections
     python main.py doctor   # Run system diagnostics
     python main.py scan my-plugin  # Scan a plugin
@@ -620,6 +622,17 @@ def main():
                 print("\n💡 Ensure fastapi/uvicorn dependencies are installed.")
                 return
 
+        if arg == 'bridge':
+            try:
+                from modules.remote_bridge_client import run_remote_bridge_client
+                exit_code = run_remote_bridge_client()
+                sys.exit(exit_code)
+            except Exception as e:
+                logger.error(f"Bridge launch error: {e}")
+                print(f"\n❌ Bridge launch error: {e}")
+                print("\n💡 Set LADA_REMOTE_BRIDGE_SERVER_URL and LADA_REMOTE_BRIDGE_PASSWORD in .env")
+                return
+
         if arg == 'verify':
             try:
                 from modules.connection_verifier import verify_all
@@ -628,7 +641,7 @@ def main():
                 print(f"\n❌ Verifier error: {e}")
             return
 
-        if arg in ['voice', 'text', 'gui', 'daemon']:
+        if arg in ['voice', 'text', 'gui', 'daemon', 'bridge']:
             mode = arg
         else:
             print(f"❌ Unknown mode: {arg}")

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from modules.secure_vault import SecureVault, get_secure_vault, init_vault_with_env_migration
+import modules.secure_vault as secure_vault_module
 
 
 class TestSecureVault:
@@ -214,16 +215,32 @@ class TestSecureVault:
 
 class TestSecureVaultSingleton:
     """Test singleton behavior of get_secure_vault()"""
+
+    def setup_method(self):
+        with secure_vault_module._vault_lock:
+            secure_vault_module._vault_instance = None
+
+    def teardown_method(self):
+        with secure_vault_module._vault_lock:
+            secure_vault_module._vault_instance = None
     
     def test_singleton_returns_same_instance(self):
         """Test that get_secure_vault() returns same instance"""
         test_key = SecureVault.generate_master_key()
-        
-        with patch.dict(os.environ, {"LADA_MASTER_KEY": test_key}):
-            vault1 = get_secure_vault()
-            vault2 = get_secure_vault()
-            
-            assert vault1 is vault2
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_path = Path(temp_dir) / "singleton_vault.enc"
+            with patch.dict(
+                os.environ,
+                {
+                    "LADA_MASTER_KEY": test_key,
+                    "LADA_SECURE_VAULT_PATH": str(vault_path),
+                },
+            ):
+                vault1 = get_secure_vault()
+                vault2 = get_secure_vault()
+
+                assert vault1 is vault2
     
     def test_singleton_thread_safety(self):
         """Test singleton creation is thread-safe"""
@@ -234,50 +251,72 @@ class TestSecureVaultSingleton:
             vault = get_secure_vault()
             instances.append(id(vault))
         
-        with patch.dict(os.environ, {"LADA_MASTER_KEY": test_key}):
-            threads = [threading.Thread(target=get_instance) for _ in range(10)]
-            
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-            
-            # All instances should have same ID
-            assert len(set(instances)) == 1
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_path = Path(temp_dir) / "singleton_thread_vault.enc"
+            with patch.dict(
+                os.environ,
+                {
+                    "LADA_MASTER_KEY": test_key,
+                    "LADA_SECURE_VAULT_PATH": str(vault_path),
+                },
+            ):
+                threads = [threading.Thread(target=get_instance) for _ in range(10)]
+                
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                
+                # All instances should have same ID
+                assert len(set(instances)) == 1
 
 
 class TestVaultMigration:
     """Test init_vault_with_env_migration()"""
+
+    def setup_method(self):
+        with secure_vault_module._vault_lock:
+            secure_vault_module._vault_instance = None
+
+    def teardown_method(self):
+        with secure_vault_module._vault_lock:
+            secure_vault_module._vault_instance = None
     
     def test_migration_with_default_keys(self):
         """Test migration with default key list"""
         test_key = SecureVault.generate_master_key()
-        
-        with patch.dict(os.environ, {
-            "LADA_MASTER_KEY": test_key,
-            "OPENAI_API_KEY": "sk-test123",
-            "ANTHROPIC_API_KEY": "ant-test456",
-            "GEMINI_API_KEY": "gem-test789"
-        }):
-            vault = init_vault_with_env_migration()
-            
-            assert vault.get("OPENAI_API_KEY") == "sk-test123"
-            assert vault.get("ANTHROPIC_API_KEY") == "ant-test456"
-            assert vault.get("GEMINI_API_KEY") == "gem-test789"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_path = Path(temp_dir) / "migration_default_vault.enc"
+            with patch.dict(os.environ, {
+                "LADA_MASTER_KEY": test_key,
+                "LADA_SECURE_VAULT_PATH": str(vault_path),
+                "OPENAI_API_KEY": "sk-test123",
+                "ANTHROPIC_API_KEY": "ant-test456",
+                "GEMINI_API_KEY": "gem-test789"
+            }):
+                vault = init_vault_with_env_migration()
+                
+                assert vault.get("OPENAI_API_KEY") == "sk-test123"
+                assert vault.get("ANTHROPIC_API_KEY") == "ant-test456"
+                assert vault.get("GEMINI_API_KEY") == "gem-test789"
     
     def test_migration_with_custom_keys(self):
         """Test migration with custom key list"""
         test_key = SecureVault.generate_master_key()
-        
-        with patch.dict(os.environ, {
-            "LADA_MASTER_KEY": test_key,
-            "CUSTOM_KEY_1": "value1",
-            "CUSTOM_KEY_2": "value2"
-        }):
-            vault = init_vault_with_env_migration(key_names=["CUSTOM_KEY_1", "CUSTOM_KEY_2"])
-            
-            assert vault.get("CUSTOM_KEY_1") == "value1"
-            assert vault.get("CUSTOM_KEY_2") == "value2"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_path = Path(temp_dir) / "migration_custom_vault.enc"
+            with patch.dict(os.environ, {
+                "LADA_MASTER_KEY": test_key,
+                "LADA_SECURE_VAULT_PATH": str(vault_path),
+                "CUSTOM_KEY_1": "value1",
+                "CUSTOM_KEY_2": "value2"
+            }):
+                vault = init_vault_with_env_migration(key_names=["CUSTOM_KEY_1", "CUSTOM_KEY_2"])
+                
+                assert vault.get("CUSTOM_KEY_1") == "value1"
+                assert vault.get("CUSTOM_KEY_2") == "value2"
 
 
 if __name__ == "__main__":

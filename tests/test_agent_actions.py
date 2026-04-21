@@ -132,3 +132,85 @@ class TestAgentActions:
             mock_open.return_value = True
             result = agent.process("open browser")
             assert result is not None
+
+    def test_control_volume_current_level_formats_output(self):
+        import modules.agent_actions as aa
+
+        aa.SYS_OK = False
+        aa.CALENDAR_OK = False
+
+        agent = aa.AgentActions()
+        agent.sys = MagicMock()
+        agent.sys.get_volume.return_value = {"success": True, "volume": 42}
+
+        handled, response = agent._control_volume(None, "volume")
+
+        assert handled is True
+        assert response == "Current volume: 42%."
+
+    def test_control_volume_clamps_announced_value(self):
+        import modules.agent_actions as aa
+
+        aa.SYS_OK = False
+        aa.CALENDAR_OK = False
+
+        agent = aa.AgentActions()
+        agent.sys = MagicMock()
+
+        handled, response = agent._control_volume("150", "set volume to 150")
+
+        assert handled is True
+        agent.sys.set_volume.assert_called_once_with(100)
+        assert response == "Volume set to 100%."
+
+    def test_control_volume_reports_set_failure(self):
+        import modules.agent_actions as aa
+
+        aa.SYS_OK = False
+        aa.CALENDAR_OK = False
+
+        agent = aa.AgentActions()
+        agent.sys = MagicMock()
+        agent.sys.set_volume.return_value = {
+            "success": False,
+            "error": "pycaw not installed",
+        }
+
+        handled, response = agent._control_volume("70", "set volume to 70")
+
+        assert handled is True
+        assert "Couldn't change volume" in response
+        assert "pycaw not installed" in response
+
+    def test_open_app_uses_shellless_subprocess(self):
+        import modules.agent_actions as aa
+
+        aa.SYS_OK = False
+        aa.CALENDAR_OK = False
+
+        agent = aa.AgentActions()
+
+        with patch("modules.agent_actions.subprocess.Popen") as mock_popen:
+            handled, response = agent._open_app("notepad")
+
+        assert handled is True
+        mock_popen.assert_called_once_with(["notepad.exe"])
+
+    def test_file_search_without_pyautogui_uses_search_uri(self):
+        import modules.agent_actions as aa
+
+        aa.SYS_OK = False
+        aa.CALENDAR_OK = False
+        aa.PYAUTOGUI_OK = False
+
+        agent = aa.AgentActions()
+
+        mock_start = MagicMock()
+        with patch.object(aa.os, "startfile", mock_start, create=True):
+            handled, response = agent._search_files("project notes")
+
+        assert handled is True
+        assert "Searching for" in response
+        search_uri = mock_start.call_args[0][0]
+        assert search_uri.startswith("search-ms:query=")
+        assert "project+notes" in search_uri

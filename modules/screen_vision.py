@@ -159,7 +159,7 @@ class ScreenVision:
                 data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
                 confidences = [int(c) for c in data['conf'] if int(c) > 0]
                 avg_confidence = sum(confidences) / len(confidences) if confidences else 0
-            except:
+            except Exception as e:
                 avg_confidence = 0
             
             return {
@@ -243,7 +243,7 @@ class ScreenVision:
             try:
                 prompt = f"Summarize this screen content in 2-3 sentences:\n\n{ocr_result['text'][:2000]}"
                 summary = self.ai_router.query(prompt)
-            except:
+            except Exception as e:
                 pass
         
         return {

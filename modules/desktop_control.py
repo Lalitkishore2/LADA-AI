@@ -250,16 +250,16 @@ class SmartFileFinder:
                     cmd = app_info['cmd']
                     if cmd.startswith('ms-'):
                         # URI scheme
-                        os.system(f'start {cmd}"{file_path}"')
+                        os.startfile(cmd)
                     elif cmd == 'code':
-                        subprocess.Popen(['code', file_path], shell=True)
+                        subprocess.Popen(['code', file_path])
                     else:
-                        subprocess.Popen([cmd, file_path], shell=True)
+                        subprocess.Popen([cmd, file_path])
                     return {'success': True, 'file': file_path, 'app': app,
                             'message': f'Opened {os.path.basename(file_path)} in {app}'}
                 else:
                     # Try the app name directly
-                    subprocess.Popen([app, file_path], shell=True)
+                    subprocess.Popen([app, file_path])
                     return {'success': True, 'file': file_path, 'app': app,
                             'message': f'Opened {os.path.basename(file_path)} in {app}'}
             else:

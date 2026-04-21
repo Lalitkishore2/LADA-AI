@@ -185,7 +185,7 @@ class SentimentAnalyzer:
                 blob = TextBlob(text)
                 polarity = blob.sentiment.polarity
                 subjectivity = blob.sentiment.subjectivity
-            except:
+            except Exception as e:
                 pass
         else:
             # Fallback: simple keyword-based polarity
@@ -237,7 +237,7 @@ class SentimentAnalyzer:
                     },
                     category='mood_tracking'
                 )
-            except:
+            except Exception as e:
                 pass
         
         return result

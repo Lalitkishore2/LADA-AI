@@ -1,85 +1,65 @@
-"""
-LADA v10.0 - Module Test Suite
-Tests all new modules: Sentiment, Encryption, Documents, Pomodoro, Personality, Memory
-"""
+"""LADA v10 module smoke tests (pytest-compatible)."""
 
-print('='*60)
-print('LADA v10.0 - Module Test Suite')
-print('='*60)
 
-# Test 1: Sentiment Analysis
-print('\n1. Sentiment Analysis...')
-try:
-    from modules.sentiment_analysis import SentimentAnalyzer, TEXTBLOB_OK
-    sa = SentimentAnalyzer()
-    r = sa.analyze('I am frustrated, nothing works!')
-    print(f'   TextBlob: {TEXTBLOB_OK}')
-    print(f'   Result: {r.sentiment.value}, {r.emotion.value}, stress={r.stress_level}')
-    print('   ✅ OK')
-except Exception as e:
-    print(f'   ❌ FAILED: {e}')
+def test_v10_sentiment_analysis_smoke():
+    from modules.sentiment_analysis import SentimentAnalyzer
 
-# Test 2: File Encryption
-print('\n2. File Encryption...')
-try:
-    from modules.file_encryption import FileEncryption, CRYPTO_OK
-    print(f'   Crypto: {CRYPTO_OK}')
-    enc = FileEncryption()
-    enc.set_password('test123')
-    print('   Password set OK')
-    print('   ✅ OK')
-except Exception as e:
-    print(f'   ❌ FAILED: {e}')
+    analyzer = SentimentAnalyzer()
+    result = analyzer.analyze("I am frustrated, nothing works!")
 
-# Test 3: Document Reader
-print('\n3. Document Reader...')
-try:
-    from modules.document_reader import DocumentReader, PYMUPDF_OK, DOCX_OK
-    print(f'   PyMuPDF: {PYMUPDF_OK}, DOCX: {DOCX_OK}')
-    dr = DocumentReader()
-    print('   ✅ OK')
-except Exception as e:
-    print(f'   ❌ FAILED: {e}')
+    assert result is not None
+    assert hasattr(result, "sentiment")
+    assert hasattr(result, "emotion")
+    assert hasattr(result, "stress_level")
 
-# Test 4: Pomodoro Timer
-print('\n4. Pomodoro Timer...')
-try:
+
+def test_v10_file_encryption_smoke():
+    from modules.file_encryption import FileEncryption
+
+    encryption = FileEncryption()
+    encryption.set_password("test123")
+
+    assert encryption is not None
+
+
+def test_v10_document_reader_smoke():
+    from modules.document_reader import DocumentReader
+
+    reader = DocumentReader()
+
+    assert reader is not None
+
+
+def test_v10_pomodoro_configuration():
     from modules.productivity_tools import PomodoroTimer
-    pt = PomodoroTimer()
-    pt.configure(work_minutes=25, short_break_minutes=5)
-    print(f'   Config: {pt.work_minutes}min work, {pt.short_break_minutes}min break')
-    print('   ✅ OK')
-except Exception as e:
-    print(f'   ❌ FAILED: {e}')
 
-# Test 5: Personality Modes
-print('\n5. Personality Modes...')
-try:
+    timer = PomodoroTimer()
+    timer.configure(work_minutes=25, short_break_minutes=5)
+
+    assert timer.work_minutes == 25
+    assert timer.short_break_minutes == 5
+
+
+def test_v10_personality_modes_smoke():
     from lada_jarvis_core import LadaPersonality
-    for mode in ['jarvis', 'friday', 'karen', 'casual']:
-        LadaPersonality.set_mode(mode)
-        ack = LadaPersonality.get_acknowledgment()
-        print(f'   {mode.upper()}: "{ack}"')
-    print('   ✅ OK')
-except Exception as e:
-    print(f'   ❌ FAILED: {e}')
 
-# Test 6: Agent Memory
-print('\n6. Agent Memory Mixin...')
-try:
+    for mode in ["jarvis", "friday", "karen", "casual"]:
+        LadaPersonality.set_mode(mode)
+        acknowledgment = LadaPersonality.get_acknowledgment()
+        assert isinstance(acknowledgment, str)
+        assert acknowledgment.strip() != ""
+
+
+def test_v10_agent_memory_mixin_preference_roundtrip():
     from modules.agents.agent_memory import AgentMemoryMixin
-    class TestAgent(AgentMemoryMixin):
-        agent_type = 'test'
+
+    class _MemoryAgent(AgentMemoryMixin):
+        agent_type = "test"
+
         def __init__(self):
             self.init_memory()
-    agent = TestAgent()
-    agent.set_preference('test_pref', 'value123')
-    val = agent.get_preference('test_pref')
-    print(f'   Preference set: {val}')
-    print('   ✅ OK')
-except Exception as e:
-    print(f'   ❌ FAILED: {e}')
 
-print('\n' + '='*60)
-print('ALL TESTS COMPLETE!')
-print('='*60)
+    agent = _MemoryAgent()
+    agent.set_preference("test_pref", "value123")
+
+    assert agent.get_preference("test_pref") == "value123"

@@ -686,7 +686,7 @@ class ScreenshotAnalyzer:
             bbox = gray.getbbox()
             if bbox:
                 regions.append(bbox)
-        except:
+        except Exception as e:
             pass
         return regions
     

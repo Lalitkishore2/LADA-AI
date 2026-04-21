@@ -424,7 +424,7 @@ class MarkdownRenderer:
                 try:
                     from urllib.parse import urlparse
                     domain = urlparse(url).netloc
-                except:
+                except Exception as e:
                     domain = ''
             
             citations_html += self.render_citation(i, title, url, domain) + '<br>'

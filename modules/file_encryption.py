@@ -170,7 +170,7 @@ class FileEncryption:
         # Set restrictive permissions on Unix
         try:
             os.chmod(key_path, 0o600)
-        except:
+        except Exception as e:
             pass
         
         logger.info(f"Key saved to {key_path}")
@@ -564,7 +564,7 @@ class FileEncryption:
             with open(file_path, 'rb') as f:
                 header = f.read(len(self.MAGIC_HEADER))
                 return header == self.MAGIC_HEADER
-        except:
+        except Exception as e:
             return False
     
     def _secure_delete(self, file_path: Path, passes: int = 3):

@@ -194,7 +194,7 @@ class AutoUpdater:
         """Compare version strings"""
         try:
             return pkg_version.parse(latest) > pkg_version.parse(self.current_version)
-        except:
+        except Exception as e:
             return False
     
     def _get_download_url(self, release_data):
@@ -218,7 +218,7 @@ class AutoUpdater:
             cached_time = datetime.fromisoformat(cache.get('checked_at', ''))
             return datetime.now() - cached_time < self.update_check_interval
             
-        except:
+        except Exception as e:
             return False
     
     def _get_cached_update(self):
@@ -231,7 +231,7 @@ class AutoUpdater:
                 return cache.get('update_info')
             return None
             
-        except:
+        except Exception as e:
             return None
     
     def _cache_update(self, update_info):

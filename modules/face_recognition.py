@@ -293,7 +293,7 @@ class FaceRecognition:
         try:
             self._cap = cv2.VideoCapture(0)
             return self._cap.isOpened()
-        except:
+        except Exception as e:
             return False
     
     def stop_camera(self):

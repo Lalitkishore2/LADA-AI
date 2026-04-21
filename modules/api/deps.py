@@ -13,6 +13,7 @@ import json
 import base64
 import hmac
 import hashlib
+import inspect
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -80,6 +81,17 @@ def _jwt_b64url_decode(text: str) -> bytes:
         raise ValueError("invalid base64url payload") from exc
 
 
+def _parse_positive_int_env(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
 class ServerState:
     """
     Holds shared server state that routers need.
@@ -100,7 +112,7 @@ class ServerState:
             logger.warning("[ServerState] Set LADA_WEB_PASSWORD environment variable to use custom password")
         
         self._session_tokens: Dict[str, float] = {}  # token -> expiry timestamp
-        self._session_ttl = int(os.getenv("LADA_SESSION_TTL", "86400"))
+        self._session_ttl = _parse_positive_int_env("LADA_SESSION_TTL", 86400)
         self._session_jwt_enabled = os.getenv("LADA_SESSION_JWT_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
         self._jwt_issuer = os.getenv("LADA_JWT_ISSUER", "lada-api")
         self._jwt_secret = os.getenv("LADA_JWT_SECRET")
@@ -288,7 +300,22 @@ class ServerState:
             try:
                 module = __import__(module_path, fromlist=[class_name])
                 agent_class = getattr(module, class_name)
-                self.agents[agent_name] = agent_class()
+                # Some agents require ai_router in constructor while others use zero-arg init.
+                init_sig = inspect.signature(agent_class.__init__)
+                init_params = list(init_sig.parameters.values())[1:]  # skip self
+                ai_router_param = next((param for param in init_params if param.name == "ai_router"), None)
+                accepts_var_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in init_params
+                )
+                if ai_router_param is not None:
+                    if ai_router_param.kind == inspect.Parameter.POSITIONAL_ONLY:
+                        self.agents[agent_name] = agent_class(self.ai_router)
+                    else:
+                        self.agents[agent_name] = agent_class(ai_router=self.ai_router)
+                elif accepts_var_kwargs:
+                    self.agents[agent_name] = agent_class(ai_router=self.ai_router)
+                else:
+                    self.agents[agent_name] = agent_class()
                 logger.info(f"[APIServer] Loaded agent: {agent_name}")
             except Exception as e:
                 logger.warning(f"[APIServer] Failed to load {agent_name}: {e}")
@@ -335,4 +362,3 @@ class ServerState:
         except Exception as e:
             logger.warning(f"[APIServer] LADA browser adapter initialization failed: {e}")
             self.lada_browser_adapter = None
-

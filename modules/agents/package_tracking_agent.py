@@ -292,7 +292,7 @@ class PackageTrackingAgent:
             if self.browser:
                 try:
                     self.browser.close()
-                except:
+                except Exception as e:
                     pass
                 self.browser = None
     
@@ -306,7 +306,7 @@ class PackageTrackingAgent:
         # Try to get page content
         try:
             page_text = self.browser.get_page_text() if self.browser else ""
-        except:
+        except Exception as e:
             page_text = ""
         
         # Try AI-powered extraction if available
@@ -482,7 +482,7 @@ class PackageTrackingAgent:
                                     estimated_delivery=order.get('delivery'),
                                     tracking_url=self.TRACKING_URLS[Carrier.AMAZON]
                                 ))
-                    except:
+                    except Exception as e:
                         pass
             
             if progress_callback:
@@ -504,7 +504,7 @@ class PackageTrackingAgent:
             if self.browser:
                 try:
                     self.browser.close()
-                except:
+                except Exception as e:
                     pass
                 self.browser = None
     

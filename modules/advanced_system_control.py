@@ -803,7 +803,7 @@ class AdvancedSystemController:
         try:
             for item in directory.iterdir():
                 state[str(item)] = item.stat().st_mtime
-        except:
+        except Exception as e:
             pass
         return state
     

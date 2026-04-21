@@ -15,6 +15,12 @@ from typing import Optional, List, Dict, Callable
 from dataclasses import dataclass, asdict, field
 import socket
 import urllib.request
+import uuid
+
+
+def _new_entity_id(prefix: str) -> str:
+    """Generate collision-resistant ids for in-memory dictionaries."""
+    return f"{prefix}_{uuid.uuid4().hex}"
 
 
 @dataclass
@@ -90,7 +96,7 @@ class AlarmManager:
             label: Description of the alarm
             days: List of days ["Mon", "Tue", ...] or None for one-time
         """
-        alarm_id = f"alarm_{int(time.time() * 1000)}"
+        alarm_id = _new_entity_id("alarm")
         alarm = Alarm(
             id=alarm_id,
             time=time_str,
@@ -229,7 +235,7 @@ class ReminderManager:
             trigger_time: When to trigger
             repeat: "daily", "weekly", "monthly", or None
         """
-        reminder_id = f"rem_{int(time.time() * 1000)}"
+        reminder_id = _new_entity_id("rem")
         reminder = Reminder(
             id=reminder_id,
             message=message,
@@ -325,7 +331,7 @@ class TimerManager:
                     hours: int = 0, label: str = "Timer") -> Timer:
         """Create a new timer"""
         total_seconds = hours * 3600 + minutes * 60 + seconds
-        timer_id = f"timer_{int(time.time() * 1000)}"
+        timer_id = _new_entity_id("timer")
         timer = Timer(
             id=timer_id,
             duration_seconds=total_seconds,
@@ -948,7 +954,7 @@ class PomodoroTimer:
             try:
                 with open(self.history_file, 'r') as f:
                     self.history = json.load(f)
-            except:
+            except Exception as e:
                 self.history = []
     
     def _save_history(self):
@@ -956,7 +962,7 @@ class PomodoroTimer:
         try:
             with open(self.history_file, 'w') as f:
                 json.dump(self.history, f, indent=2)
-        except:
+        except Exception as e:
             pass
     
     def configure(
@@ -1021,7 +1027,7 @@ class PomodoroTimer:
         for callback in self._on_work_start:
             try:
                 callback(task_name, self.work_minutes)
-            except:
+            except Exception as e:
                 pass
         
         return {
@@ -1163,7 +1169,7 @@ class PomodoroTimer:
                 started = datetime.datetime.fromisoformat(session['started_at'])
                 if started >= cutoff:
                     recent.append(session)
-            except:
+            except Exception as e:
                 pass
         
         total_work_minutes = sum(s.get('work_minutes_completed', 0) for s in recent)
@@ -1208,7 +1214,7 @@ class PomodoroTimer:
             for callback in self._on_tick:
                 try:
                     callback(remaining)
-                except:
+                except Exception as e:
                     pass
             
             if remaining <= 0:
@@ -1232,7 +1238,7 @@ class PomodoroTimer:
             for callback in self._on_work_start:
                 try:
                     callback("Work Session", self.work_minutes)
-                except:
+                except Exception as e:
                     pass
     
     def _start_break(self):
@@ -1265,7 +1271,7 @@ class PomodoroTimer:
         for callback in self._on_break_start:
             try:
                 callback(is_long_break, break_minutes)
-            except:
+            except Exception as e:
                 pass
     
     def _play_notification(self):
@@ -1275,10 +1281,17 @@ class PomodoroTimer:
                 import winsound
                 winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
             elif platform.system() == "Darwin":
-                os.system('afplay /System/Library/Sounds/Glass.aiff')
+                subprocess.run(['afplay', '/System/Library/Sounds/Glass.aiff'], check=False)
             else:
-                os.system('paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null || echo -e "\\a"')
-        except:
+                proc = subprocess.run(
+                    ['paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    print('\a', end='')
+        except Exception as e:
             pass
 
 

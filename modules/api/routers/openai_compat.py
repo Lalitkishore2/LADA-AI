@@ -122,6 +122,9 @@ def create_openai_compat_router(state):
                 break
 
         if request.stream:
+            pm = getattr(state.ai_router, 'provider_manager', None)
+            if pm and model_id and not pm.get_provider_for_model(model_id):
+                raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
             return StreamingResponse(
                 _stream_generator(state, messages, model_id, last_user_msg, temperature, max_tokens),
                 media_type="text/event-stream",

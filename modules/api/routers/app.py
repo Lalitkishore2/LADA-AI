@@ -13,6 +13,7 @@ import socket
 import shutil
 import subprocess
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
@@ -39,6 +40,9 @@ def create_app_router(state):
     session_name_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
     remote_rate_windows: Dict[str, Dict[str, float]] = {}
     remote_idempotency_cache: Dict[str, Dict[str, Any]] = {}
+    remote_bridge_devices: Dict[str, Dict[str, Any]] = {}
+    remote_bridge_queues: Dict[str, list[Dict[str, Any]]] = {}
+    remote_bridge_results: Dict[str, Dict[str, Any]] = {}
     modern_ui_probe_cache: Dict[str, Any] = {
         "base_url": "",
         "checked_at": 0.0,
@@ -213,6 +217,44 @@ def create_app_router(state):
     def _remote_idempotency_ttl_seconds() -> int:
         return max(30, _int_env("LADA_REMOTE_IDEMPOTENCY_TTL_SEC", 180))
 
+    def _remote_bridge_device_timeout_sec() -> int:
+        return max(10, _int_env("LADA_REMOTE_BRIDGE_DEVICE_TIMEOUT_SEC", 60))
+
+    def _remote_bridge_queue_max() -> int:
+        return max(1, _int_env("LADA_REMOTE_BRIDGE_QUEUE_MAX", 200))
+
+    def _remote_bridge_dispatch_timeout_sec() -> int:
+        return max(1, _int_env("LADA_REMOTE_BRIDGE_DISPATCH_TIMEOUT_SEC", 30))
+
+    def _remote_bridge_default_device_id() -> str:
+        return str(os.getenv("LADA_REMOTE_BRIDGE_DEFAULT_DEVICE_ID", "") or "").strip()
+
+    def _remote_bridge_auto_dispatch_enabled() -> bool:
+        raw = os.getenv("LADA_REMOTE_BRIDGE_AUTO_DISPATCH")
+        if raw is None or not str(raw).strip():
+            return _rollout_stage() in {"canary", "public"}
+        return _bool_env("LADA_REMOTE_BRIDGE_AUTO_DISPATCH", False)
+
+    def _is_remote_bridge_device_online(device: Dict[str, Any], now_ts: float) -> bool:
+        timeout = _remote_bridge_device_timeout_sec()
+        last_seen = float(device.get("last_seen", 0.0))
+        return last_seen > 0.0 and (now_ts - last_seen) <= timeout
+
+    def _select_auto_bridge_device(now_ts: float) -> str:
+        preferred = _remote_bridge_default_device_id()
+        if preferred:
+            preferred_device = remote_bridge_devices.get(preferred)
+            if preferred_device and _is_remote_bridge_device_online(preferred_device, now_ts):
+                return preferred
+
+        online_ids = []
+        for device_id in sorted(remote_bridge_devices.keys()):
+            device = remote_bridge_devices.get(device_id, {})
+            if _is_remote_bridge_device_online(device, now_ts):
+                online_ids.append(device_id)
+
+        return online_ids[0] if online_ids else ""
+
     def _normalize_idempotency_key(raw_key: str) -> str:
         token = (raw_key or "").strip()
         if not token:
@@ -231,6 +273,25 @@ def create_app_router(state):
         ]
         for key in stale_keys:
             remote_idempotency_cache.pop(key, None)
+
+    def _prune_remote_bridge_state(now_ts: float) -> None:
+        timeout = _remote_bridge_device_timeout_sec()
+        stale_devices = []
+        for device_id, device in remote_bridge_devices.items():
+            if now_ts - float(device.get("last_seen", 0.0)) > (timeout * 10):
+                stale_devices.append(device_id)
+
+        for device_id in stale_devices:
+            remote_bridge_devices.pop(device_id, None)
+            remote_bridge_queues.pop(device_id, None)
+
+        # Keep result cache bounded and fresh
+        stale_result_keys = [
+            key for key, value in remote_bridge_results.items()
+            if now_ts - float(value.get("updated_at", 0.0)) > 3600
+        ]
+        for key in stale_result_keys:
+            remote_bridge_results.pop(key, None)
 
     def _remote_command_allowlist() -> list[str]:
         raw = os.getenv("LADA_REMOTE_ALLOWED_COMMANDS", "").strip()
@@ -405,6 +466,21 @@ def create_app_router(state):
                 ),
             )
 
+    def _parse_bearer_token(authorization: str) -> str:
+        raw = str(authorization or "").strip()
+        if not raw:
+            return ""
+
+        parts = raw.split(None, 1)
+        if len(parts) != 2:
+            return ""
+
+        scheme, token = parts
+        if scheme.lower() != "bearer":
+            return ""
+
+        return token.strip()
+
     def _client_ip(request: Request) -> str:
         forwarded_for = request.headers.get("x-forwarded-for", "").strip()
         real_ip = request.headers.get("x-real-ip", "").strip()
@@ -463,7 +539,7 @@ def create_app_router(state):
 
     def _token_fingerprint(request: Request) -> str:
         auth_header = request.headers.get("authorization", "")
-        token = auth_header[7:] if auth_header.startswith("Bearer ") else request.query_params.get("token", "")
+        token = _parse_bearer_token(auth_header) or request.query_params.get("token", "")
         if not token:
             return ""
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -682,11 +758,23 @@ def create_app_router(state):
         request_id = ensure_request_id(request, prefix="http")
         max_bytes = _max_download_bytes()
         allowlist = _remote_command_allowlist()
+        now_ts = time.time()
+        _prune_remote_bridge_state(now_ts)
+        online_bridge_devices = [
+            device_id
+            for device_id, device in remote_bridge_devices.items()
+            if _is_remote_bridge_device_online(device, now_ts)
+        ]
         return {
             "request_id": request_id,
             "enabled": _remote_control_enabled(),
             "downloads_enabled": _remote_download_enabled(),
             "dangerous_enabled": _dangerous_remote_enabled(),
+            "bridge_supported": True,
+            "bridge_auto_dispatch": _remote_bridge_auto_dispatch_enabled(),
+            "bridge_default_device_id": _remote_bridge_default_device_id(),
+            "bridge_online_device_count": len(online_bridge_devices),
+            "bridge_online_devices": sorted(online_bridge_devices),
             "command_policy": "allowlist" if allowlist else "blocklist",
             "allowed_command_prefixes": allowlist,
             "command_rpm": _remote_command_rpm(),
@@ -694,6 +782,200 @@ def create_app_router(state):
             "download_rpm": _remote_download_rpm(),
             "allowed_roots": [str(p) for p in _allowed_remote_roots()],
             "max_download_mb": round(max_bytes / (1024 * 1024), 2),
+        }
+
+    @r.post("/remote/device/register")
+    async def remote_device_register(request: Request, body: dict = Body(default={})):
+        request_id = ensure_request_id(request, prefix="http")
+        _enforce_rollout_remote_access(request, "command")
+        if not _remote_control_enabled():
+            raise HTTPException(status_code=403, detail="Remote control is disabled.")
+
+        device_id = str(body.get("device_id", "")).strip()
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id is required")
+        if len(device_id) > 128:
+            raise HTTPException(status_code=400, detail="device_id is too long")
+
+        now_ts = time.time()
+        _prune_remote_bridge_state(now_ts)
+        remote_bridge_devices[device_id] = {
+            "device_id": device_id,
+            "label": str(body.get("label", "")).strip()[:128],
+            "capabilities": body.get("capabilities", {}),
+            "metadata": body.get("metadata", {}),
+            "registered_at": remote_bridge_devices.get(device_id, {}).get("registered_at", now_ts),
+            "last_seen": now_ts,
+        }
+        remote_bridge_queues.setdefault(device_id, [])
+        return {
+            "success": True,
+            "request_id": request_id,
+            "device_id": device_id,
+            "registered": True,
+        }
+
+    @r.post("/remote/device/heartbeat")
+    async def remote_device_heartbeat(request: Request, body: dict = Body(default={})):
+        request_id = ensure_request_id(request, prefix="http")
+        _enforce_rollout_remote_access(request, "command")
+        if not _remote_control_enabled():
+            raise HTTPException(status_code=403, detail="Remote control is disabled.")
+
+        device_id = str(body.get("device_id", "")).strip()
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id is required")
+
+        now_ts = time.time()
+        _prune_remote_bridge_state(now_ts)
+        device = remote_bridge_devices.get(device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not registered")
+        device["last_seen"] = now_ts
+        return {"success": True, "request_id": request_id, "device_id": device_id}
+
+    @r.get("/remote/devices")
+    async def remote_devices(request: Request):
+        request_id = ensure_request_id(request, prefix="http")
+        _enforce_rollout_remote_access(request, "command")
+        if not _remote_control_enabled():
+            raise HTTPException(status_code=403, detail="Remote control is disabled.")
+        now_ts = time.time()
+        _prune_remote_bridge_state(now_ts)
+        timeout = _remote_bridge_device_timeout_sec()
+
+        devices = []
+        for device_id, device in remote_bridge_devices.items():
+            queue_len = len(remote_bridge_queues.get(device_id, []))
+            last_seen = float(device.get("last_seen", 0.0))
+            devices.append({
+                "device_id": device_id,
+                "label": device.get("label", ""),
+                "online": (now_ts - last_seen) <= timeout,
+                "last_seen": datetime.fromtimestamp(last_seen).isoformat() if last_seen else "",
+                "queue_length": queue_len,
+                "capabilities": device.get("capabilities", {}),
+            })
+        devices.sort(key=lambda item: item["device_id"])
+        return {"success": True, "request_id": request_id, "devices": devices}
+
+    @r.get("/remote/device/{device_id}/next-command")
+    async def remote_device_next_command(device_id: str, request: Request):
+        request_id = ensure_request_id(request, prefix="http")
+        _enforce_rollout_remote_access(request, "command")
+        if not _remote_control_enabled():
+            raise HTTPException(status_code=403, detail="Remote control is disabled.")
+
+        now_ts = time.time()
+        _prune_remote_bridge_state(now_ts)
+        device = remote_bridge_devices.get(device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not registered")
+        device["last_seen"] = now_ts
+
+        dispatch_timeout = _remote_bridge_dispatch_timeout_sec()
+        in_flight = [
+            item
+            for item in remote_bridge_results.values()
+            if item.get("device_id") == device_id and item.get("status") == "dispatched"
+        ]
+        if in_flight:
+            in_flight.sort(key=lambda item: float(item.get("dispatched_at", 0.0)))
+            pending = in_flight[0]
+            dispatched_at = float(pending.get("dispatched_at", 0.0))
+
+            if dispatched_at and (now_ts - dispatched_at) < dispatch_timeout:
+                return {"success": True, "request_id": request_id, "has_command": False}
+
+            pending["dispatched_at"] = now_ts
+            pending["updated_at"] = now_ts
+            pending["redelivery_count"] = int(pending.get("redelivery_count", 0)) + 1
+            return {
+                "success": True,
+                "request_id": request_id,
+                "has_command": True,
+                "command": {
+                    "command_id": pending["command_id"],
+                    "command": pending["command"],
+                    "created_at": pending["created_at"],
+                    "metadata": pending.get("metadata", {}),
+                },
+            }
+
+        queue = remote_bridge_queues.setdefault(device_id, [])
+        if not queue:
+            return {"success": True, "request_id": request_id, "has_command": False}
+
+        item = queue.pop(0)
+        item["status"] = "dispatched"
+        item["dispatched_at"] = now_ts
+        item["redelivery_count"] = int(item.get("redelivery_count", 0))
+        remote_bridge_results[item["command_id"]] = {
+            **item,
+            "updated_at": now_ts,
+        }
+        return {
+            "success": True,
+            "request_id": request_id,
+            "has_command": True,
+            "command": {
+                "command_id": item["command_id"],
+                "command": item["command"],
+                "created_at": item["created_at"],
+                "metadata": item.get("metadata", {}),
+            },
+        }
+
+    @r.post("/remote/device/{device_id}/command-result")
+    async def remote_device_command_result(device_id: str, request: Request, body: dict = Body(default={})):
+        request_id = ensure_request_id(request, prefix="http")
+        _enforce_rollout_remote_access(request, "command")
+        if not _remote_control_enabled():
+            raise HTTPException(status_code=403, detail="Remote control is disabled.")
+
+        command_id = str(body.get("command_id", "")).strip()
+        if not command_id:
+            raise HTTPException(status_code=400, detail="command_id is required")
+
+        now_ts = time.time()
+        _prune_remote_bridge_state(now_ts)
+        existing = remote_bridge_results.get(command_id)
+        if not existing or existing.get("device_id") != device_id:
+            raise HTTPException(status_code=404, detail="Command not found for device")
+
+        result_payload = {
+            "success": bool(body.get("success", False)),
+            "response": str(body.get("response", "")),
+            "error": str(body.get("error", "")),
+            "completed_at": datetime.now().isoformat(),
+        }
+        existing["status"] = "completed" if result_payload["success"] else "failed"
+        existing["result"] = result_payload
+        existing["updated_at"] = now_ts
+
+        device = remote_bridge_devices.get(device_id)
+        if device:
+            device["last_seen"] = now_ts
+
+        return {"success": True, "request_id": request_id, "command_id": command_id}
+
+    @r.get("/remote/device/{device_id}/command-result/{command_id}")
+    async def remote_device_get_command_result(device_id: str, command_id: str, request: Request):
+        request_id = ensure_request_id(request, prefix="http")
+        _enforce_rollout_remote_access(request, "command")
+        if not _remote_control_enabled():
+            raise HTTPException(status_code=403, detail="Remote control is disabled.")
+        item = remote_bridge_results.get(command_id)
+        if not item or item.get("device_id") != device_id:
+            raise HTTPException(status_code=404, detail="Command result not found")
+
+        result = item.get("result")
+        return {
+            "success": True,
+            "request_id": request_id,
+            "command_id": command_id,
+            "status": item.get("status", "unknown"),
+            "result": result,
         }
 
     @r.post("/remote/command")
@@ -708,12 +990,22 @@ def create_app_router(state):
             )
 
         command = str(body.get("command", "")).strip()
+        target_device_id = str(body.get("device_id", "")).strip()
+        auto_dispatched = False
         if not command:
             _audit_remote_event("remote.command", False, request, {"reason": "missing_command"})
             raise HTTPException(status_code=400, detail="Command is required")
         if len(command) > 500:
             _audit_remote_event("remote.command", False, request, {"reason": "command_too_long"})
             raise HTTPException(status_code=400, detail="Command is too long")
+
+        now_ts = time.time()
+        _prune_remote_bridge_state(now_ts)
+        if not target_device_id and _remote_bridge_auto_dispatch_enabled():
+            auto_target_device_id = _select_auto_bridge_device(now_ts)
+            if auto_target_device_id:
+                target_device_id = auto_target_device_id
+                auto_dispatched = True
 
         idempotency_key = _normalize_idempotency_key(request.headers.get("idempotency-key", ""))
         idempotency_scope = _token_fingerprint(request) or _client_ip(request) or "unknown"
@@ -725,7 +1017,9 @@ def create_app_router(state):
             cached_entry = remote_idempotency_cache.get(idempotency_cache_key)
             if cached_entry:
                 cached_command = str(cached_entry.get("command", ""))
-                if cached_command != command:
+                cached_device = str(cached_entry.get("device_id", ""))
+                current_device = target_device_id or ""
+                if cached_command != command or cached_device != current_device:
                     _audit_remote_event(
                         "remote.command",
                         False,
@@ -733,12 +1027,13 @@ def create_app_router(state):
                         {
                             "reason": "idempotency_conflict",
                             "command": command,
+                            "device_id": current_device,
                             "idempotency_key": idempotency_key,
                         },
                     )
                     raise HTTPException(
                         status_code=409,
-                        detail="Idempotency key reuse with a different command is not allowed.",
+                        detail="Idempotency key reuse with a different command/device is not allowed.",
                     )
 
                 replay_payload = dict(cached_entry.get("response") or {})
@@ -821,6 +1116,67 @@ def create_app_router(state):
                     ),
                 )
 
+        if target_device_id:
+            now_ts = time.time()
+            _prune_remote_bridge_state(now_ts)
+            if target_device_id not in remote_bridge_devices:
+                raise HTTPException(status_code=404, detail="Device not registered")
+            queue = remote_bridge_queues.setdefault(target_device_id, [])
+            if len(queue) >= _remote_bridge_queue_max():
+                raise HTTPException(status_code=429, detail="Remote device queue is full")
+
+            command_id = f"rcmd-{uuid.uuid4().hex[:16]}"
+            created_at = datetime.now().isoformat()
+            queue_item = {
+                "command_id": command_id,
+                "device_id": target_device_id,
+                "command": command,
+                "created_at": created_at,
+                "status": "queued",
+                "metadata": body.get("metadata", {}),
+            }
+            queue.append(queue_item)
+
+            response_payload = {
+                "success": True,
+                "queued": True,
+                "command_id": command_id,
+                "device_id": target_device_id,
+                "queue_length": len(queue),
+                "engine": "remote_bridge_queue",
+                "response": f"Queued for device {target_device_id}",
+                "auto_dispatched": auto_dispatched,
+                "timestamp": created_at,
+                "request_id": request_id,
+            }
+            if idempotency_key:
+                response_payload["idempotency"] = {
+                    "key": idempotency_key,
+                    "replayed": False,
+                }
+                if idempotency_cache_key:
+                    remote_idempotency_cache[idempotency_cache_key] = {
+                        "created_at": time.time(),
+                        "command": command,
+                        "device_id": target_device_id,
+                        "response": dict(response_payload),
+                    }
+
+            _audit_remote_event(
+                "remote.command",
+                True,
+                request,
+                {
+                    "command": command,
+                    "engine": "remote_bridge_queue",
+                    "handled": False,
+                    "device_id": target_device_id,
+                    "queued": True,
+                    "auto_dispatched": auto_dispatched,
+                },
+            )
+            return response_payload
+
         state.load_components()
         if not state.jarvis and not state.ai_router:
             _audit_remote_event("remote.command", False, request, {"reason": "no_processor", "command": command})
@@ -864,6 +1220,7 @@ def create_app_router(state):
                 "engine": result.get("engine", "unknown"),
                 "handled": result.get("handled", "false") == "true",
                 "response": result.get("response", ""),
+                "auto_dispatched": False,
                 "timestamp": datetime.now().isoformat(),
                 "request_id": request_id,
             }
@@ -876,6 +1233,7 @@ def create_app_router(state):
                     remote_idempotency_cache[idempotency_cache_key] = {
                         "created_at": time.time(),
                         "command": command,
+                        "device_id": "",
                         "response": dict(response_payload),
                     }
 

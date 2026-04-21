@@ -565,7 +565,7 @@ class CalendarController:
             try:
                 start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
                 end_dt = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
-            except:
+            except Exception as e:
                 start_dt = datetime.now()
                 end_dt = datetime.now()
         

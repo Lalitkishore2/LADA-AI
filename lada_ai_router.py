@@ -468,6 +468,22 @@ class HybridAIRouter:
     # ProviderManager Integration
     # ============================================================
 
+    def _forced_model_unavailable_message(self, model_id: str) -> str:
+        """Build a user-facing message when a selected model is unavailable."""
+        if not model_id:
+            return "The selected model is unavailable right now."
+        if self.model_registry:
+            model = self.model_registry.get_model(model_id)
+            if model:
+                return (
+                    f"Selected model '{model.name}' is currently offline. "
+                    "Start the model provider (for local Ollama, make sure Ollama is running) or choose another model."
+                )
+        return (
+            f"Selected model '{model_id}' is currently unavailable. "
+            "Choose another model or use Auto routing."
+        )
+
     def _query_via_provider_manager(self, prompt: str, web_context: str = "", forced_model: Optional[str] = None) -> Optional[str]:
         """
         Route a query through the ProviderManager.
@@ -510,6 +526,12 @@ class HybridAIRouter:
                 if not forced_model:
                     self._phase2_forced_model = None
                 logger.info(f"[Router] Using forced model: {model_id}")
+                if not provider:
+                    self.current_backend_name = f"{model_id} (offline)"
+                    return self._forced_model_unavailable_message(model_id)
+                if hasattr(provider, "ensure_available") and not provider.ensure_available():
+                    self.current_backend_name = f"{model_id} (offline)"
+                    return self._forced_model_unavailable_message(model_id)
 
             if not provider:
                 selection = self.provider_manager.get_best_model(prompt)
@@ -632,6 +654,27 @@ class HybridAIRouter:
                 model_id = effective_forced
                 if not forced_model:
                     self._phase2_forced_model = None
+                provider = self.provider_manager.get_provider_for_model(model_id)
+                if not provider:
+                    message = self._forced_model_unavailable_message(model_id)
+                    self.current_backend_name = f"{model_id} (offline)"
+                    yield {
+                        'chunk': message,
+                        'source': 'error',
+                        'done': True,
+                        'metadata': {'error': 'model_unavailable', 'model_id': model_id},
+                    }
+                    return
+                if hasattr(provider, "ensure_available") and not provider.ensure_available():
+                    message = self._forced_model_unavailable_message(model_id)
+                    self.current_backend_name = f"{model_id} (offline)"
+                    yield {
+                        'chunk': message,
+                        'source': 'error',
+                        'done': True,
+                        'metadata': {'error': 'model_unavailable', 'model_id': model_id},
+                    }
+                    return
                 self.current_backend_name = f"forced ({model_id})"
                 logger.info(f"[Router] Streaming with forced model: {model_id}")
             else:
@@ -836,10 +879,45 @@ class HybridAIRouter:
         return 8192
 
     def get_all_available_models(self) -> List[Dict[str, Any]]:
-        """Get all available models from the registry for UI dropdown"""
+        """Get model list for UI dropdown with live provider availability."""
         if not self.model_registry:
             return []
-        return self.model_registry.to_dropdown_items()
+
+        items = self.model_registry.to_dropdown_items()
+        if not self.provider_manager:
+            return items
+
+        provider_availability: Dict[str, bool] = {}
+        for provider_id, provider in getattr(self.provider_manager, "providers", {}).items():
+            ensure_available = getattr(provider, "ensure_available", None)
+            if not callable(ensure_available):
+                provider_availability[provider_id] = bool(getattr(provider, "is_available", True))
+                continue
+            try:
+                provider_availability[provider_id] = bool(ensure_available())
+            except Exception as exc:
+                logger.warning(f"[Router] Provider availability check failed for {provider_id}: {exc}")
+                provider_availability[provider_id] = False
+
+        normalized: List[Dict[str, Any]] = []
+        for item in items:
+            row = dict(item)
+            provider_id = str(row.get("provider", "")).strip()
+            if provider_id in provider_availability:
+                is_available = provider_availability[provider_id]
+                row["available"] = is_available
+                name = str(row.get("name", "")).strip()
+                if name:
+                    lower_name = name.lower()
+                    if is_available and lower_name.endswith("(offline)"):
+                        marker_index = lower_name.rfind("(offline)")
+                        name = name[:marker_index].rstrip()
+                    elif not is_available and "(offline)" not in lower_name:
+                        name = f"{name} (offline)"
+                    row["name"] = name
+            normalized.append(row)
+
+        return normalized
 
     def get_context_budget(self, model_id: str = None) -> Optional[Dict[str, Any]]:
         """Get context window budget info for UI display"""

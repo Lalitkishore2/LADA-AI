@@ -15,6 +15,7 @@ This module handles ALL voice commands including:
 
 import os
 import re
+import shlex
 import subprocess
 import webbrowser
 import psutil
@@ -366,15 +367,25 @@ For multi-step tasks, chain steps with >>."""
             
             elif action_type == "set_volume":
                 level = int(params[0]) if params else 50
-                if self.system:
-                    self.system.set_volume(level)
-                    return True, f"Volume set to {level}%"
+                level = max(0, min(100, level))
+                if not self.system:
+                    return True, "System control not available for volume changes."
+                result = self.system.set_volume(level)
+                if isinstance(result, dict) and not result.get("success", False):
+                    detail = result.get("error") or result.get("message") or "unknown error"
+                    return True, f"I couldn't set the volume: {detail}"
+                return True, f"Volume set to {level}%"
             
             elif action_type == "set_brightness":
                 level = int(params[0]) if params else 50
-                if self.system:
-                    self.system.set_brightness(level)
-                    return True, f"Brightness set to {level}%"
+                level = max(0, min(100, level))
+                if not self.system:
+                    return True, "System control not available for brightness changes."
+                result = self.system.set_brightness(level)
+                if isinstance(result, dict) and not result.get("success", False):
+                    detail = result.get("error") or result.get("message") or "unknown error"
+                    return True, f"I couldn't set the brightness: {detail}"
+                return True, f"Brightness set to {level}%"
             
             elif action_type == "open_folder":
                 path = params[0] if params else ""
@@ -383,7 +394,10 @@ For multi-step tasks, chain steps with >>."""
             
             elif action_type == "run_command":
                 cmd = params[0] if params else ""
-                subprocess.Popen(cmd, shell=True)
+                args = shlex.split(cmd, posix=False)
+                if not args:
+                    return True, "No command provided."
+                subprocess.Popen(args)
                 return True, f"Running: {cmd}"
             
             elif action_type == "answer":
@@ -460,13 +474,26 @@ For multi-step tasks, chain steps with >>."""
         """Execute autonomous Comet-style task"""
         try:
             # Try to use Comet agent if available
+            comet = None
             try:
-                from modules.agents.comet_agent import CometAgent
-                comet = CometAgent()
-                result = comet.execute_task(task)
-                return True, result
-            except:
-                pass
+                from modules.comet_agent import create_comet_agent
+
+                comet = create_comet_agent(self.ai_router)
+                result = comet.execute_task_sync(task)
+                if getattr(result, "success", False):
+                    return True, getattr(result, "message", "Task completed.")
+
+                error_text = getattr(result, "error", "") or getattr(result, "message", "")
+                if error_text:
+                    logger.warning(f"Comet task did not complete: {error_text}")
+            except Exception as comet_error:
+                logger.debug(f"Comet agent unavailable, using fallback: {comet_error}")
+            finally:
+                if comet and hasattr(comet, "cleanup"):
+                    try:
+                        comet.cleanup()
+                    except Exception:
+                        pass
             
             # Fallback: Break down task and execute
             logger.info(f"[JARVIS] Autonomous task: {task}")
@@ -569,7 +596,7 @@ For multi-step tasks, chain steps with >>."""
             }
             
             exe = app_map.get(app_name.lower(), f"{app_name}.exe")
-            subprocess.run(f"taskkill /IM {exe} /F", shell=True, capture_output=True)
+            subprocess.run(["taskkill", "/IM", exe, "/F"], capture_output=True, check=False)
             return True, f"Closed {app_name}"
             
         except Exception as e:
@@ -616,15 +643,15 @@ For multi-step tasks, chain steps with >>."""
         try:
             if folder_path and cmd == 'code':
                 # VS Code with folder
-                subprocess.Popen(f'code "{folder_path}"', shell=True)
+                subprocess.Popen(['code', folder_path])
                 return True, f"Opening VS Code in {folder_path}"
             elif folder_path and cmd == 'explorer':
                 os.startfile(folder_path)
                 return True, f"Opening folder: {folder_path}"
             else:
-                subprocess.Popen(cmd, shell=True)
+                subprocess.Popen([cmd])
                 return True, f"Opening {app_name}"
-        except:
+        except Exception as e:
             return False, f"Couldn't open {app_name}"
     
     def process(self, command: str) -> Tuple[bool, str]:
@@ -774,46 +801,70 @@ For multi-step tasks, chain steps with >>."""
         """Handle volume control commands"""
         if not self.system:
             return False, ""
-        
-        # Set specific volume
-        if any(x in cmd for x in ['set volume', 'volume to', 'change volume', 'make volume', 'volume at']):
-            match = re.search(r'(\d+)', cmd)
-            if match:
-                level = min(100, max(0, int(match.group(1))))
-                result = self.system.set_volume(level)
-                if result.get('success'):
-                    return True, f"{self._ack()} Volume set to {level}%."
-                return True, f"Couldn't change volume: {result.get('error', 'unknown error')}"
-        
-        # Mute
-        if any(x in cmd for x in ['mute', 'mute volume', 'silence', 'quiet']):
-            self.system.set_volume(0)
-            return True, "Volume muted."
-        
+
+        # Set specific volume (supports: "set the laptop volume by 70%", "volume to 40", etc.)
+        set_match = re.search(
+            r'\b(?:set|change|adjust|make)\s+(?:the\s+)?(?:laptop\s+|system\s+|speaker\s+)?volume(?:\s+(?:to|at|by))?\s*(\d{1,3})\s*%?\b',
+            cmd,
+        )
+        if not set_match:
+            set_match = re.search(r'\bvolume\s*(?:to|at|by)\s*(\d{1,3})\s*%?\b', cmd)
+
+        if set_match:
+            level = min(100, max(0, int(set_match.group(1))))
+            result = self.system.set_volume(level)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"Couldn't change volume: {detail}"
+            return True, f"{self._ack()} Volume set to {level}%."
+
         # Unmute / Max volume
         if any(x in cmd for x in ['unmute', 'full volume', 'max volume', 'maximum volume', '100 volume']):
-            self.system.set_volume(100)
+            result = self.system.set_volume(100)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"Couldn't change volume: {detail}"
             return True, "Volume set to maximum."
+        
+        # Mute
+        if any(x in cmd for x in ['mute', 'mute volume', 'silence', 'quiet']) and 'unmute' not in cmd:
+            result = self.system.set_volume(0)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"Couldn't change volume: {detail}"
+            return True, "Volume muted."
         
         # Volume up
         if any(x in cmd for x in ['volume up', 'increase volume', 'louder', 'turn up', 'raise volume']):
             vol = self.system.get_volume()
             current = vol.get('volume', 50) if isinstance(vol, dict) else 50
+            if not isinstance(current, (int, float)):
+                current = 50
             new_vol = min(100, current + 10)
-            self.system.set_volume(new_vol)
+            result = self.system.set_volume(new_vol)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"Couldn't change volume: {detail}"
             return True, f"Volume increased to {new_vol}%."
         
         # Volume down
         if any(x in cmd for x in ['volume down', 'decrease volume', 'quieter', 'lower volume', 'turn down', 'softer']):
             vol = self.system.get_volume()
             current = vol.get('volume', 50) if isinstance(vol, dict) else 50
+            if not isinstance(current, (int, float)):
+                current = 50
             new_vol = max(0, current - 10)
-            self.system.set_volume(new_vol)
+            result = self.system.set_volume(new_vol)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"Couldn't change volume: {detail}"
             return True, f"Volume decreased to {new_vol}%."
         
         # Current volume
         if any(x in cmd for x in ['what is the volume', 'current volume', 'volume level', 'how loud', 'check volume']):
             vol = self.system.get_volume()
+            if isinstance(vol, dict) and vol.get('success', True) is False:
+                return True, "I couldn't read the current volume level."
             current = vol.get('volume', 'unknown') if isinstance(vol, dict) else vol
             return True, f"Volume is at {current}%."
         
@@ -869,7 +920,7 @@ For multi-step tasks, chain steps with >>."""
                         time_left = ""
                     return True, f"Battery is at {percent}%, {plugged}{time_left}."
                 return True, "This appears to be a desktop PC without a battery."
-            except:
+            except Exception as e:
                 return True, "Battery information unavailable."
         return False, ""
     
@@ -900,7 +951,7 @@ For multi-step tasks, chain steps with >>."""
             try:
                 battery = psutil.sensors_battery()
                 bat_str = f", Battery: {battery.percent}%" if battery else ""
-            except:
+            except Exception as e:
                 bat_str = ""
             return True, f"CPU: {cpu}%, RAM: {mem.percent}%, Disk: {disk.percent}%{bat_str}."
         
@@ -937,20 +988,21 @@ For multi-step tasks, chain steps with >>."""
                     if app_cmd.startswith('ms-'):  # Windows settings URI
                         os.startfile(app_cmd)
                     else:
-                        subprocess.Popen(app_cmd, shell=True, 
-                                       stdout=subprocess.DEVNULL, 
-                                       stderr=subprocess.DEVNULL)
+                        subprocess.Popen([app_cmd],
+                                         stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
                     return True, f"{self._ack()} Opening {app_name}."
                 except Exception as e:
                     return True, f"Couldn't open {app_name}: {e}"
         
         # Try as generic command
         try:
-            subprocess.Popen(target, shell=True, 
-                           stdout=subprocess.DEVNULL, 
-                           stderr=subprocess.DEVNULL)
+            args = shlex.split(target, posix=False) or [target]
+            subprocess.Popen(args,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
             return True, f"{self._ack()} Opening {target}."
-        except:
+        except Exception as e:
             return True, f"I couldn't find '{target}'. Try being more specific."
     
     def _handle_close_app(self, cmd: str) -> Tuple[bool, str]:
@@ -984,9 +1036,9 @@ For multi-step tasks, chain steps with >>."""
         process_name = process_map.get(target, f"{target}.exe")
         
         try:
-            os.system(f'taskkill /f /im {process_name}')
+            subprocess.run(["taskkill", "/f", "/im", process_name], capture_output=True, check=False)
             return True, f"{self._ack()} Closed {target}."
-        except:
+        except Exception as e:
             return True, f"Couldn't close {target}."
     
     # ============ WEB & YOUTUBE ============
@@ -1086,7 +1138,7 @@ For multi-step tasks, chain steps with >>."""
                     return True, f"Screenshot saved to {filename.name}."
                 except ImportError:
                     # Fallback to snipping tool
-                    subprocess.Popen('snippingtool /clip', shell=True)
+                    subprocess.Popen(['snippingtool', '/clip'])
                     return True, "Snipping tool opened. Select area to capture."
             except Exception as e:
                 return True, f"Couldn't take screenshot: {e}"
@@ -1118,7 +1170,7 @@ For multi-step tasks, chain steps with >>."""
                     buff = ctypes.create_unicode_buffer(length + 1)
                     user32.GetWindowTextW(hwnd, buff, length + 1)
                     active_window = buff.value
-                except:
+                except Exception as e:
                     active_window = "Unknown"
                 
                 # Take screenshot
@@ -1162,7 +1214,7 @@ For multi-step tasks, chain steps with >>."""
                 buff = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buff, length + 1)
                 return True, f"Active window: {buff.value}"
-            except:
+            except Exception as e:
                 return True, "Couldn't get active window."
         
         # Mouse position
@@ -1171,7 +1223,7 @@ For multi-step tasks, chain steps with >>."""
                 import pyautogui
                 x, y = pyautogui.position()
                 return True, f"Mouse is at position {x}, {y}."
-            except:
+            except Exception as e:
                 return True, "Couldn't get mouse position."
         
         # Click at position
@@ -1182,7 +1234,7 @@ For multi-step tasks, chain steps with >>."""
                 x, y = int(click_match.group(1)), int(click_match.group(2))
                 pyautogui.click(x, y)
                 return True, f"Clicked at {x}, {y}."
-            except:
+            except Exception as e:
                 return True, "Couldn't click at that position."
         
         # Type text
@@ -1193,7 +1245,7 @@ For multi-step tasks, chain steps with >>."""
                 text = type_match.group(1)
                 pyautogui.typewrite(text, interval=0.02)
                 return True, f"Typed: {text}"
-            except:
+            except Exception as e:
                 return True, "Couldn't type that text."
         
         return False, ""
@@ -1231,7 +1283,7 @@ For multi-step tasks, chain steps with >>."""
             if any(x in cmd for x in ['stop music', 'stop playing']):
                 press_key(VK_MEDIA_STOP)
                 return True, "Playback stopped."
-        except:
+        except Exception as e:
             pass
         
         return False, ""
@@ -1240,25 +1292,25 @@ For multi-step tasks, chain steps with >>."""
     
     def _handle_power(self, cmd: str) -> Tuple[bool, str]:
         """Handle power commands (shutdown, restart)"""
+        if 'confirm shutdown' in cmd:
+            subprocess.run(['shutdown', '/s', '/t', '60'], check=False)
+            return True, "Shutting down in 60 seconds. Say 'cancel shutdown' to abort."
+
+        if 'cancel shutdown' in cmd:
+            subprocess.run(['shutdown', '/a'], check=False)
+            return True, "Shutdown cancelled."
+
+        if 'confirm restart' in cmd:
+            subprocess.run(['shutdown', '/r', '/t', '60'], check=False)
+            return True, "Restarting in 60 seconds. Say 'cancel shutdown' to abort."
+
         # Shutdown
         if any(x in cmd for x in ['shutdown', 'turn off computer', 'shut down', 'power off']):
             return True, "⚠️ Say 'confirm shutdown' to shut down, or 'cancel' to abort."
-        
-        if 'confirm shutdown' in cmd:
-            os.system('shutdown /s /t 60')
-            return True, "Shutting down in 60 seconds. Say 'cancel shutdown' to abort."
-        
-        if 'cancel shutdown' in cmd:
-            os.system('shutdown /a')
-            return True, "Shutdown cancelled."
-        
+
         # Restart
         if any(x in cmd for x in ['restart', 'reboot', 'restart computer']):
             return True, "⚠️ Say 'confirm restart' to restart, or 'cancel' to abort."
-        
-        if 'confirm restart' in cmd:
-            os.system('shutdown /r /t 60')
-            return True, "Restarting in 60 seconds. Say 'cancel shutdown' to abort."
         
         return False, ""
     
@@ -1266,12 +1318,12 @@ For multi-step tasks, chain steps with >>."""
         """Handle lock and sleep commands"""
         # Lock screen
         if any(x in cmd for x in ['lock screen', 'lock computer', 'lock pc', 'lock']):
-            subprocess.run('rundll32.exe user32.dll,LockWorkStation', shell=True)
+            subprocess.run(['rundll32.exe', 'user32.dll,LockWorkStation'], check=False)
             return True, "Locking the screen."
         
         # Sleep
         if any(x in cmd for x in ['go to sleep', 'sleep mode', 'hibernate', 'sleep']):
-            subprocess.run('rundll32.exe powrprof.dll,SetSuspendState 0,1,0', shell=True)
+            subprocess.run(['rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0'], check=False)
             return True, "Going to sleep."
         
         return False, ""
@@ -1370,7 +1422,7 @@ For multi-step tasks, chain steps with >>."""
         # Search files (simplified)
         if any(x in cmd for x in ['find file', 'search file', 'look for file']):
             # Open Windows search
-            subprocess.Popen('explorer shell:search', shell=True)
+            subprocess.Popen(['explorer', 'shell:search'])
             return True, "Opening Windows search. Type your file name."
         
         return False, ""

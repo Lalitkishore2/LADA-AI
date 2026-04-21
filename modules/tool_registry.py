@@ -280,7 +280,8 @@ class ToolRegistry:
         For use with function-calling / tool-use APIs.
         """
         schema = []
-        for name, tool in self._tools.items():
+        for name in sorted(self._tools.keys()):
+            tool = self._tools[name]
             if not tool.enabled:
                 continue
             schema.append({
@@ -1287,5 +1288,3 @@ def get_tool_registry() -> ToolRegistry:
             _registry.register(tool)
         logger.info(f"[ToolRegistry] {len(_registry._tools)} tools registered")
     return _registry
-
-

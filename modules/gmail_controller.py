@@ -513,7 +513,7 @@ class GmailController:
             try:
                 from email.utils import parsedate_to_datetime
                 date = parsedate_to_datetime(date_str)
-            except:
+            except Exception as e:
                 date = datetime.now()
             
             # Get body if requested

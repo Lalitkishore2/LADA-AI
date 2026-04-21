@@ -1,0 +1,4059 @@
+from modules.desktop.common import *
+
+from modules.desktop.settings import SettingsDialog
+from modules.desktop.ui import VState, OrbWidget, RichTextLabel, Sidebar, Msg, ChatArea, QuickActionsPopup, InputBar
+from modules.desktop.workers import AIWorker, StreamingAIWorker, VoiceWorker, RemoteBridgeWorker
+from modules.desktop.overlays import FaceAuthOverlay, VoiceOverlay, ClickEffectOverlay, CometOverlay, AutonomousActionOverlay
+
+class LadaApp(QMainWindow):
+    wake_triggered = pyqtSignal(str)  # Signal for wake word commands
+    
+    def __init__(self):
+        super().__init__()
+
+        # ── Lightweight state (set immediately so _build/_wire work) ──
+        self.router = None
+        self.voice = None
+        self.conv = []
+        self.conv_file = None
+        self.v_state = VState.IDLE
+        self.v_worker = None
+        self.ai_worker = None
+        self.sys_ctrl = None
+        self.jarvis = None
+        self.voice_nlu = None
+        self.ai_agent = None
+        self.flight_agent = None
+        self.product_agent = None
+        self.safety_gate = None
+        self._optional_init_complete = False
+        self._cost_tracker = None
+        self._last_prompt = ""
+        self._wakeup_active = False
+        self._voice_enabled = True  # Master voice on/off flag (starts ON)
+        self._wake_signal_connected = False
+        self._voice_overlay_paused_listener = False
+        self._autonomous_event_log = []
+        self._sidebar_auto_collapsed = False
+        self._sidebar_responsive_adjusting = False
+        self._remote_bridge_enabled = False
+        self._remote_bridge_auto_start = _env_enabled("LADA_REMOTE_BRIDGE_AUTO_START_APP", True)
+        self.remote_bridge_client = None
+        self.remote_bridge_worker = None
+        self._stream_cancelled = False
+
+        # Standalone bus/orchestrator (feature-gated)
+        self._standalone_orchestrator_enabled = os.getenv(
+            "LADA_STANDALONE_ORCHESTRATOR", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.standalone_command_bus = None
+        self.standalone_orchestrator = None
+
+        # Apply saved personality mode before first UI greeting.
+        self._apply_saved_personality_mode()
+
+        # Build UI immediately so window appears right away
+        self._build()
+        self._wire()
+
+        # Defer all heavy module loading so window is visible first
+        QTimer.singleShot(200, self._deferred_heavy_init)
+
+    @staticmethod
+    def _personality_mode_from_index(index: int) -> str:
+        """Map personality combo index to personality mode key."""
+        mapping = {
+            0: "jarvis",
+            1: "friday",
+            2: "karen",
+            3: "casual",
+        }
+        return mapping.get(int(index), "karen")
+
+    def _apply_saved_personality_mode(self):
+        """Load and apply persisted personality mode for consistent runtime tone."""
+        if not (JARVIS_OK and LadaPersonality):
+            return
+
+        mode_index = 2  # Default to KAREN tone when no config is present.
+        try:
+            settings_file = Path("config/app_settings.json")
+            if settings_file.exists():
+                saved = json.loads(settings_file.read_text(encoding="utf-8"))
+                mode_index = int(saved.get("personality_mode", mode_index))
+        except Exception as e:
+            logger.debug(f"[LADA] Could not load saved personality mode: {e}")
+
+        mode_name = self._personality_mode_from_index(mode_index)
+        try:
+            LadaPersonality.set_mode(mode_name)
+        except Exception as e:
+            logger.warning(f"[LADA] Could not apply personality mode '{mode_name}': {e}")
+    
+    def _deferred_heavy_init(self):
+        """Initialize core runtime quickly, then defer optional modules.
+
+        This first stage keeps startup responsive so chat UI is usable while
+        heavier optional features are initialized in a second phase.
+        """
+        # Auto-start Ollama if not running
+        self._start_ollama()
+
+        # Core router
+        if LADA_OK:
+            try:
+                self.router = HybridAIRouter()
+                print("[LADA] AI Router initialized")
+            except Exception as e:
+                logger.error(f"Router init: {e}")
+                print(f"[LADA] Router init error: {e}")
+
+        # Core system services
+        try:
+            self.sys_ctrl = SystemController() if SYS_OK else None
+        except Exception as e:
+            self.sys_ctrl = None
+            logger.warning(f"[LADA] SystemController init failed: {e}")
+
+        # Core command path
+        try:
+            self.jarvis = JarvisCommandProcessor(ai_router=self.router) if JARVIS_OK else None
+            if self.jarvis:
+                print("[LADA] JARVIS command processor initialized")
+        except Exception as e:
+            self.jarvis = None
+            logger.warning(f"[LADA] JARVIS init failed: {e}")
+
+        # Voice NLU for command routing
+        try:
+            self.voice_nlu = VoiceCommandProcessor(ai_router=self.router) if VOICE_NLU_OK else None
+            if self.voice_nlu:
+                print("[LADA] Voice NLU initialized")
+        except Exception as e:
+            self.voice_nlu = None
+            logger.warning(f"[LADA] Voice NLU init failed: {e}")
+
+        # Refresh model/status UI once the router is up.
+        try:
+            self._load_models()
+            self._update_status()
+            self._update_header_status()
+            self._show_startup_runtime_health()
+        except Exception as e:
+            print(f"[LADA] Core post-init UI refresh error: {e}")
+
+    def _collect_runtime_health(self):
+        """Collect startup health details for model/provider readiness messaging."""
+        summary = {
+            "router_ready": bool(self.router),
+            "providers_total": 0,
+            "providers_available": 0,
+            "missing_keys": [],
+        }
+
+        if not self.router:
+            return summary
+
+        status = {}
+        try:
+            status = self.router.get_status() if hasattr(self.router, 'get_status') else {}
+        except Exception as e:
+            logger.warning(f"[LADA] Could not read provider status: {e}")
+
+        if isinstance(status, dict):
+            summary["providers_total"] = len(status)
+            summary["providers_available"] = sum(
+                1 for info in status.values() if isinstance(info, dict) and info.get('available')
+            )
+
+        provider_manager = getattr(self.router, 'provider_manager', None)
+        model_registry = getattr(provider_manager, 'model_registry', None) or getattr(self.router, 'model_registry', None)
+        if model_registry and hasattr(model_registry, 'providers') and hasattr(model_registry, 'get_available_providers'):
+            try:
+                availability = model_registry.get_available_providers()
+                missing = set()
+                for provider_id, is_ready in availability.items():
+                    if is_ready:
+                        continue
+                    provider = model_registry.providers.get(provider_id)
+                    for key in getattr(provider, 'config_keys', []):
+                        if not os.getenv(str(key), '').strip():
+                            missing.add(str(key))
+                summary["missing_keys"] = sorted(missing)
+            except Exception as e:
+                logger.debug(f"[LADA] Could not collect missing provider keys: {e}")
+
+        return summary
+
+    def _show_startup_runtime_health(self):
+        """Show concise startup health guidance for common model/backend issues."""
+        summary = self._collect_runtime_health()
+
+        if not summary.get("router_ready"):
+            message = "AI router failed to initialize. Check logs for provider setup errors."
+        elif summary.get("providers_total", 0) == 0:
+            message = "No AI providers loaded. Check models.json and provider configuration."
+        elif summary.get("providers_available", 0) == 0:
+            missing = summary.get("missing_keys", [])
+            if missing:
+                hint = ", ".join(missing[:3])
+                if len(missing) > 3:
+                    hint += ", ..."
+                message = f"No AI backends are ready. Missing API keys: {hint}"
+            else:
+                message = "No AI backends are ready. Check API keys and local model services."
+        else:
+            message = (
+                f"AI backends ready: {summary.get('providers_available', 0)}"
+                f"/{summary.get('providers_total', 0)}"
+            )
+
+        try:
+            if hasattr(self, 'statusbar') and self.statusbar:
+                self.statusbar.showMessage(message, 12000)
+        except Exception:
+            pass
+        logger.info(f"[LADA] Startup health: {message}")
+
+        # Defer optional modules to keep first-render snappy.
+        try:
+            optional_delay_ms = int(os.getenv("LADA_OPTIONAL_INIT_DELAY_MS", "450"))
+        except Exception:
+            optional_delay_ms = 450
+        optional_delay_ms = max(100, optional_delay_ms)
+        QTimer.singleShot(optional_delay_ms, self._deferred_optional_init)
+
+    def _deferred_optional_init(self):
+        """Initialize optional features after core startup is complete."""
+        # Voice engine
+        if VOICE_OK and FreeNaturalVoice:
+            try:
+                self.voice = FreeNaturalVoice(
+                    tamil_mode=_env_enabled("TAMIL_MODE", default=True),
+                    auto_detect=_env_enabled("AUTO_DETECT_LANGUAGE", default=True),
+                )
+                print("[LADA] Voice engine initialized")
+            except Exception as e:
+                logger.error(f"Voice init: {e}")
+                print(f"[LADA] Voice init error: {e}")
+
+        # Agents
+        if AGENTS_OK and self.router:
+            try:
+                self.flight_agent = FlightAgent(self.router)
+                self.product_agent = ProductAgent(self.router)
+                self.safety_gate = SafetyGate(ui_callback=self._safety_ui_callback)
+                print("[LADA] v7.0 Agents initialized (Flight, Product)")
+            except Exception as e:
+                print(f"[LADA] Agent init error: {e}")
+
+        # AI Command Agent — AI-first command execution with tool calling
+        self.ai_agent = None
+        try:
+            from modules.ai_command_agent import AICommandAgent
+            if self.router and hasattr(self.router, 'provider_manager') and self.router.provider_manager:
+                self.ai_agent = AICommandAgent(
+                    provider_manager=self.router.provider_manager,
+                    tool_registry=self.router.tool_registry,
+                    config={
+                        'enabled': os.getenv('LADA_AI_AGENT_ENABLED', '1') == '1',
+                        'max_rounds': int(os.getenv('LADA_AI_AGENT_MAX_ROUNDS', '5')),
+                    }
+                )
+                print("[LADA] AI Command Agent initialized")
+        except Exception as e:
+            logger.warning(f"[LADA] AI Command Agent not available: {e}")
+
+        # Standalone orchestrator bridge (opt-in)
+        if self._standalone_orchestrator_enabled:
+            self._init_standalone_orchestrator()
+
+        # Advanced modules (continuous listener, calendar, weather, face, etc.)
+        self._init_advanced_modules()
+
+        # Cost tracker
+        if COST_TRACKER_OK:
+            self._cost_tracker = CostTracker(
+                budget_usd=float(os.getenv('AI_BUDGET_USD', '0')),
+                persist_path="data/cost_history.json"
+            )
+
+        # Proactive agent — intelligent suggestions and notifications
+        self._proactive_agent = None
+        if PROACTIVE_AGENT_OK:
+            try:
+                self._proactive_agent = get_proactive_agent(jarvis_core=self.jarvis)
+                self._proactive_agent.register_callback(self._on_proactive_suggestion)
+                self._proactive_agent.start()
+                print("[LADA] Proactive Agent initialized and started")
+            except Exception as e:
+                logger.warning(f"[LADA] Proactive Agent init failed: {e}")
+
+        self._optional_init_complete = True
+        print("[LADA] Ready.")
+
+        # Optional: auto-start remote bridge when desktop app opens.
+        QTimer.singleShot(250, self._maybe_auto_start_remote_bridge)
+
+        # Start wake word detection
+        QTimer.singleShot(800, self._start_wake_detection)
+
+        # Morning briefing
+        QTimer.singleShot(1800, self._check_morning_briefing)
+
+    def _init_standalone_orchestrator(self):
+        """Initialize standalone command bus + orchestrator for desktop dispatch."""
+        if self.standalone_orchestrator is not None:
+            return
+
+        try:
+            from modules.standalone.command_bus import create_command_bus
+            from modules.standalone.orchestrator import create_orchestrator
+
+            self.standalone_command_bus = create_command_bus()
+            self.standalone_orchestrator = create_orchestrator(
+                command_bus=self.standalone_command_bus,
+                jarvis_getter=lambda: self.jarvis,
+                ai_router_getter=lambda: self.router,
+                autostart=True,
+            )
+            print("[LADA] Standalone orchestrator enabled")
+        except Exception as e:
+            logger.warning(f"[LADA] Standalone orchestrator init failed: {e}")
+            self.standalone_orchestrator = None
+            if self.standalone_command_bus is not None:
+                try:
+                    self.standalone_command_bus.stop()
+                except Exception:
+                    pass
+                self.standalone_command_bus = None
+
+    def _stop_standalone_orchestrator(self):
+        """Stop standalone orchestrator and command bus if initialized."""
+        if self.standalone_orchestrator is not None:
+            try:
+                self.standalone_orchestrator.stop()
+            except Exception:
+                pass
+            self.standalone_orchestrator = None
+
+        if self.standalone_command_bus is not None:
+            try:
+                self.standalone_command_bus.stop()
+            except Exception:
+                pass
+            self.standalone_command_bus = None
+
+    def _dispatch_system_command(self, text: str) -> tuple:
+        """Dispatch system commands via standalone orchestrator when enabled, fallback to Jarvis."""
+        if not text:
+            return False, ""
+
+        if self._standalone_orchestrator_enabled and self.standalone_orchestrator is not None:
+            try:
+                from modules.standalone.contracts import CommandEnvelope
+
+                timeout_ms = int(os.getenv("LADA_STANDALONE_TIMEOUT_MS", "60000"))
+                timeout_ms = max(1000, timeout_ms)
+
+                envelope = CommandEnvelope.from_dict({
+                    "source": "desktop",
+                    "target": "system",
+                    "action": "execute",
+                    "payload": {"command": text},
+                    "timeout_ms": timeout_ms,
+                    "metadata": {
+                        "channel": "desktop_app",
+                    },
+                })
+
+                event = self.standalone_orchestrator.submit(
+                    envelope,
+                    wait_for_result=True,
+                    timeout_ms=timeout_ms,
+                )
+
+                if event is not None:
+                    payload = event.payload or {}
+                    message = str(payload.get("message", ""))
+                    error = str(payload.get("error", ""))
+
+                    if event.status == "completed":
+                        return True, message
+
+                    # Not handled should continue through existing fallback chain.
+                    if error == "not_handled":
+                        return False, message
+            except Exception as e:
+                logger.warning(f"[LADA] Standalone system dispatch failed, using fallback: {e}")
+
+        if self.jarvis:
+            try:
+                return self.jarvis.process(text)
+            except Exception as e:
+                logger.warning(f"[LADA] Jarvis system dispatch failed: {e}")
+
+        return False, ""
+
+    def _handle_lada_browser_command(self, text: str) -> tuple:
+        """Handle LADA browser-prefixed commands as native aliases.
+
+        This keeps user continuity while enforcing native-only runtime behavior.
+        """
+        command = text.strip()
+        lc = command.lower()
+
+        adapter = None
+        try:
+            from integrations.lada_browser_adapter import get_lada_browser_adapter
+            adapter = get_lada_browser_adapter()
+        except Exception as e:
+            logger.debug(f"[LADA] Browser adapter unavailable: {e}")
+
+        if lc in {"lada browser", "lada browser help"}:
+            return True, (
+                "LADA browser commands:\n"
+                "- lada browser status\n"
+                "- lada browser connect\n"
+                "- lada browser disconnect\n"
+                "- lada browser navigate <url>\n"
+                "- lada browser snapshot\n"
+                "- lada browser click <selector>\n"
+                "- lada browser type <selector> :: <text>\n"
+                "- lada browser scroll <up|down> [pixels]\n"
+                "- lada browser extract [selector]"
+            )
+
+        if lc == "lada browser status":
+            lines = ["LADA browser compatibility status:"]
+            if adapter:
+                status = adapter.status()
+                lines.append(f"- adapter enabled: {status.get('enabled', False)}")
+                lines.append(f"- adapter state: {status.get('state', 'unknown')}")
+                lines.append(f"- adapter connected: {status.get('connected', False)}")
+                if status.get('url'):
+                    lines.append(f"- gateway: {status.get('url')}")
+            else:
+                lines.append("- adapter: disabled (set LADA_BROWSER_ADAPTER_ENABLED=true to enable gateway mode)")
+            handled, backend = self._handle_backend_status()
+            if handled:
+                lines.append("")
+                lines.append(backend)
+            return True, "\n".join(lines)
+
+        if lc == "lada browser connect":
+            if not adapter:
+                return True, "Browser adapter is disabled. Set LADA_BROWSER_ADAPTER_ENABLED=true and restart."
+            ok = adapter.connect()
+            return True, "Browser adapter connected." if ok else "Browser adapter connection failed."
+
+        if lc == "lada browser disconnect":
+            if not adapter:
+                return True, "Browser adapter is not active."
+            adapter.disconnect()
+            return True, "Browser adapter disconnected."
+
+        if lc.startswith("lada browser navigate "):
+            url = command[len("lada browser navigate "):].strip()
+            if not url:
+                return True, "Usage: lada browser navigate <url>"
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+
+            if adapter and adapter.navigate(url):
+                return True, f"Browser adapter navigated to {url}."
+
+            handled, response = self._dispatch_system_command(f"open {url}")
+            if handled:
+                return True, response
+            if self.voice_nlu:
+                handled, response = self.voice_nlu.process(f"open url {url}")
+                if handled:
+                    return True, response
+            return True, f"Tried native navigation to {url}, but could not complete it."
+
+        if lc == "lada browser snapshot":
+            if adapter:
+                snapshot = adapter.snapshot_summary()
+                if snapshot:
+                    return True, (
+                        "LADA browser snapshot summary:\n"
+                        f"- URL: {snapshot.get('url', '')}\n"
+                        f"- Title: {snapshot.get('title', '')}\n"
+                        f"- Interactive elements: {snapshot.get('interactive_elements', 0)}\n"
+                        f"- Text chars: {snapshot.get('text_chars', 0)}"
+                    )
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                page = browser.get_page_content()
+                if page.get('success'):
+                    shot = browser.screenshot()
+                    msg = (
+                        "Native snapshot summary:\n"
+                        f"- URL: {page.get('url', '')}\n"
+                        f"- Title: {page.get('title', '')}\n"
+                        f"- Text chars: {len(str(page.get('text', '')))}"
+                    )
+                    if shot.get('success'):
+                        msg += f"\n- Screenshot: {shot.get('path', '')}"
+                    return True, msg
+            except Exception:
+                pass
+
+            handled, response = self._dispatch_system_command("take a screenshot")
+            if handled:
+                return True, response
+            return True, "Native screenshot command is currently unavailable."
+
+        if lc.startswith("lada browser click "):
+            selector = command[len("lada browser click "):].strip()
+            if not selector:
+                return True, "Usage: lada browser click <selector>"
+
+            if adapter and adapter.click(selector):
+                return True, f"Browser adapter clicked: {selector}"
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.click(selector)
+                if result.get('success'):
+                    return True, f"Stealth click successful: {selector}"
+            except Exception:
+                pass
+
+            return True, f"Could not click selector: {selector}"
+
+        if lc.startswith("lada browser type "):
+            payload = command[len("lada browser type "):].strip()
+            separator = "::" if "::" in payload else "|" if "|" in payload else ""
+            if not separator:
+                return True, "Usage: lada browser type <selector> :: <text>"
+
+            selector, typed = [p.strip() for p in payload.split(separator, 1)]
+            if not selector:
+                return True, "Usage: lada browser type <selector> :: <text>"
+
+            if adapter and adapter.type_text(selector, typed):
+                return True, f"Browser adapter typed into {selector}."
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.type_text(selector=selector, text=typed)
+                if result.get('success'):
+                    return True, f"Stealth typed into {selector}."
+            except Exception:
+                pass
+
+            return True, f"Could not type into selector: {selector}"
+
+        if lc.startswith("lada browser scroll "):
+            payload = command[len("lada browser scroll "):].strip().split()
+            direction = payload[0].lower() if payload else "down"
+            if direction not in {"up", "down"}:
+                direction = "down"
+            amount = 500
+            if len(payload) > 1:
+                try:
+                    amount = int(payload[1])
+                except Exception:
+                    amount = 500
+
+            if adapter and adapter.scroll(direction=direction, amount=amount):
+                return True, f"Browser adapter scrolled {direction} by {amount}px."
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                result = browser.scroll(direction=direction, amount=amount)
+                if result.get('success'):
+                    return True, f"Stealth scrolled {direction} by {amount}px."
+            except Exception:
+                pass
+
+            return True, f"Could not scroll {direction}."
+
+        if lc.startswith("lada browser extract"):
+            selector = command[len("lada browser extract"):].strip()
+
+            if adapter:
+                text_out = adapter.extract_text(selector=selector or None)
+                if text_out:
+                    return True, text_out[:4000]
+
+            try:
+                from modules.stealth_browser import get_stealth_browser
+                browser = get_stealth_browser()
+                if selector:
+                    result = browser.execute_js(
+                        "const el=document.querySelector(arguments[0]); return el ? el.innerText : '';",
+                        selector,
+                    )
+                    if result:
+                        return True, str(result)[:4000]
+                page = browser.get_page_content()
+                if page.get('success'):
+                    return True, str(page.get('text', ''))[:4000]
+            except Exception:
+                pass
+
+            return True, "Could not extract page content."
+
+        return True, (
+            "LADA browser command not recognized. "
+            "Use 'lada browser help' for supported commands."
+        )
+
+    def _start_ollama(self):
+        """Auto-start Ollama in background if not running"""
+        import subprocess, threading
+        def _bg_start():
+            try:
+                response = requests.get("http://localhost:11434/api/tags", timeout=1)
+                if response.status_code == 200:
+                    return
+            except Exception as e:
+                pass
+            try:
+                subprocess.Popen(
+                    ['ollama', 'serve'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+            except Exception as e:
+                pass
+        threading.Thread(target=_bg_start, daemon=True).start()
+    
+    def _init_advanced_modules(self):
+        """Initialize JARVIS-like advanced modules"""
+        # Continuous Listener (always listening, no wake word needed)
+        self.continuous_listener = None
+        if WAKE_OK:
+            try:
+                self.continuous_listener = ContinuousListener()
+                print("[LADA] Continuous listener ready - always listening")
+            except Exception as e:
+                print(f"[LADA] Continuous listener init error: {e}")
+        if self.continuous_listener and self._voice_enabled:
+            self._start_wake_detection()
+        
+        # Google Calendar
+        self.calendar = None
+        if CALENDAR_OK:
+            try:
+                self.calendar = GoogleCalendar()
+                print("[LADA] Google Calendar ready")
+            except Exception as e:
+                print(f"[LADA] Calendar init error: {e}")
+        
+        # Weather briefing
+        self.weather = None
+        if WEATHER_OK:
+            try:
+                self.weather = WeatherBriefing()
+                print("[LADA] Weather module ready")
+            except Exception as e:
+                print(f"[LADA] Weather init error: {e}")
+        
+        # Face recognition (for future use)
+        self.face_auth = None
+        if FACE_OK:
+            try:
+                self.face_auth = FaceRecognition()
+                print("[LADA] Face recognition ready")
+            except Exception as e:
+                print(f"[LADA] Face recognition init error: {e}")
+        
+        # Continuous monitoring (Phase 6)
+        self.monitor = None
+        try:
+            from modules.continuous_monitor import ContinuousMonitor
+            self.monitor = ContinuousMonitor(alert_callback=self._on_system_alert)
+            self.monitor.start()
+            print("[LADA] Continuous monitoring active")
+        except ImportError:
+            print("[LADA] Continuous monitoring not available")
+        except Exception as e:
+            print(f"[LADA] Monitor init error: {e}")
+        
+        # === ALEXA/ECHO INTEGRATION - Background Services ===
+        self._start_alexa_services()
+    
+    def _start_alexa_services(self):
+        """Start Alexa integration services in background (feature-flagged)."""
+        enabled = os.getenv("LADA_ALEXA_AUTOSTART", "0").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if not enabled:
+            print("[LADA] Alexa autostart disabled (set LADA_ALEXA_AUTOSTART=1 to enable)")
+            return
+
+        import socket
+        import sys
+        import time
+
+        # Track background processes for cleanup
+        self.alexa_processes = []
+
+        def _port_in_use(port: int) -> bool:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    return s.connect_ex(('localhost', port)) == 0
+            except Exception:
+                return False
+
+        def _worker():
+            base_dir = Path(__file__).parent if "__file__" in dir() else Path(".")
+            if not base_dir.exists():
+                base_dir = Path("c:/lada ai")
+
+            python_exe = sys.executable
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            child_env = os.environ.copy()
+            child_env.setdefault("PYTHONIOENCODING", "utf-8")
+            child_env.setdefault("PYTHONUTF8", "1")
+
+            api_running = _port_in_use(5000)
+            alexa_running = _port_in_use(5001)
+
+            # 1. Start API Server (port 5000) if not running
+            if not api_running:
+                try:
+                    api_server_path = base_dir / "modules" / "api_server.py"
+                    if api_server_path.exists():
+                        proc = subprocess.Popen(
+                            [python_exe, str(api_server_path)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=creationflags,
+                            cwd=str(base_dir),
+                            env=child_env,
+                        )
+                        self.alexa_processes.append(proc)
+                        print("[LADA] API Server started (port 5000) - hidden")
+                except Exception as e:
+                    print(f"[LADA] API Server start error: {e}")
+            else:
+                print("[LADA] API Server already running on port 5000")
+
+            # 2. Start Alexa Bridge (port 5001) if not running
+            if not alexa_running:
+                try:
+                    alexa_server_path = base_dir / "integrations" / "alexa_server.py"
+                    if alexa_server_path.exists():
+                        proc = subprocess.Popen(
+                            [python_exe, str(alexa_server_path)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=creationflags,
+                            cwd=str(base_dir),
+                            env=child_env,
+                        )
+                        self.alexa_processes.append(proc)
+                        print("[LADA] Alexa Bridge started (port 5001) - hidden")
+                except Exception as e:
+                    print(f"[LADA] Alexa Bridge start error: {e}")
+            else:
+                print("[LADA] Alexa Bridge already running on port 5001")
+
+            # 3. Start ngrok tunnel (if ngrok is installed)
+            try:
+                try:
+                    resp = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2)
+                    tunnels = resp.json().get("tunnels", [])
+                    if tunnels:
+                        print(f"[LADA] ngrok already running: {tunnels[0].get('public_url', 'active')}")
+                        return
+                except Exception:
+                    pass
+
+                proc = subprocess.Popen(
+                    ["ngrok", "http", "5001", "--log=stdout"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                    env=child_env,
+                )
+                self.alexa_processes.append(proc)
+                print("[LADA] ngrok tunnel started (5001 -> HTTPS) - hidden")
+
+                time.sleep(2)
+                try:
+                    resp = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=3)
+                    tunnels = resp.json().get("tunnels", [])
+                    if tunnels:
+                        ngrok_url = tunnels[0].get("public_url", "")
+                        print(f"[LADA] Alexa endpoint: {ngrok_url}/")
+                except Exception:
+                    print("[LADA] ngrok running (check http://127.0.0.1:4040 for URL)")
+
+            except FileNotFoundError:
+                print("[LADA] ngrok not installed - Alexa works on local network only")
+            except Exception as e:
+                print(f"[LADA] ngrok start error: {e}")
+
+        threading.Thread(target=_worker, daemon=True, name="LADA-AlexaAutostart").start()
+    
+    def _on_system_alert(self, alert):
+        """Handle system alerts from continuous monitor"""
+        try:
+            # Show alert in status bar
+            icon = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}.get(alert.level.value, "📢")
+            message = f"{icon} {alert.title}: {alert.message}"
+            QTimer.singleShot(0, lambda: self.statusbar.showMessage(message, 10000))
+        except Exception as e:
+            print(f"[LADA] Alert display error: {e}")
+    
+    def _start_wake_detection(self):
+        """Start continuous background listening.
+
+        WAKEUP behavior (Phase 1):
+        - STANDBY: only responds to "LADA wakeup"
+        - ACTIVE: processes commands; "LADA turn off" returns to standby
+        """
+        if not self.continuous_listener:
+            return
+        if not self._wake_signal_connected:
+            self.wake_triggered.connect(self._on_wake_command)
+            self._wake_signal_connected = True
+        
+        def on_command(cmd):
+            """Called when any speech is recognized"""
+            if cmd:
+                print(f"[LADA] Command: {cmd}")
+                self.wake_triggered.emit(cmd)
+        
+        def on_listening():
+            """Called when starting to listen"""
+            pass  # Can add visual feedback here
+        
+        def on_processing():
+            """Called when processing speech"""
+            pass  # Can add visual feedback here
+        
+        self.continuous_listener.on_command = on_command
+        self.continuous_listener.on_listening = on_listening
+        self.continuous_listener.on_processing = on_processing
+        
+        try:
+            started = True
+            if not getattr(self.continuous_listener, "running", False):
+                started = bool(self.continuous_listener.start())
+            if not started:
+                self._set_wakeup_active(False)
+                if hasattr(self, "statusbar") and self.statusbar:
+                    self.statusbar.showMessage("Voice listener could not start. Check microphone/SpeechRecognition setup.", 5000)
+                print("[LADA] Continuous listening failed to start")
+                return
+            # Start in ACTIVE mode so voice works immediately (better UX)
+            self._set_wakeup_active(True)
+            print("[LADA] Voice control ACTIVE - speak any command")
+        except Exception as e:
+            print(f"[LADA] Could not start continuous listening: {e}")
+
+    def _normalize_voice_text(self, text: str) -> str:
+        """Normalize recognized text for robust phrase matching."""
+        try:
+            import re
+            t = (text or "").strip().lower()
+            t = re.sub(r"[^a-z0-9\s]", " ", t)
+            t = re.sub(r"\s+", " ", t).strip()
+            return t
+        except Exception:
+            return (text or "").strip().lower()
+
+    def _is_wakeup_phrase(self, normalized_text: str) -> bool:
+        wake_phrases = {
+            "hey lada", "lada wakeup", "lada wake up",
+            "hi lada", "hello lada", "ok lada", "okay lada",
+            "hey lara", "hey lotta",  # common misrecognitions
+        }
+        return normalized_text in wake_phrases or normalized_text.startswith("hey lada")
+
+    def _is_turn_off_phrase(self, normalized_text: str) -> bool:
+        off_phrases = {
+            "lada turn off", "lada turnoff", "lada close",
+            "lada stop", "lada sleep", "lada shut up",
+            "stop listening", "stop lada", "close lada",
+            "lada go to sleep", "lada standby",
+        }
+        return normalized_text in off_phrases
+
+    def _set_wakeup_active(self, active: bool):
+        self._wakeup_active = bool(active)
+        try:
+            self._update_status()
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                tip = "LADA AI - Say 'Hey LADA'" if not self._wakeup_active else "LADA AI - ACTIVE (say 'LADA stop')"
+                self.tray_icon.setToolTip(tip)
+            # Update header voice toggle button
+            if hasattr(self, 'voice_toggle_btn'):
+                if self._wakeup_active:
+                    self.voice_toggle_btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background: {GREEN}; color: white;
+                            border: none; border-radius: 13px; font-size: 11px; font-weight: bold;
+                            padding: 4px 14px; font-family: '{FONT_FAMILY}';
+                        }}
+                        QPushButton:hover {{ background: {ACCENT_GRADIENT_END}; }}
+                    """)
+                    self.voice_toggle_btn.setText("Voice ON")
+                    self.voice_toggle_btn.setToolTip("Voice active - say 'LADA stop' to deactivate")
+                else:
+                    self.voice_toggle_btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background: {BG_HOVER}; color: {TEXT_DIM};
+                            border: none; border-radius: 13px; font-size: 11px;
+                            padding: 4px 14px; font-family: '{FONT_FAMILY}';
+                        }}
+                        QPushButton:hover {{ background: {BG_CARD}; color: {TEXT}; }}
+                    """)
+                    self.voice_toggle_btn.setText("Voice OFF")
+                    self.voice_toggle_btn.setToolTip("Click to enable always-on voice (or say 'Hey LADA')")
+        except Exception:
+            pass
+
+    def _toggle_always_on_voice(self):
+        """Master voice ON/OFF toggle. When OFF, ALL voice is silenced."""
+        if self._voice_enabled:
+            # === TURN VOICE OFF ===
+            self._voice_enabled = False
+
+            # Fully stop always-on listener (not just standby)
+            if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                try:
+                    self.continuous_listener.stop()
+                except Exception:
+                    pass
+            self._set_wakeup_active(False)
+
+            # Close voice overlay if it's open
+            if hasattr(self, 'vlay') and self.vlay.isVisible():
+                self._close_voice()
+
+            # Disable the Mic button so user cannot re-open overlay
+            if hasattr(self, 'voice_btn'):
+                self.voice_btn.setEnabled(False)
+
+            self.statusbar.showMessage("Voice OFF — click 'Voice OFF' to re-enable", 4000)
+            # Do NOT speak — voice is being turned off
+
+        else:
+            # === TURN VOICE ON ===
+            self._voice_enabled = True
+
+            # Try to create listener if not available
+            if not hasattr(self, 'continuous_listener') or not self.continuous_listener:
+                if WAKE_OK and ContinuousListener:
+                    try:
+                        self.continuous_listener = ContinuousListener()
+                    except Exception as e:
+                        self.statusbar.showMessage(f"Could not start voice: {e}", 5000)
+                        self._voice_enabled = False
+                        return
+                else:
+                    self.statusbar.showMessage("Voice not available - install SpeechRecognition", 5000)
+                    self._voice_enabled = False
+                    return
+
+            # Re-enable always-on listening
+            self._set_wakeup_active(True)
+            self._start_wake_detection()
+
+            # Re-enable Mic button
+            if hasattr(self, 'voice_btn'):
+                self.voice_btn.setEnabled(True)
+
+            self.statusbar.showMessage("Voice ON — listening for commands", 3000)
+            if self.voice:
+                threading.Thread(
+                    target=lambda: self.voice.speak("Voice control on. I'm listening."),
+                    daemon=True
+                ).start()
+
+
+    def _on_wake_command(self, cmd):
+        """Handle command from continuous listener - execute and speak response"""
+        if not cmd:
+            return
+        if not self._voice_enabled:
+            return
+
+        normalized = self._normalize_voice_text(cmd)
+
+        # WAKEUP gating: ignore everything until explicitly activated.
+        if not self._wakeup_active:
+            if self._is_wakeup_phrase(normalized):
+                if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                    self.continuous_listener.pause()
+                self._set_wakeup_active(True)
+                response = "Activated. I'm listening."
+                print(f"[LADA] WAKEUP -> ACTIVE")
+                if self.voice and self._voice_enabled:
+                    def speak_and_resume():
+                        self.voice.speak(response)
+                        if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                            self.continuous_listener.resume()
+                    threading.Thread(target=speak_and_resume, daemon=True).start()
+            else:
+                if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                    self.continuous_listener.resume()
+            return
+
+        # While ACTIVE, allow explicit turn-off.
+        if self._is_turn_off_phrase(normalized):
+            if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                self.continuous_listener.pause()
+            self._set_wakeup_active(False)
+            response = "Standing by."
+            print(f"[LADA] WAKEUP -> STANDBY")
+            if self.voice and self._voice_enabled:
+                def speak_and_resume():
+                    self.voice.speak(response)
+                    if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                        self.continuous_listener.resume()
+                threading.Thread(target=speak_and_resume, daemon=True).start()
+            else:
+                if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                    self.continuous_listener.resume()
+            return
+
+        # Strip wake word prefix from command if present
+        clean_cmd = cmd
+        for prefix in ['hey lada ', 'hi lada ', 'ok lada ', 'okay lada ', 'lada ']:
+            if cmd.lower().startswith(prefix):
+                clean_cmd = cmd[len(prefix):].strip()
+                break
+        if not clean_cmd:
+            return
+
+        # Pause listening while processing
+        if hasattr(self, 'continuous_listener') and self.continuous_listener:
+            self.continuous_listener.pause()
+
+        # Also show command in main chat area for visibility
+        QTimer.singleShot(0, lambda c=clean_cmd: self._show_voice_in_chat(c))
+
+        # Check for system commands first (Voice NLU -> JARVIS -> AI)
+        try:
+            # Check for autonomous tasks first (browser control, multi-step)
+            if self._is_agent_task(clean_cmd):
+                QTimer.singleShot(0, lambda c=clean_cmd: self._run_agent_task(c))
+                if self.voice and self._voice_enabled:
+                    threading.Thread(
+                        target=lambda: self.voice.speak("Starting autonomous task now."),
+                        daemon=True
+                    ).start()
+                if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                    self.continuous_listener.resume()
+                return
+
+            handled, response = self._check_system_command(clean_cmd)
+
+            if handled:
+                print(f"[LADA] Response: {response}")
+                QTimer.singleShot(0, lambda r=response: self._show_voice_response_in_chat(r))
+                if self.voice and self._voice_enabled:
+                    def speak_and_resume():
+                        self.voice.speak(response)
+                        if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                            self.continuous_listener.resume()
+                    threading.Thread(target=speak_and_resume, daemon=True).start()
+                else:
+                    if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                        self.continuous_listener.resume()
+            else:
+                # Use AI for complex queries
+                def ai_query():
+                    try:
+                        if self.router:
+                            selected_model = self.model.currentData() if hasattr(self, 'model') else None
+                            model_id = selected_model if selected_model and selected_model != 'auto' else None
+                            ai_response = self.router.query(clean_cmd, model=model_id)
+                            print(f"[LADA] AI: {ai_response[:100]}...")
+                            QTimer.singleShot(0, lambda r=ai_response: self._show_voice_response_in_chat(r))
+                            if self.voice and self._voice_enabled:
+                                self.voice.speak(ai_response)
+                    except Exception as e:
+                        print(f"[LADA] AI error: {e}")
+                    finally:
+                        if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                            self.continuous_listener.resume()
+
+                threading.Thread(target=ai_query, daemon=True).start()
+        except Exception as e:
+            print(f"[LADA] Voice command error: {e}")
+            # Always resume listening even on error
+            if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                self.continuous_listener.resume()
+
+    def _show_voice_in_chat(self, cmd):
+        """Show voice command in the main chat area."""
+        self.chat.add("user", f"[Voice] {cmd}")
+        self.conv.append({"role": "user", "message": f"[Voice] {cmd}"})
+
+    def _show_voice_response_in_chat(self, response):
+        """Show voice response in the main chat area."""
+        self.chat.add("assistant", response)
+        self.conv.append({"role": "assistant", "message": response})
+    
+    def _check_morning_briefing(self):
+        """Give morning briefing on first open of the day"""
+        if not hasattr(self, 'weather') or not self.weather:
+            return
+        
+        if not self.weather.should_give_briefing():
+            return  # Already gave briefing today
+        
+        # Get briefing
+        briefing = self.weather.get_morning_briefing(self.calendar)
+        
+        if briefing:
+            # Add to chat (but NOT to conv - don't save briefing)
+            self.chat.add("assistant", briefing)
+            # Don't append to self.conv - briefing should not be saved
+            
+            # Speak if voice available
+            if self.voice:
+                def speak():
+                    self.voice.speak(briefing)
+                threading.Thread(target=speak, daemon=True).start()
+            
+            # Mark briefing given
+            self.weather.mark_briefing_given()
+            print("[LADA] ☀️ Morning briefing delivered")
+
+    def _is_agent_task(self, text: str) -> bool:
+        """Check if a command needs the CometAgent (long-running autonomous task).
+        These need background execution to avoid freezing the UI.
+        """
+        if not hasattr(self, 'jarvis') or not self.jarvis or not getattr(self.jarvis, 'comet_agent', None):
+            return False
+
+        t = text.lower().strip()
+
+        # Explicit autonomous triggers
+        if any(x in t for x in ['autonomously', 'automatically do', 'do this for me',
+                                 'take over', 'auto complete', 'control my screen',
+                                 'control the screen', 'screen control',
+                                 'do it for me', 'help me do this',
+                                 'do it yourself', 'you do it', 'handle it']):
+            return True
+
+        # Multi-step or browser-interaction tasks
+        action_indicators = [
+            'on google', 'in browser', 'on the browser', 'in chrome',
+            'go to ', 'navigate to ', 'open and ', 'go to and ',
+            'click on ', 'type in ', 'type into ', 'fill ',
+            'log in', 'login', 'sign in', 'sign up',
+            'add to cart', 'checkout', 'buy from', 'purchase from',
+            'book a ', 'order from', 'order a ',
+            ' and then ', ' then click', ' then type', ' then search',
+            'find and click', 'search on ', 'find on ',
+            'look up on ', 'look for on ',
+            'open ', 'launch ', 'start ',
+        ]
+        has_action = any(x in t for x in action_indicators)
+
+        # Multi-step sequence detection
+        has_sequence = any(x in t for x in [
+            ' and then ', ' then ', ' after that ', ' followed by '
+        ])
+        has_website = any(x in t for x in [
+            '.com', '.org', '.net', '.io', '.ai',
+            'amazon', 'google', 'youtube', 'gmail', 'twitter',
+            'facebook', 'instagram', 'linkedin', 'github',
+            'flipkart', 'swiggy', 'zomato', 'maps', 'chrome',
+            'browser', 'website', 'website', 'web page',
+        ])
+
+        # Complex actions (multi-step implies agent)
+        if has_action and has_website:
+            return True
+        if has_sequence and has_website:
+            return True
+        if has_sequence and has_action:
+            return True
+
+        # "search for X on google/browser" pattern
+        if 'search' in t and any(x in t for x in ['on google', 'in browser', 'on the browser', 'in chrome', 'on maps']):
+            return True
+
+        # "find my X" location / file / data patterns that need screen control
+        if any(x in t for x in ['find my location', 'find my address', 'find my ip',
+                                  'my location on', 'my address on', 'show my location',
+                                  'where am i', 'current location on']):
+            return True
+
+        # "open X and do Y" patterns
+        if ('open ' in t or 'launch ' in t) and any(a in t for a in [' and ', ' then ', ' to ']):
+            return True
+
+        return False
+
+    def _run_agent_task(self, text: str):
+        """Run a CometAgent task in a background thread with Comet overlay UI."""
+        self.inp.enable(False)
+        self.inp.show_stop()
+        self.chat.add("assistant", "Starting autonomous task... I'll control the screen now.")
+        self._autonomous_event_log = []
+
+        # Show global floating overlay by default; fall back to in-app overlay if unavailable.
+        use_floating = hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay is not None
+        if use_floating:
+            self.floating_comet_overlay.start(text)
+            self.comet_overlay.hide()
+        else:
+            self.comet_overlay.setGeometry(
+                self.side.width(), 0,
+                self.width() - self.side.width(), self.height()
+            )
+            self.comet_overlay.start(text)
+
+        # Track the active comet agent for stop/pause
+        self._active_comet_agent = None
+
+        def progress_callback(step, max_steps, phase, detail, screenshot_path=None):
+            """Thread-safe progress callback - schedules UI update on main thread."""
+            QTimer.singleShot(0, lambda s=step, m=max_steps, p=phase, d=detail, ss=screenshot_path:
+                self._on_comet_progress(s, m, p, d, ss))
+
+        def on_pause_toggle():
+            """Handle pause/resume button from overlay - call agent pause/resume."""
+            sender = self.sender()
+            paused = False
+
+            if sender is self.comet_overlay:
+                paused = self.comet_overlay._is_paused
+                if use_floating:
+                    self.floating_comet_overlay.set_paused_state(paused, add_log=False)
+            elif use_floating and sender is self.floating_comet_overlay:
+                paused = self.floating_comet_overlay._is_paused
+                self.comet_overlay.set_paused_state(paused, add_log=False)
+            else:
+                paused = self.comet_overlay._is_paused
+
+            agent = getattr(self, '_active_comet_agent', None)
+            if agent:
+                if paused:
+                    agent.pause()
+                else:
+                    agent.resume()
+
+        # Connect pause signal (disconnect first to avoid duplicate connections)
+        try:
+            self.comet_overlay.pause_requested.disconnect()
+        except Exception:
+            pass
+        self.comet_overlay.pause_requested.connect(on_pause_toggle)
+
+        if use_floating:
+            try:
+                self.floating_comet_overlay.pause_requested.disconnect()
+            except Exception:
+                pass
+            self.floating_comet_overlay.pause_requested.connect(on_pause_toggle)
+
+        def run():
+            try:
+                agent = self.jarvis.comet_agent
+                # Set progress callback
+                agent.progress_callback = progress_callback
+                self._active_comet_agent = agent
+
+                # Set click effect callback - schedules UI on main thread
+                def click_effect(x, y):
+                    QTimer.singleShot(0, lambda cx=x, cy=y: self._on_comet_click(cx, cy))
+                agent.click_effect_callback = click_effect
+
+                result = agent.execute_task_sync(text, max_steps=30)
+                if result.success:
+                    response = f"Task completed: {result.message}"
+                    success = True
+                else:
+                    response = f"Task did not fully complete: {result.message}"
+                    success = False
+            except Exception as e:
+                response = f"Autonomous task failed: {str(e)}"
+                success = False
+
+            self._active_comet_agent = None
+            # Schedule UI update on the main thread
+            QTimer.singleShot(0, lambda r=response, s=success: self._on_agent_done(r, s))
+
+        threading.Thread(target=run, daemon=True, name="CometAgent-Task").start()
+
+    def _on_comet_progress(self, step, max_steps, phase, detail, screenshot_path=None):
+        """Fan out agent progress updates to visible overlays and local event history."""
+        if self.comet_overlay.isVisible():
+            self.comet_overlay.update_progress(step, max_steps, phase, detail, screenshot_path)
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if self.floating_comet_overlay.isVisible():
+                self.floating_comet_overlay.update_progress(step, max_steps, phase, detail)
+
+        self._autonomous_event_log.append({
+            'time': datetime.now().isoformat(timespec='seconds'),
+            'step': int(step),
+            'max_steps': int(max_steps),
+            'phase': str(phase),
+            'detail': str(detail or ''),
+        })
+        self._autonomous_event_log = self._autonomous_event_log[-200:]
+
+    def _on_comet_click(self, x: int, y: int):
+        """Handle click feedback for both ripple effect and floating action stream."""
+        self._show_click_effect(x, y)
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if self.floating_comet_overlay.isVisible():
+                self.floating_comet_overlay.log_click(x, y)
+
+        self._autonomous_event_log.append({
+            'time': datetime.now().isoformat(timespec='seconds'),
+            'step': None,
+            'max_steps': None,
+            'phase': 'click',
+            'detail': f'({x}, {y})',
+        })
+        self._autonomous_event_log = self._autonomous_event_log[-200:]
+
+    def _stop_comet_task(self):
+        """Stop the running Comet agent task or close overlay."""
+        if hasattr(self, '_active_comet_agent') and self._active_comet_agent:
+            self._active_comet_agent.stop()
+            self._active_comet_agent = None
+            # Overlay will be closed when _on_agent_done fires
+        else:
+            # No active agent - just close the overlay
+            self.comet_overlay.hide()
+            if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+                self.floating_comet_overlay.hide()
+            self.inp.enable(True)
+            self.inp.hide_stop()
+
+    def _show_click_effect(self, x: int, y: int):
+        """Show an on-screen click ripple effect at the given screen coordinates."""
+        try:
+            effect = ClickEffectOverlay(x, y)
+            # Keep a reference so it is not garbage-collected before animation ends
+            if not hasattr(self, '_click_effects'):
+                self._click_effects = []
+            # Prune finished effects
+            self._click_effects = [e for e in self._click_effects if not e.isHidden()]
+            self._click_effects.append(effect)
+        except Exception as e:
+            print(f"[LADA] Click effect error: {e}")
+
+    def _on_agent_done(self, response: str, success: bool = True):
+        """Handle CometAgent task completion on the main thread."""
+        # Update overlay
+        if self.comet_overlay.isVisible():
+            self.comet_overlay.finish(success, response)
+            # Auto-hide overlay after 3 seconds on success, keep visible on failure
+            if success:
+                QTimer.singleShot(3000, self.comet_overlay.hide)
+            # On failure, user clicks CLOSE to dismiss
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if self.floating_comet_overlay.isVisible():
+                self.floating_comet_overlay.finish(success, response)
+                if success:
+                    QTimer.singleShot(3000, self.floating_comet_overlay.hide)
+
+        self.chat.add("assistant", response)
+        self.conv.append({"role": "assistant", "message": response})
+        self.inp.enable(True)
+        self.inp.hide_stop()
+        self._save()
+
+    def _check_system_command(self, text: str) -> tuple:
+        """Check if user input is a system command and execute it.
+        Uses Voice NLU for fast pattern matching, falls back to JARVIS.
+        Returns (handled: bool, response: str)
+        """
+        t = text.lower().strip()
+
+        if t.startswith("lada browser"):
+            return self._handle_lada_browser_command(text)
+
+        # === SYSTEM COMMAND KEYWORDS - always try JARVIS first for these ===
+        system_keywords = [
+            'volume', 'brightness', 'mute', 'unmute', 'screenshot',
+            'bluetooth', 'wifi', 'airplane', 'hotspot', 'nightlight', 'night light',
+            'dark mode', 'light mode', 'theme', 'touchpad',
+            'battery', 'power plan', 'clipboard', 'recycle bin',
+            'dnd', 'do not disturb', 'screen timeout',
+            'virtual desktop', 'task view', 'show desktop',
+            'lock screen', 'hibernate', 'log off', 'logoff',
+            'open notepad', 'open chrome', 'open edge', 'open calculator',
+            'open settings', 'open task manager', 'open file explorer',
+            'close window', 'minimize', 'maximize', 'fullscreen',
+            'alt tab', 'snap window', 'center window', 'always on top',
+            'find file', 'search file', 'find document', 'recent files',
+            'file manager', 'file explorer', 'locate file', 'where is file',
+            'kill process', 'list process', 'startup apps',
+            'screen recording', 'start recording', 'stop recording',
+            'set timer', 'set alarm', 'set reminder',
+            'incognito', 'bookmark', 'zoom in', 'zoom out',
+            # Action/task commands - route through JARVIS for execution
+            'open ', 'launch ', 'create ', 'make a ', 'make folder', 'make file',
+            'new folder', 'new file', 'create folder', 'create file',
+            'write a ', 'write to ', 'rename ', 'delete ',
+            'move file', 'copy file', 'run ', 'execute ',
+            'play ', 'pause ', 'stop ', 'skip ', 'next ',
+            'close ', 'quit ', 'exit ',
+            'find my location', 'my location', 'show my location', 'where am i',
+            # Image generation, code execution, document reading
+            'generate image', 'create image', 'draw ', 'imagine ', 'ai image',
+            'generate picture', 'make an image', 'generate art',
+            'run code', 'execute code', 'run python', 'run javascript', 'run script',
+            'read document', 'read pdf', 'summarize document', 'summarize file',
+            'chat with document', 'chat with file', 'analyze document',
+            'deep research', 'research in depth', 'weather briefing',
+            'focus mode', 'export conversation', 'export to pdf',
+            # Video generation
+            'generate video', 'create video', 'make video', 'ai video',
+            'animate ', 'generate animation',
+        ]
+        is_system_cmd = any(x in t for x in system_keywords)
+
+        # If it looks like a system command, try JARVIS/NLU first
+        if is_system_cmd:
+            handled, response = self._dispatch_system_command(text)
+            if handled:
+                return True, response
+            if self.voice_nlu:
+                handled, response = self.voice_nlu.process(text)
+                if handled:
+                    return True, response
+
+        # === AI COMMAND AGENT — handles complex commands patterns couldn't ===
+        if hasattr(self, 'ai_agent') and self.ai_agent:
+            try:
+                agent_result = self.ai_agent.try_handle(text)
+                if agent_result.handled:
+                    logger.info(f"[Agent] Handled: {agent_result.tool_calls_made} tool calls, "
+                                f"{agent_result.tier_used} tier, {agent_result.elapsed_ms:.0f}ms")
+                    return True, agent_result.response
+            except Exception as e:
+                logger.warning(f"[Agent] Error: {e}")
+
+        # === DETECT ACTION COMMANDS that need browser/agent control ===
+        action_indicators = [
+            'on google', 'in browser', 'on the browser', 'in chrome',
+            'go to ', 'navigate to ', 'open website',
+            'click on ', 'click ', 'type in ', 'type into ', 'fill ',
+            'log in', 'login', 'sign in', 'sign up',
+            'add to cart', 'checkout', 'buy from', 'purchase from',
+            'book a ', 'order from', 'order a ',
+            'download from', 'upload to',
+            ' and then ', ' then click', ' then type', ' then search',
+            'do this for me', 'take over', 'autonomously', 'automatically',
+        ]
+        is_action_command = any(x in t for x in action_indicators)
+
+        # If user explicitly wants browser, let JARVIS handle it
+        if any(x in t for x in ['open browser', 'open google', 'google it', 'in browser', 'in the browser']):
+            handled, response = self._dispatch_system_command(text)
+            if handled:
+                return True, response
+
+        # Action commands always go to JARVIS
+        if is_action_command:
+            handled, response = self._dispatch_system_command(text)
+            if handled:
+                return True, response
+
+        # === SEARCH QUERY DETECTION ===
+        search_indicators = [
+            'search for ', 'what is ', 'who is ', 'when is ', 'where is ', 'why is ', 'how to ',
+            'tell me about ', 'what are ', 'how does ', 'explain ', 'define ', 'meaning of ',
+            'best ', 'top ', 'latest ', 'news about ', 'price of ', 'weather in ',
+            'which is the best', 'compare ', 'difference between', 'how much ',
+        ]
+        is_search_query = any(t.startswith(x) or f' {x}' in t for x in search_indicators)
+
+        # Only send to AI if it's a search query AND not already handled as system command
+        if is_search_query and not is_action_command and not is_system_cmd:
+            if self.router and hasattr(self.router, 'web_search_enabled'):
+                self.router.web_search_enabled = True
+            return False, ""  # Let AI handle it with web context
+        
+        # === COMET-STYLE SELF-AWARENESS COMMANDS ===
+        if any(x in t for x in ['which model', 'what model', 'what ai', 'who are you', 'what are you running']):
+            return self._handle_self_awareness(t)
+
+        if any(x in t for x in ['stack health', 'stack status', 'language stack', 'tech stack', 'architecture health', 'language suitability']):
+            return self._handle_stack_health()
+        
+        if any(x in t for x in ['backend status', 'ai status', 'system status', 'what backends']):
+            return self._handle_backend_status()
+        
+        # Calendar commands (priority)
+        if self.calendar and any(x in t for x in ['schedule', 'calendar', 'events', 'appointment', 'meeting']):
+            return self._handle_calendar_command(t)
+        
+        # Weather commands (priority)
+        if self.weather and any(x in t for x in ['weather', 'temperature', 'forecast', 'outside']):
+            weather = self.weather.get_weather()
+            response = self.weather.format_weather_speech(weather)
+            return True, response
+        
+        # Try JARVIS first for typed commands (better local execution behavior),
+        # then fall back to Voice NLU.
+        handled, response = self._dispatch_system_command(text)
+        if handled:
+            return True, response
+
+        if self.voice_nlu:
+            handled, response = self.voice_nlu.process(text)
+            if handled:
+                return True, response
+        
+        # Fallback to basic system control if nothing else available
+        if not self.sys_ctrl:
+            return False, ""
+
+        # Basic volume commands
+        if any(x in t for x in ['set volume', 'volume to', 'make volume']):
+            import re
+            m = re.search(r'(\d+)', t)
+            if m:
+                level = int(m.group(1))
+                result = self.sys_ctrl.set_volume(level)
+                if result.get('success'):
+                    return True, f"Volume set to {level}%."
+                return True, f"Could not set volume: {result.get('error', 'Unknown error')}"
+
+        if 'mute' in t and 'unmute' not in t:
+            result = self.sys_ctrl.set_volume(0)
+            if result.get('success'):
+                return True, "Volume muted."
+            return True, f"Could not mute volume: {result.get('error', result.get('message', 'Unknown error'))}"
+
+        if 'unmute' in t:
+            result = self.sys_ctrl.set_volume(50)
+            if result.get('success'):
+                return True, "Volume unmuted and set to 50%."
+            return True, f"Could not unmute volume: {result.get('error', result.get('message', 'Unknown error'))}"
+
+        if 'max volume' in t or 'full volume' in t:
+            result = self.sys_ctrl.set_volume(100)
+            if result.get('success'):
+                return True, "Volume set to maximum."
+            return True, f"Could not set maximum volume: {result.get('error', result.get('message', 'Unknown error'))}"
+
+        if 'volume up' in t:
+            result = self.sys_ctrl.get_volume()
+            current = result.get('volume', 50)
+            new_level = min(100, current + 10)
+            set_result = self.sys_ctrl.set_volume(new_level)
+            if set_result.get('success'):
+                return True, f"Volume increased to {new_level}%."
+            return True, f"Could not increase volume: {set_result.get('error', set_result.get('message', 'Unknown error'))}"
+
+        if 'volume down' in t:
+            result = self.sys_ctrl.get_volume()
+            current = result.get('volume', 50)
+            new_level = max(0, current - 10)
+            set_result = self.sys_ctrl.set_volume(new_level)
+            if set_result.get('success'):
+                return True, f"Volume decreased to {new_level}%."
+            return True, f"Could not decrease volume: {set_result.get('error', set_result.get('message', 'Unknown error'))}"
+
+        # Brightness commands
+        if any(x in t for x in ['set brightness', 'brightness to', 'make brightness']):
+            import re
+            m = re.search(r'(\d+)', t)
+            if m:
+                level = int(m.group(1))
+                result = self.sys_ctrl.set_brightness(level)
+                if result.get('success'):
+                    return True, f"Brightness set to {level}%."
+                return True, f"Could not set brightness: {result.get('error', 'Unknown error')}"
+
+        # Open common apps
+        if 'open notepad' in t:
+            import subprocess
+            subprocess.Popen('notepad.exe')
+            return True, "Notepad opened."
+
+        if 'open calculator' in t:
+            import subprocess
+            subprocess.Popen('calc.exe')
+            return True, "Calculator opened."
+
+        if 'open file explorer' in t or 'open explorer' in t:
+            import subprocess
+            subprocess.Popen('explorer.exe')
+            return True, "File Explorer opened."
+
+        if any(x in t for x in ['open settings', 'open system settings']):
+            result = self.sys_ctrl.open_settings()
+            if result.get('success'):
+                return True, "Settings opened."
+
+        if 'open task manager' in t:
+            import subprocess
+            subprocess.Popen('taskmgr.exe')
+            return True, "Task Manager opened."
+
+        # Battery status
+        if 'battery' in t:
+            result = self.sys_ctrl.get_system_info()
+            battery = result.get('battery', {})
+            pct = battery.get('percent', 'unknown')
+            plugged = battery.get('plugged', False)
+            status = "plugged in" if plugged else "on battery"
+            return True, f"Battery is at {pct}%, {status}."
+
+        return False, ""
+    
+    def _handle_calendar_command(self, text: str) -> tuple:
+        """Handle calendar-related commands"""
+        if not self.calendar:
+            return True, "Calendar is not set up. Please add credentials.json from Google Cloud Console to the config folder."
+        
+        # Get today's events
+        if any(x in text for x in ["today's", 'today', 'my schedule', 'my events']):
+            events = self.calendar.get_todays_events()
+            if events:
+                response = self.calendar.format_events_speech(events)
+            else:
+                response = "You have no events scheduled for today."
+            return True, response
+        
+        # Get upcoming events
+        if any(x in text for x in ['upcoming', 'next', 'coming up', 'this week']):
+            events = self.calendar.get_upcoming_events(days=7)
+            if events:
+                response = f"You have {len(events)} events in the next week. " + self.calendar.format_events_speech(events[:5])
+            else:
+                response = "You have no upcoming events in the next week."
+            return True, response
+        
+        # Add event
+        if any(x in text for x in ['add', 'create', 'schedule', 'set up']):
+            parsed = self.calendar.parse_event_from_text(text)
+            if parsed and parsed.get('summary'):
+                success, msg = self.calendar.add_event(
+                    summary=parsed['summary'],
+                    start_time=parsed.get('start_time'),
+                    end_time=parsed.get('end_time'),
+                    description=parsed.get('description', '')
+                )
+                if success:
+                    return True, f"Done! I've added '{parsed['summary']}' to your calendar."
+                else:
+                    return True, f"Could not add event: {msg}"
+            return True, "I couldn't understand the event details. Try saying 'Add meeting with John tomorrow at 3 PM'."
+        
+        # Default: show today's events
+        events = self.calendar.get_todays_events()
+        if events:
+            return True, self.calendar.format_events_speech(events)
+        return True, "You have no events scheduled for today."
+    
+    def _handle_self_awareness(self, text: str) -> tuple:
+        """Handle Comet-style self-awareness questions"""
+        if not self.router:
+            return True, "I'm LADA, your local AI assistant. I'm currently starting up."
+        
+        current_backend = getattr(self.router, 'current_backend_name', 'Auto')
+        status = self.router.get_status()
+        available = [v['name'] for k, v in status.items() if v.get('available')]
+        
+        if 'who are you' in text or 'what are you' in text:
+            return True, f"I'm LADA, your Local AI Desktop Assistant. I'm running on your computer with {len(available)} AI backends available. Right now I'm using {current_backend}."
+        
+        return True, f"I'm currently using {current_backend}. You have {len(available)} backends available: {', '.join(available[:3])}."
+    
+    def _handle_backend_status(self) -> tuple:
+        """Show detailed AI backend status"""
+        if not self.router:
+            return True, "AI router is not initialized."
+        
+        status = self.router.get_status()
+        lines = ["**AI Backend Status:**", ""]
+        total = len(status)
+        available_count = 0
+        for key, info in status.items():
+            icon = "✅" if info.get('available') else "❌"
+            name = info.get('name', key)
+            rt = info.get('response_time', 'N/A')
+            if info.get('available'):
+                available_count += 1
+            lines.append(f"{icon} {name}: {rt}")
+
+        if total == 0:
+            lines.append("⚠️ No providers loaded. Check models.json and provider initialization.")
+            return True, "\n".join(lines)
+
+        lines.extend(["", f"Ready backends: {available_count}/{total}"])
+
+        if available_count == 0:
+            health = self._collect_runtime_health()
+            missing_keys = health.get("missing_keys", [])
+            if missing_keys:
+                preview = ", ".join(missing_keys[:3])
+                if len(missing_keys) > 3:
+                    preview += ", ..."
+                lines.append(f"Missing API keys: {preview}")
+            else:
+                lines.append("No backend is currently ready. Check local model services and provider settings.")
+        
+        return True, "\n".join(lines)
+
+    def _handle_stack_health(self) -> tuple:
+        """Return a concise runtime stack health report and language-fit guidance."""
+        lines = ["**LADA Stack Health:**", ""]
+
+        py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        lines.append(f"✅ Python runtime: {py_ver} (core desktop/orchestration)")
+
+        if self.router:
+            try:
+                status = self.router.get_status()
+                total = len(status)
+                available = sum(1 for info in status.values() if info.get('available'))
+                lines.append(f"✅ AI provider layer: {available}/{total} backends available")
+            except Exception as e:
+                lines.append(f"⚠️ AI provider layer: status unavailable ({e})")
+        else:
+            lines.append("⚠️ AI provider layer: router not initialized yet")
+
+        frontend_pkg = Path("frontend/package.json")
+        if frontend_pkg.exists():
+            try:
+                pkg = json.loads(frontend_pkg.read_text(encoding="utf-8"))
+                deps = pkg.get("dependencies", {})
+                dev_deps = pkg.get("devDependencies", {})
+                next_v = deps.get("next", "unknown")
+                ts_v = dev_deps.get("typescript", "unknown")
+                lines.append(f"✅ Web stack: Next.js {next_v}, TypeScript {ts_v}, Tailwind CSS")
+            except Exception as e:
+                lines.append(f"⚠️ Web stack: could not read package metadata ({e})")
+        else:
+            lines.append("⚠️ Web stack: frontend/package.json not found")
+
+        lines.extend([
+            "",
+            "**Language fit recommendation:**",
+            "- Keep Python as the core for voice, system automation, and agent orchestration.",
+            "- Keep TypeScript + CSS for web/frontend surfaces.",
+            "- Avoid full rewrites now; prioritize capability parity and reliability.",
+        ])
+
+        return True, "\n".join(lines)
+
+    def _build(self):
+        self.setWindowTitle("LADA AI")
+        self.setMinimumSize(900, 650)
+        self.resize(1100, 750)
+        self.setStyleSheet(f"background: {BG_SIDE};")
+        
+        # Set app icon - use new assets folder
+        from PyQt5.QtGui import QIcon
+        icon_path = Path("assets/lada_logo.ico")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+        else:
+            # Try PNG as fallback
+            icon_png = Path("assets/lada_logo.png")
+            if icon_png.exists():
+                self.setWindowIcon(QIcon(str(icon_png)))
+            else:
+                # Try old config path
+                old_icon = Path("config/lada_icon.ico")
+                if old_icon.exists():
+                    self.setWindowIcon(QIcon(str(old_icon)))
+                else:
+                    self.setWindowIcon(self.style().standardIcon(self.style().SP_ComputerIcon))
+
+        cw = QWidget()
+        self.setCentralWidget(cw)
+        main = QHBoxLayout(cw)
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(0)
+
+        # Sidebar
+        self.side = Sidebar()
+        # Expose sidebar buttons as MainWindow properties for backward compat
+        self.session_btn = self.side._session_btn
+        self.cost_btn = self.side._cost_btn
+        self.canvas_btn = self.side._canvas_btn
+        main.addWidget(self.side)
+
+        # Content
+        content = QFrame()
+        content.setStyleSheet(f"background: {BG_MAIN};")
+        cl = QVBoxLayout(content)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+
+        # Header - clean, minimal (44px)
+        hdr = QFrame()
+        hdr.setFixedHeight(44)
+        hdr.setStyleSheet(f"background: {BG_MAIN}; border-bottom: 1px solid {BORDER};")
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(16, 0, 16, 0)
+        hl.setSpacing(8)
+
+        self._hdr_sidebar_btn = QPushButton("\u2261")
+        self._hdr_sidebar_btn.setFixedSize(30, 30)
+        self._hdr_sidebar_btn.setCursor(Qt.PointingHandCursor)
+        self._hdr_sidebar_btn.setToolTip("Toggle sidebar (Ctrl+B)")
+        self._hdr_sidebar_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_DIM};
+                border: 1px solid transparent; border-radius: 15px;
+                font-size: 15px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; border-color: {BORDER}; }}
+        """)
+        self._hdr_sidebar_btn.clicked.connect(self._toggle_sidebar_from_header)
+        hl.addWidget(self._hdr_sidebar_btn)
+
+        # Left: LADA text logo
+        hdr_logo = QLabel("LADA")
+        hdr_logo.setFont(QFont(FONT_HEADING, 14, QFont.Bold))
+        hdr_logo.setStyleSheet(f"color: {TEXT};")
+        hl.addWidget(hdr_logo)
+
+        # Visible active-model pill, similar to modern chat apps.
+        self._active_model_label = QLabel("Model: Auto")
+        self._active_model_label.setStyleSheet(f"""
+            QLabel {{
+                color: {TEXT};
+                background: rgba(26,36,49,220);
+                border: 1px solid {BORDER};
+                border-radius: 12px;
+                font-size: 11px;
+                padding: 3px 10px;
+            }}
+        """)
+        hl.addWidget(self._active_model_label)
+
+        hl.addStretch()
+
+        # System status indicators
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        hl.addWidget(self._status_label)
+        # Update status every 30 seconds
+        self._header_timer = QTimer(self)
+        self._header_timer.timeout.connect(self._update_header_status)
+        self._header_timer.start(30000)
+        QTimer.singleShot(500, self._update_header_status)
+
+        # Remote bridge toggle button (Render -> local laptop control)
+        self.remote_bridge_toggle_btn = QPushButton("Bridge OFF")
+        self.remote_bridge_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.remote_bridge_toggle_btn.setFixedHeight(26)
+        self.remote_bridge_toggle_btn.setMinimumWidth(92)
+        self.remote_bridge_toggle_btn.setToolTip("Toggle remote bridge for laptop control")
+        self.remote_bridge_toggle_btn.clicked.connect(self._toggle_remote_bridge)
+        hl.addWidget(self.remote_bridge_toggle_btn)
+
+        # Voice always-on toggle button
+        self.voice_toggle_btn = QPushButton("Voice ON")
+        self.voice_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.voice_toggle_btn.setFixedHeight(26)
+        self.voice_toggle_btn.setMinimumWidth(80)
+        self.voice_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENT}; color: white;
+                border: none; border-radius: 13px; font-size: 11px;
+                padding: 4px 14px;
+            }}
+            QPushButton:hover {{ background: {ACCENT_DARK}; }}
+        """)
+        self.voice_toggle_btn.setToolTip("Toggle always-on voice (or say 'Hey LADA')")
+        self.voice_toggle_btn.clicked.connect(self._toggle_always_on_voice)
+        hl.addWidget(self.voice_toggle_btn)
+
+        # Voice button
+        self.voice_btn = QPushButton("Mic")
+        self.voice_btn.setFixedSize(32, 32)
+        self.voice_btn.setCursor(Qt.PointingHandCursor)
+        self.voice_btn.setToolTip("Voice Mode (Ctrl+M)")
+        self.voice_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_DIM};
+                border: 1px solid {BORDER}; border-radius: 16px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; border-color: {TEXT_DIM}; }}
+        """)
+        hl.addWidget(self.voice_btn)
+
+        cl.addWidget(hdr)
+
+        # Chat
+        self.chat = ChatArea()
+        cl.addWidget(self.chat, 1)
+
+        # Input
+        self.inp = InputBar()
+        cl.addWidget(self.inp)
+
+        # Wire model selector: alias self.model to InputBar's model_selector
+        self.model = self.inp.model_selector
+        self.model.currentIndexChanged.connect(self._on_model_selector_changed)
+        self._load_models()
+        self._update_header_model_label()
+        self._update_remote_bridge_button()
+
+        main.addWidget(content, 1)
+
+        # Voice overlay
+        self.vlay = VoiceOverlay(self)
+        self.vlay.hide()
+
+        # Comet-style screen control overlay
+        self.comet_overlay = CometOverlay(self)
+        self.comet_overlay.hide()
+        self.comet_overlay.stop_requested.connect(self._stop_comet_task)
+
+        # Global floating overlay (outside app window) for autonomous actions
+        self.floating_comet_overlay = AutonomousActionOverlay()
+        self.floating_comet_overlay.hide()
+        self.floating_comet_overlay.stop_requested.connect(self._stop_comet_task)
+
+        # Welcome message with time-based greeting
+        if JARVIS_OK and LadaPersonality:
+            greeting = LadaPersonality.get_time_greeting()
+        else:
+            greeting = "Hello! I'm LADA. How can I help you?"
+        self.chat.add("assistant", greeting)
+        
+        # Check for proactive alerts (battery low, etc.)
+        if self.jarvis:
+            alerts = self.jarvis.get_proactive_alerts()
+            if alerts:
+                self.chat.add("assistant", alerts)
+
+        # Status bar
+        self.statusbar = QStatusBar()
+        self.statusbar.setStyleSheet(f"background: {BG_SURFACE}; color: {TEXT_DIM}; font-size: 10px; padding: 2px 8px; font-family: '{FONT_FAMILY}';")
+        self.setStatusBar(self.statusbar)
+        self._update_status()
+
+        # Setup keyboard shortcuts
+        self._setup_shortcuts()
+
+    def _setup_shortcuts(self):
+        """Setup keyboard shortcuts - Comet-style"""
+        # Ctrl+N: New chat
+        QShortcut(QKeySequence("Ctrl+N"), self, self._new)
+        # Ctrl+B: Toggle sidebar
+        QShortcut(QKeySequence("Ctrl+B"), self, self._toggle_sidebar_from_header)
+        # Ctrl+M: Toggle voice (alternative)
+        QShortcut(QKeySequence("Ctrl+M"), self, self._toggle_voice)
+        # Shift+Alt+V: Voice mode (Comet-style)
+        QShortcut(QKeySequence("Shift+Alt+V"), self, self._toggle_voice)
+        # Ctrl+,: Open settings
+        QShortcut(QKeySequence("Ctrl+,"), self, self._open_settings)
+        # Ctrl+J: Open Assistant (Comet-style)
+        QShortcut(QKeySequence("Ctrl+J"), self, lambda: self.inp.inp.setFocus())
+        # Ctrl+K: Command palette feel - focus input
+        QShortcut(QKeySequence("Ctrl+K"), self, lambda: self.inp.inp.setFocus())
+        
+        # Setup GLOBAL hotkeys (work even when app is minimized)
+        self._setup_global_hotkeys()
+        
+        # Setup system tray for background mode
+        self._setup_tray()
+    
+    def _setup_global_hotkeys(self):
+        """Setup global keyboard shortcuts that work system-wide"""
+        if not _env_enabled("LADA_GLOBAL_HOTKEYS_ENABLED", False):
+            print("[LADA] Global hotkeys disabled (set LADA_GLOBAL_HOTKEYS_ENABLED=true to enable)")
+            return
+        if not HOTKEY_OK or not kb_global:
+            print("[LADA] Global hotkeys disabled - keyboard module not available")
+            return
+        
+        try:
+            # Ctrl+Shift+L: Show/Focus LADA window (primary activation)
+            kb_global.add_hotkey('ctrl+shift+l', self._global_show_lada, suppress=False)
+            
+            # Ctrl+Shift+V: Start voice input globally
+            kb_global.add_hotkey('ctrl+shift+v', self._global_voice_input, suppress=False)
+            
+            # Ctrl+Shift+Space: Quick command (focus input)
+            kb_global.add_hotkey('ctrl+shift+space', self._global_quick_command, suppress=False)
+            
+            # Ctrl+Alt+L: Toggle listening mode
+            kb_global.add_hotkey('ctrl+alt+l', self._global_toggle_listening, suppress=False)
+            
+            print("[LADA] Global hotkeys registered:")
+            print("       Ctrl+Shift+L: Show LADA")
+            print("       Ctrl+Shift+V: Voice input")
+            print("       Ctrl+Shift+Space: Quick command")
+            print("       Ctrl+Alt+L: Toggle listening")
+            
+        except Exception as e:
+            print(f"[LADA] Could not register global hotkeys: {e}")
+            print("       Try running as Administrator for global hotkey support")
+    
+    def _global_show_lada(self):
+        """Global hotkey handler to show/focus LADA window"""
+        QTimer.singleShot(0, self._show_from_tray)
+    
+    def _global_voice_input(self):
+        """Global hotkey handler to start voice input"""
+        QTimer.singleShot(0, lambda: (
+            self._show_from_tray(),
+            QTimer.singleShot(100, self._toggle_voice)
+        ))
+    
+    def _global_quick_command(self):
+        """Global hotkey handler for quick command input"""
+        QTimer.singleShot(0, lambda: (
+            self._show_from_tray(),
+            QTimer.singleShot(100, lambda: self.inp.inp.setFocus())
+        ))
+    
+    def _global_toggle_listening(self):
+        """Global hotkey handler to toggle continuous listening"""
+        if hasattr(self, 'continuous_listener') and self.continuous_listener:
+            if self._wakeup_active:
+                self._set_wakeup_active(False)
+                QTimer.singleShot(0, lambda: self.statusbar.showMessage("🔇 Listening paused", 3000))
+            else:
+                self._set_wakeup_active(True)
+                QTimer.singleShot(0, lambda: self.statusbar.showMessage("🎤 Listening active", 3000))
+    
+    def _setup_tray(self):
+        """Setup system tray icon for background mode"""
+        self.tray_icon = QSystemTrayIcon(self)
+        
+        # Set tray icon - use new assets folder
+        icon_path = Path("assets/lada_logo.ico")
+        if icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(icon_path)))
+        else:
+            icon_png = Path("assets/lada_logo.png")
+            if icon_png.exists():
+                self.tray_icon.setIcon(QIcon(str(icon_png)))
+            else:
+                # Try old config path
+                old_icon = Path("config/lada_icon.ico")
+                if old_icon.exists():
+                    self.tray_icon.setIcon(QIcon(str(old_icon)))
+                else:
+                    self.tray_icon.setIcon(self.style().standardIcon(self.style().SP_ComputerIcon))
+        
+        # Create tray menu
+        tray_menu = QMenu()
+        tray_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {BG_SURFACE}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 10px;
+                padding: 6px; font-family: '{FONT_FAMILY}';
+            }}
+            QMenu::item {{ padding: 8px 20px; border-radius: 6px; }}
+            QMenu::item:selected {{ background: {BG_HOVER}; }}
+        """)
+        
+        show_action = tray_menu.addAction("🖥️ Show LADA")
+        show_action.triggered.connect(self._show_from_tray)
+        
+        tray_menu.addSeparator()
+        
+        wake_action = tray_menu.addAction("🎤 Wake Word: ON" if WAKE_OK else "🎤 Wake Word: OFF")
+        wake_action.setEnabled(False)
+        
+        tray_menu.addSeparator()
+        
+        quit_action = tray_menu.addAction("❌ Quit LADA")
+        quit_action.triggered.connect(self._quit_app)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._tray_activated)
+        self.tray_icon.setToolTip("LADA AI - Say 'LADA' to activate")
+        self.tray_icon.show()
+        
+        print("[LADA] System tray active - close window to minimize, wake word stays active")
+    
+    def _show_from_tray(self):
+        """Restore window from system tray"""
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+    
+    def _tray_activated(self, reason):
+        """Handle tray icon activation"""
+        if reason == QSystemTrayIcon.DoubleClick:
+            self._show_from_tray()
+    
+    def _quit_app(self):
+        """Actually quit the application"""
+        self._save()
+        self._close_voice()
+        self._stop_remote_bridge()
+
+        # Stop standalone command bus/orchestrator if enabled
+        self._stop_standalone_orchestrator()
+        
+        # Stop wake word detection
+        if hasattr(self, 'wake_detector') and self.wake_detector:
+            try:
+                self.wake_detector.stop()
+            except Exception as e:
+                pass
+        
+        # Stop Alexa background services
+        if hasattr(self, 'alexa_processes'):
+            for proc in self.alexa_processes:
+                try:
+                    proc.terminate()
+                except Exception as e:
+                    pass
+            print("[LADA] Alexa services stopped")
+
+        # Stop proactive agent
+        if hasattr(self, '_proactive_agent') and self._proactive_agent:
+            try:
+                self._proactive_agent.stop()
+                print("[LADA] Proactive Agent stopped")
+            except Exception as e:
+                pass
+
+        # Hide tray icon
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
+
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            self.floating_comet_overlay.hide()
+            self.floating_comet_overlay.close()
+
+        QApplication.quit()
+    
+    def _check_face_auth(self):
+        """Check face recognition using in-app overlay (no OpenCV popup)"""
+        if not hasattr(self, 'face_auth') or not self.face_auth:
+            return
+        
+        # Check if face unlock is enabled in settings
+        try:
+            import json
+            settings_file = Path("config/app_settings.json")
+            if settings_file.exists():
+                saved = json.loads(settings_file.read_text())
+                if not saved.get('face_unlock_enabled', False):
+                    return  # Face unlock disabled, skip
+            else:
+                return  # No settings, skip face auth
+        except Exception as e:
+            return  # Error reading settings, skip
+        
+        try:
+            # Create and show in-app face auth overlay
+            self.face_overlay = FaceAuthOverlay(self, self.face_auth)
+            self.face_overlay.setGeometry(0, 0, self.width(), self.height())
+            self.face_overlay.auth_complete.connect(self._on_face_auth_complete)
+            self.face_overlay.show()
+            self.face_overlay.raise_()
+            self.face_overlay.start()
+        except Exception as e:
+            print(f"[LADA] Face auth error: {e}")
+    
+    def _on_face_auth_complete(self, success: bool, message: str):
+        """Handle face auth completion"""
+        if hasattr(self, 'face_overlay'):
+            self.face_overlay.hide()
+            self.face_overlay.deleteLater()
+        
+        if success and "Welcome" in message:
+            self.chat.add("assistant", f"🔓 {message}")
+        elif success and "enrolled" in message.lower():
+            self.chat.add("assistant", f"🔐 {message}")
+        # Don't show message if skipped
+        
+        # Escape: Close voice overlay
+        QShortcut(QKeySequence("Escape"), self, self._close_voice)
+
+    def _update_status(self):
+        """Update status bar with backend info"""
+        prefix = ""
+        if hasattr(self, '_wakeup_active') and WAKE_OK and hasattr(self, 'continuous_listener') and self.continuous_listener:
+            prefix = "ACTIVE" if self._wakeup_active else "STANDBY"
+
+        if self.router:
+            if hasattr(self.router, '_ensure_backends_checked'):
+                try:
+                    self.router._ensure_backends_checked()
+                except Exception:
+                    pass
+            status = self.router.get_status()
+            parts = []
+            for k, v in status.items():
+                if v.get('available'):
+                    parts.append(v.get('name', k))
+            if parts:
+                base = " | ".join(parts)
+            else:
+                health = self._collect_runtime_health()
+                missing_keys = health.get("missing_keys", [])
+                if missing_keys:
+                    preview = ", ".join(missing_keys[:2])
+                    base = f"No backends available - add API keys ({preview})"
+                else:
+                    base = "No backends available - check provider services"
+            self.statusbar.showMessage(f"{prefix}  |  {base}" if prefix else base)
+        else:
+            self.statusbar.showMessage(f"{prefix}  |  AI Router not initialized" if prefix else "AI Router not initialized")
+
+    def _update_header_status(self):
+        """Update header status bar with battery, time, and connection info."""
+        parts = []
+        if self._remote_bridge_enabled:
+            parts.append("Bridge: ON")
+        try:
+            if self.router:
+                status = self.router.get_status()
+                total = len(status)
+                available = sum(1 for v in status.values() if v.get('available'))
+                if total > 0:
+                    parts.append(f"AI: {available}/{total} ready")
+        except Exception:
+            pass
+        try:
+            import psutil
+            batt = psutil.sensors_battery()
+            if batt:
+                pct = int(batt.percent)
+                charging = " +" if batt.power_plugged else ""
+                parts.append(f"Battery: {pct}%{charging}")
+        except Exception as e:
+            pass
+        try:
+            from datetime import datetime
+            parts.append(datetime.now().strftime("%I:%M %p"))
+        except Exception as e:
+            pass
+        if parts:
+            self._status_label.setText("  |  ".join(parts))
+        else:
+            self._status_label.setText("")
+
+    def _remote_bridge_is_configured(self):
+        return bool(os.getenv("LADA_REMOTE_BRIDGE_SERVER_URL", "").strip()) and bool(
+            os.getenv("LADA_REMOTE_BRIDGE_PASSWORD", "").strip()
+        )
+
+    def _update_remote_bridge_button(self):
+        if not hasattr(self, "remote_bridge_toggle_btn"):
+            return
+
+        configured = self._remote_bridge_is_configured()
+        button = self.remote_bridge_toggle_btn
+        if not configured:
+            button.setText("Bridge N/A")
+            button.setEnabled(False)
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {BG_CARD}; color: {TEXT_DIM};
+                    border: 1px solid {BORDER}; border-radius: 13px; font-size: 11px;
+                    padding: 4px 14px;
+                }}
+                """
+            )
+            button.setToolTip("Set LADA_REMOTE_BRIDGE_SERVER_URL and LADA_REMOTE_BRIDGE_PASSWORD in .env")
+            return
+
+        button.setEnabled(True)
+        if self._remote_bridge_enabled:
+            button.setText("Bridge ON")
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {SUCCESS}; color: white;
+                    border: none; border-radius: 13px; font-size: 11px;
+                    padding: 4px 14px;
+                }}
+                QPushButton:hover {{ background: #059669; }}
+                """
+            )
+            button.setToolTip("Click to stop remote bridge")
+        else:
+            button.setText("Bridge OFF")
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: transparent; color: {TEXT_DIM};
+                    border: 1px solid {BORDER}; border-radius: 13px; font-size: 11px;
+                    padding: 4px 14px;
+                }}
+                QPushButton:hover {{ background: {BG_HOVER}; color: {TEXT}; border-color: {TEXT_DIM}; }}
+                """
+            )
+            button.setToolTip("Click to start remote bridge")
+
+    def _set_remote_bridge_running_state(self, running: bool):
+        self._remote_bridge_enabled = bool(running)
+        self._update_remote_bridge_button()
+        self._update_header_status()
+        if not running:
+            self.remote_bridge_worker = None
+            self.remote_bridge_client = None
+
+    def _on_remote_bridge_error(self, message: str):
+        self._set_remote_bridge_running_state(False)
+        if hasattr(self, "statusbar") and self.statusbar:
+            self.statusbar.showMessage(f"Remote bridge error: {message}", 7000)
+
+    def _start_remote_bridge(self):
+        if self._remote_bridge_enabled:
+            return
+        existing_worker = getattr(self, "remote_bridge_worker", None)
+        if existing_worker and existing_worker.isRunning():
+            self.statusbar.showMessage("Remote bridge is still shutting down. Please wait a moment.", 4000)
+            return
+        if not REMOTE_BRIDGE_OK or RemoteBridgeClient is None:
+            self.statusbar.showMessage("Remote bridge module unavailable.", 5000)
+            return
+        if not self._remote_bridge_is_configured():
+            self.statusbar.showMessage("Remote bridge is not configured in .env.", 5000)
+            return
+
+        try:
+            client = RemoteBridgeClient()
+        except Exception as e:
+            self.statusbar.showMessage(f"Remote bridge config error: {e}", 7000)
+            return
+
+        worker = RemoteBridgeWorker(client)
+        worker.running_changed.connect(self._set_remote_bridge_running_state)
+        worker.error.connect(self._on_remote_bridge_error)
+        self.remote_bridge_client = client
+        self.remote_bridge_worker = worker
+        worker.start()
+        self.statusbar.showMessage("Starting remote bridge...", 3000)
+
+    def _stop_remote_bridge(self):
+        worker = getattr(self, "remote_bridge_worker", None)
+        client = getattr(self, "remote_bridge_client", None)
+        if worker:
+            worker.stop()
+            self._remote_bridge_enabled = False
+            self._update_remote_bridge_button()
+            self._update_header_status()
+            self.statusbar.showMessage("Stopping remote bridge...", 3000)
+            return
+        elif client:
+            try:
+                client.stop()
+            except Exception:
+                pass
+        self.remote_bridge_client = None
+        self._set_remote_bridge_running_state(False)
+        self.statusbar.showMessage("Remote bridge stopped.", 3000)
+
+    def _toggle_remote_bridge(self):
+        if self._remote_bridge_enabled:
+            self._stop_remote_bridge()
+        else:
+            self._start_remote_bridge()
+
+    def _maybe_auto_start_remote_bridge(self):
+        if not self._remote_bridge_auto_start:
+            return
+        if not self._remote_bridge_is_configured():
+            return
+        self._start_remote_bridge()
+
+    def _get_selected_model_label(self):
+        """Return a clean display label for the currently selected model."""
+        if not hasattr(self, 'model'):
+            return "Auto"
+
+        idx = self.model.currentIndex()
+        if idx < 0:
+            return "Auto"
+
+        model_data = self.model.itemData(idx)
+        model_text = (self.model.itemText(idx) or "").strip()
+
+        if isinstance(model_data, str) and model_data == "auto":
+            return "Auto"
+        if not model_text or model_text.startswith("──"):
+            return "Auto"
+        return model_text
+
+    def _update_header_model_label(self):
+        """Sync the header model pill with the input model selector."""
+        if hasattr(self, '_active_model_label'):
+            self._active_model_label.setText(f"Model: {self._get_selected_model_label()}")
+
+    def _open_settings(self):
+        """Open settings dialog"""
+        dlg = SettingsDialog(self, self.router, self.voice)
+        if dlg.exec_():
+            settings = dlg.get_settings()
+            self._apply_settings(settings)
+    
+    def _export_conversation(self):
+        """Export current conversation to file"""
+        if not self.conv:
+            QMessageBox.information(self, "Export", "No conversation to export.")
+            return
+        
+        # Show format selection dialog
+        from PyQt5.QtWidgets import QInputDialog
+        formats = ["Markdown (.md)", "JSON (.json)", "Text (.txt)"]
+        if EXPORT_OK and ExportManager:
+            formats.insert(0, "PDF (.pdf)")
+            formats.insert(2, "Word (.docx)")
+        
+        format_choice, ok = QInputDialog.getItem(
+            self, "Export Format", "Choose export format:", formats, 0, False
+        )
+        
+        if not ok:
+            return
+        
+        # Determine file extension
+        if "PDF" in format_choice:
+            ext, fmt = ".pdf", "pdf"
+        elif "Word" in format_choice:
+            ext, fmt = ".docx", "docx"
+        elif "Markdown" in format_choice:
+            ext, fmt = ".md", "markdown"
+        elif "JSON" in format_choice:
+            ext, fmt = ".json", "json"
+        else:
+            ext, fmt = ".txt", "text"
+        
+        # Get save path
+        default_name = f"LADA_Chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Conversation", default_name, f"*{ext}"
+        )
+        
+        if not save_path:
+            return
+        
+        try:
+            if EXPORT_OK and ExportManager and fmt in ["pdf", "docx", "markdown", "json"]:
+                # Use ExportManager for rich exports
+                exporter = ExportManager()
+                # Convert conv to Conversation object
+                from modules.chat_manager import Conversation, Message
+                conv_obj = Conversation(
+                    id=datetime.now().strftime('%Y%m%d_%H%M%S'),
+                    title=self.conv[0].get('message', 'Chat')[:30] if self.conv else 'Chat'
+                )
+                for msg in self.conv:
+                    conv_obj.messages.append(Message(
+                        role=msg.get('role', 'user'),
+                        content=msg.get('message', '')
+                    ))
+                exporter.export_conversation(conv_obj, fmt, Path(save_path).parent)
+                # Rename to user's chosen path
+                import shutil
+                exported_file = list(Path(save_path).parent.glob(f"*{ext}"))[-1]
+                if exported_file.name != Path(save_path).name:
+                    shutil.move(str(exported_file), save_path)
+            else:
+                # Simple text/markdown/json export
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    if fmt == "json":
+                        json.dump(self.conv, f, indent=2, ensure_ascii=False)
+                    elif fmt == "markdown":
+                        f.write(f"# LADA Conversation\n\n")
+                        f.write(f"*Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n---\n\n")
+                        for msg in self.conv:
+                            role = "**You:**" if msg.get('role') == 'user' else "**LADA:**"
+                            f.write(f"{role}\n\n{msg.get('message', '')}\n\n---\n\n")
+                    else:
+                        f.write(f"LADA Conversation\nExported: {datetime.now()}\n\n")
+                        for msg in self.conv:
+                            role = "You:" if msg.get('role') == 'user' else "LADA:"
+                            f.write(f"{role}\n{msg.get('message', '')}\n\n")
+            
+            QMessageBox.information(self, "Export Complete", f"Conversation saved to:\n{save_path}")
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Export Error", f"Failed to export: {e}")
+    
+    def _apply_settings(self, settings: dict):
+        """Apply settings from dialog"""
+        if not settings:
+            return
+        
+        # Apply privacy mode
+        if hasattr(self, 'jarvis') and self.jarvis:
+            self.jarvis.set_privacy_mode(settings.get('privacy_mode', False))
+        
+        # Apply voice settings
+        if self.voice:
+            if hasattr(self.voice, 'set_voice_speed'):
+                self.voice.set_voice_speed(settings.get('voice_speed', 175))
+            elif hasattr(self.voice, 'voice_speed'):
+                self.voice.voice_speed = settings.get('voice_speed', 175)
+        
+        # Apply font size to chat messages
+        new_font_size = settings.get('font_size', 18)
+        if new_font_size != RichTextLabel.font_size:
+            RichTextLabel.font_size = new_font_size
+            # Update markdown renderer font size too
+            if _md_renderer:
+                _md_renderer.set_font_size(new_font_size)
+        
+        # Apply browser search preference
+        self.browser_search_mode = settings.get('browser_search', False)
+
+        # Apply personality mode immediately so tone changes at runtime.
+        personality_mode_index = int(settings.get('personality_mode', 2))
+        personality_mode_name = self._personality_mode_from_index(personality_mode_index)
+        if JARVIS_OK and LadaPersonality:
+            try:
+                LadaPersonality.set_mode(personality_mode_name)
+            except Exception as e:
+                logger.warning(f"[LADA] Could not set personality mode '{personality_mode_name}': {e}")
+        
+        # Store settings for later
+        self.current_settings = settings
+        
+        # Show confirmation
+        mode = "🔒 Private" if settings.get('privacy_mode') else "🌐 Public"
+        self.statusbar.showMessage(
+            f"Settings applied. Mode: {mode} | Personality: {personality_mode_name.title()} | Font: {new_font_size}px",
+            3000,
+        )
+
+    def _load_models(self):
+        self.model.clear()
+        self.model.addItem("Auto (Best Available)", "auto")
+        if not self.router:
+            print("[LADA] Router not available - no models to display")
+            self._update_header_model_label()
+            return
+
+        normalized = []
+        if hasattr(self.router, 'get_all_available_models'):
+            try:
+                for model in (self.router.get_all_available_models() or []):
+                    model_id = str(model.get('id', '')).strip()
+                    if not model_id:
+                        continue
+                    normalized.append({
+                        'id': model_id,
+                        'provider': str(model.get('provider', '')).strip(),
+                        'provider_name': str(model.get('provider_name', model.get('provider', 'Provider'))).strip(),
+                        'name': str(model.get('name', model_id)).replace(' (offline)', '').strip(),
+                        'available': bool(model.get('available', True)),
+                    })
+            except Exception as e:
+                print(f"[LADA] get_all_available_models error: {e}")
+
+        # Fallback for cases where registry entries are empty but provider dropdown exists.
+        if not normalized and hasattr(self.router, 'get_provider_dropdown_items'):
+            try:
+                for item in (self.router.get_provider_dropdown_items() or []):
+                    model_id = str(item.get('value', '')).strip()
+                    if not model_id or model_id == 'auto':
+                        continue
+
+                    label = str(item.get('label', model_id)).strip()
+                    is_available = bool(item.get('available', True)) and '(offline)' not in label.lower()
+                    normalized.append({
+                        'id': model_id,
+                        'provider': str(item.get('provider', 'lada')).strip(),
+                        'provider_name': str(item.get('provider', 'lada')).strip(),
+                        'name': label.replace(' (offline)', '').strip(),
+                        'available': is_available,
+                    })
+            except Exception as e:
+                print(f"[LADA] get_provider_dropdown_items error: {e}")
+
+        if not normalized:
+            self.model.addItem("No models available", "")
+            idx = self.model.count() - 1
+            self.model.setItemData(idx, 0, Qt.UserRole - 1)
+            print("[LADA] Model dropdown: no models found")
+            self.model.setCurrentIndex(0)
+            self._update_header_model_label()
+            return
+
+        current_provider = None
+        added = 0
+        for model in normalized:
+            provider = model.get('provider', '')
+            if provider != current_provider:
+                current_provider = provider
+                provider_label = model.get('provider_name', provider) or provider or 'Provider'
+                sep = f"\u2500\u2500 {provider_label} \u2500\u2500"
+                self.model.addItem(sep, "")
+                idx = self.model.count() - 1
+                self.model.setItemData(idx, 0, Qt.UserRole - 1)
+
+            display_name = model.get('name', model.get('id', ''))
+            if not model.get('available', False) and '(offline)' not in display_name.lower():
+                display_name = f"{display_name} (offline)"
+
+            self.model.addItem(f"  {display_name}", model.get('id', ''))
+            added += 1
+
+        print(f"[LADA] Model dropdown: {added} models loaded")
+        self.model.setCurrentIndex(0)
+        self._update_header_model_label()
+
+    def _on_model_selector_changed(self, index):
+        """Handle model selector change."""
+        if not hasattr(self, 'model'):
+            return
+
+        # Skip provider separator rows if selected accidentally.
+        text = (self.model.itemText(index) or "").strip()
+        data = self.model.itemData(index)
+        if text.startswith("──") or not isinstance(data, str) or not data:
+            for i in range(index + 1, self.model.count()):
+                next_data = self.model.itemData(i)
+                if isinstance(next_data, str) and next_data:
+                    self.model.setCurrentIndex(i)
+                    return
+            self.model.setCurrentIndex(0)
+            return
+
+        self._update_header_model_label()
+
+    def _wire(self):
+        self.side.new_chat.connect(self._new)
+        self.side.load_chat.connect(self._load)
+        self.side.load_voice_chat.connect(self._load_voice_session)
+        self.side.collapse_toggled.connect(self._on_sidebar_collapse_changed)
+        self.side.open_settings.connect(self._open_settings)  # Settings from sidebar
+        self.side.export_chat.connect(self._export_conversation)  # Export from sidebar
+        self.side.open_session.connect(self._open_session_picker)  # Session from sidebar
+        self.side.open_cost.connect(self._show_cost_dialog)  # Cost from sidebar
+        self.side.open_canvas.connect(self._open_canvas)  # Canvas from sidebar
+        self.inp.send.connect(self._send)
+        self.voice_btn.clicked.connect(self._toggle_voice)
+        self.inp.stop_btn.clicked.connect(self._stop_generation)  # Stop button
+        self.vlay.closed.connect(self._close_voice)
+        self.vlay.mic.clicked.connect(self._toggle_listen)
+        self.chat.suggestion_clicked.connect(self._on_suggestion_chip)
+        self.chat.copy_clicked.connect(self._on_chat_copy)
+        self.chat.regenerate_clicked.connect(self._on_chat_regenerate)
+        self.chat.feedback_clicked.connect(self._on_chat_feedback)
+
+        self._on_sidebar_collapse_changed(self.side.is_collapsed())
+        QTimer.singleShot(0, self._apply_responsive_sidebar)
+
+    def _toggle_sidebar_from_header(self):
+        if hasattr(self, 'side') and self.side:
+            self.side.set_collapsed(not self.side.is_collapsed(), emit_signal=True)
+
+    def _on_sidebar_collapse_changed(self, collapsed: bool):
+        if hasattr(self, '_hdr_sidebar_btn') and self._hdr_sidebar_btn:
+            self._hdr_sidebar_btn.setText(">" if collapsed else "<")
+            self._hdr_sidebar_btn.setToolTip(
+                "Expand sidebar (Ctrl+B)" if collapsed else "Collapse sidebar (Ctrl+B)"
+            )
+
+        if not self._sidebar_responsive_adjusting:
+            self._sidebar_auto_collapsed = False
+
+        self._apply_header_compact_mode()
+        self._update_overlay_geometry()
+
+    def _apply_responsive_sidebar(self):
+        if not hasattr(self, 'side') or not self.side:
+            return
+
+        win_width = self.width()
+        collapse_threshold = 1040
+        expand_threshold = 1260
+
+        if win_width <= collapse_threshold and not self.side.is_collapsed():
+            self._sidebar_responsive_adjusting = True
+            self.side.set_collapsed(True, emit_signal=True)
+            self._sidebar_responsive_adjusting = False
+            self._sidebar_auto_collapsed = True
+        elif (
+            win_width >= expand_threshold
+            and self._sidebar_auto_collapsed
+            and self.side.is_collapsed()
+        ):
+            self._sidebar_responsive_adjusting = True
+            self.side.set_collapsed(False, emit_signal=True)
+            self._sidebar_responsive_adjusting = False
+            self._sidebar_auto_collapsed = False
+
+    def _update_overlay_geometry(self):
+        if not hasattr(self, 'side') or not self.side:
+            return
+
+        content_x = self.side.width()
+        content_w = max(1, self.width() - content_x)
+
+        if hasattr(self, 'vlay') and self.vlay:
+            self.vlay.setGeometry(content_x, 0, content_w, self.height())
+
+        if hasattr(self, 'comet_overlay') and self.comet_overlay:
+            self.comet_overlay.setGeometry(content_x, 0, content_w, self.height())
+
+    def _apply_header_compact_mode(self):
+        win_width = self.width()
+
+        show_model_pill = win_width >= 980
+        show_status_line = win_width >= 1180
+
+        if hasattr(self, '_active_model_label') and self._active_model_label:
+            self._active_model_label.setVisible(show_model_pill)
+
+        if hasattr(self, '_status_label') and self._status_label:
+            self._status_label.setVisible(show_status_line)
+
+    def _on_chat_copy(self, text: str):
+        """Handle copy action from chat message toolbar."""
+        self.statusbar.showMessage("Copied response to clipboard", 1800)
+
+    def _on_chat_regenerate(self):
+        """Regenerate based on the latest user message."""
+        if getattr(self, 'ai_worker', None) and self.ai_worker.isRunning():
+            self.statusbar.showMessage("Already generating a response...", 2000)
+            return
+
+        last_user = None
+        for msg in reversed(self.conv):
+            if msg.get('role') == 'user':
+                candidate = (msg.get('message') or '').strip()
+                if candidate and not candidate.startswith('[Voice]'):
+                    last_user = candidate
+                    break
+
+        if not last_user:
+            self.statusbar.showMessage("No recent user message found to regenerate", 2500)
+            return
+
+        self.statusbar.showMessage("Regenerating response...", 2000)
+        self._send(last_user, files=[])
+
+    def _on_chat_feedback(self, feedback: str):
+        """Handle feedback action from chat message toolbar."""
+        label = "Thanks for the feedback" if feedback == 'up' else "Got it — I'll improve"
+        self.statusbar.showMessage(label, 2000)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._apply_responsive_sidebar()
+        self._apply_header_compact_mode()
+        self._update_overlay_geometry()
+
+    def _new(self):
+        self._save()
+        self.conv = []
+        self.conv_file = None
+        self.chat.clear_all()
+        self.chat.add("assistant", "Hello! I'm LADA. How can I help you?")
+        self.side.refresh()
+
+    def _load(self, path):
+        self._save()
+        try:
+            self.conv = json.loads(Path(path).read_text(encoding='utf-8'))
+            self.conv_file = path
+            self.chat.clear_all()
+            for m in self.conv:
+                self.chat.add(m['role'], m['message'])
+        except Exception as e:
+            pass
+    
+    def _load_voice_session(self, path):
+        """Load a voice session for viewing"""
+        try:
+            data = json.loads(Path(path).read_text(encoding='utf-8'))
+            self.chat.clear_all()
+            self.chat.add("assistant", "🎤 Voice Session History:")
+            for m in data:
+                self.chat.add(m['role'], m['message'])
+        except Exception as e:
+            pass
+
+    def _save(self):
+        if not self.conv:
+            return
+        try:
+            p = self.conv_file or f"data/conversations/{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json"
+            Path(p).write_text(json.dumps(self.conv, indent=2, ensure_ascii=False), encoding='utf-8')
+        except Exception as e:
+            pass
+        # Auto-save to named session file if one is active
+        try:
+            current_name = getattr(self, '_current_session_name', None)
+            if current_name:
+                session_path = Path('data/sessions') / f'{current_name}.json'
+                session_path.parent.mkdir(parents=True, exist_ok=True)
+                session_data = {
+                    'session_name': current_name,
+                    'updated_at': datetime.now().isoformat(),
+                    'messages': self.conv,
+                }
+                session_path.write_text(
+                    json.dumps(session_data, indent=2, ensure_ascii=False), encoding='utf-8'
+                )
+        except Exception:
+            pass
+
+    def _on_suggestion_chip(self, cmd):
+        """Handle suggestion chip click - send it as a message."""
+        self._send(cmd, [])
+
+    def _send(self, text, files):
+        if not text and not files:
+            return
+        disp = text
+        if files:
+            disp = f"[{', '.join(f['name'] for f in files)}]\n{text}" if text else f"[{', '.join(f['name'] for f in files)}]"
+        self.chat.add("user", disp)
+        self.conv.append({"role": "user", "message": disp})
+
+        # Check if this is a long-running autonomous/agent task
+        # If so, run it in a background thread to avoid UI freeze
+        if self._is_agent_task(text):
+            self._run_agent_task(text)
+            return
+
+        # Check for system commands first
+        handled, response = self._check_system_command(text)
+        if handled:
+            self.chat.add("assistant", response)
+            self.conv.append({"role": "assistant", "message": response})
+            if self.vlay.isVisible() and self.voice:
+                self._set_v(VState.SPEAK)
+                self.vlay.set_text(response)
+                def speak():
+                    self.voice.speak(response)
+                    if self.vlay.isVisible():
+                        QTimer.singleShot(200, self._listen)
+                    else:
+                        self._set_v(VState.IDLE)
+                threading.Thread(target=speak, daemon=True).start()
+            return
+        
+        # LADA v7.0: Check for agent intents (flight, hotel, restaurant, email, calendar, product)
+        if not files:
+            agent_type, params = self._detect_agent_intent(text)
+            if agent_type:
+                if agent_type == 'flight' and AGENTS_OK and self.flight_agent:
+                    self._handle_flight_agent(params)
+                    return
+                elif agent_type == 'product' and AGENTS_OK and self.product_agent:
+                    self._handle_product_agent(params)
+                    return
+                elif agent_type == 'hotel':
+                    self._handle_hotel_agent(params)
+                    return
+                elif agent_type == 'restaurant':
+                    self._handle_restaurant_agent(params)
+                    return
+                elif agent_type == 'email':
+                    self._handle_email_agent(params)
+                    return
+                elif agent_type == 'calendar':
+                    self._handle_calendar_agent(params)
+                    return
+        
+        self.inp.enable(False)
+        self.inp.show_stop()  # Show stop button during generation
+
+        # Add streaming placeholder (typing indicator)
+        self.chat.add_streaming_placeholder()
+        
+        # Get selected model from dropdown (use itemData for Phase 2 model ID)
+        selected_model = None
+        if hasattr(self, 'model'):
+            model_data = self.model.currentData()
+            if model_data and model_data != 'auto':
+                selected_model = model_data  # Phase 2 model ID (e.g. "llama-3.3-70b-versatile")
+            elif self.model.currentText() and 'auto' not in self.model.currentText().lower():
+                selected_model = self.model.currentText()  # Legacy name fallback
+        
+        # Check if web search is enabled
+        use_web_search = self.inp.is_web_search_enabled() if hasattr(self.inp, 'is_web_search_enabled') else False
+        
+        # Enable/disable web search in router
+        if self.router and hasattr(self.router, 'web_search_enabled'):
+            self.router.web_search_enabled = use_web_search
+
+        # Use StreamingAIWorker for ChatGPT-style typing effect
+        self._last_prompt = text  # Track for cost recording
+        self._stream_cancelled = False
+        self.ai_worker = StreamingAIWorker(text, self.router, files, preferred_backend=selected_model)
+        self.ai_worker.chunk_received.connect(self._on_ai_chunk)
+        self.ai_worker.done.connect(self._on_ai_done)
+        self.ai_worker.error.connect(self._on_ai_err)
+        self.ai_worker.source_detected.connect(self._on_ai_source)
+        self.ai_worker.web_sources.connect(self._on_web_sources)
+        self.ai_worker.start()
+
+    def _on_web_sources(self, sources):
+        """Handle web search sources - store for display with response."""
+        self._pending_sources = sources
+        # Show "Searching..." indicator
+        self.statusbar.showMessage(f"🔍 Searching web... ({len(sources)} sources found)", 3000)
+
+    def _on_ai_chunk(self, chunk):
+        """Handle streaming chunk - update the typing message."""
+        if self._stream_cancelled:
+            return
+        self.chat.update_streaming(getattr(self, '_streaming_text', '') + chunk)
+        self._streaming_text = getattr(self, '_streaming_text', '') + chunk
+
+    def _on_ai_done(self, full_response):
+        """Handle streaming completion - finalize message with toolbar."""
+        if self._stream_cancelled:
+            return
+        self._streaming_text = ''  # Reset
+
+        # If we have pending sources, append them to the response
+        if hasattr(self, '_pending_sources') and self._pending_sources and _md_renderer:
+            sources_html = _md_renderer.render_citations(self._pending_sources)
+            if sources_html:
+                full_response = full_response + "\n\n" + "---" + "\n" + sources_html
+            self._pending_sources = None
+
+        # Add source attribution label
+        source = getattr(self, '_last_ai_source', '')
+        if source:
+            full_response = full_response + f"\n\n*Powered by {source}*"
+            self._last_ai_source = ''
+
+        self.chat.finalize_streaming(full_response)
+        self.conv.append({"role": "assistant", "message": full_response})
+        self.inp.enable(True)
+        self.inp.hide_stop()
+
+        # Save conversation
+        self._save()
+
+        # Record token cost and update cost button
+        if self._cost_tracker:
+            try:
+                prompt = getattr(self, '_last_prompt', '')
+                backend = getattr(self.router, 'current_backend_name', 'unknown') if self.router else 'unknown'
+                # Extract model/provider from "Provider (model)" format
+                provider = backend.split('(')[0].strip() if '(' in backend else backend
+                model_id = backend.split('(')[1].rstrip(')') if '(' in backend else backend
+                # Get cost rates from model registry if available
+                cost_in, cost_out = 0.0, 0.0
+                if self.router and hasattr(self.router, 'model_registry') and self.router.model_registry:
+                    m = self.router.model_registry.get_model(model_id)
+                    if m:
+                        cost_in, cost_out = getattr(m, 'cost_input', 0.0), getattr(m, 'cost_output', 0.0)
+                self._cost_tracker.record_from_text(
+                    prompt, full_response, model_id, provider,
+                    cost_input_per_m=cost_in, cost_output_per_m=cost_out
+                )
+                # Update cost button text
+                summary = self._cost_tracker.get_summary()
+                total_cost = summary.get('total_cost_usd', 0)
+                self.cost_btn.setText(f"${total_cost:.4f}")
+                # Also show token summary in status bar briefly
+                status_text = self._cost_tracker.get_status_text()
+                if status_text:
+                    self.statusbar.showMessage(status_text, 8000)
+            except Exception:
+                pass
+
+        # Voice response if in voice mode
+        if self.vlay.isVisible() and self.voice and self._voice_enabled:
+            self._set_v(VState.SPEAK)
+            self.vlay.set_text(full_response[:60] + "..." if len(full_response) > 60 else full_response)
+
+            def speak():
+                self.voice.speak(full_response)
+                if self.vlay.isVisible():
+                    QTimer.singleShot(200, self._listen)
+                else:
+                    self._set_v(VState.IDLE)
+            threading.Thread(target=speak, daemon=True).start()
+
+    def _on_ai_source(self, source_name):
+        """Handle source detection from streaming."""
+        self._last_ai_source = source_name
+        # Update status bar with AI source
+        if hasattr(self, 'statusbar') and self.statusbar:
+            self.statusbar.showMessage(f"Using: {source_name}", 5000)
+
+    def _show_cost_dialog(self):
+        """Show token usage and cost summary dialog."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Token Usage & Cost")
+        dlg.setMinimumWidth(420)
+        dlg.setStyleSheet(f"background: {BG_SURFACE}; color: {TEXT};")
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(12)
+        lay.setContentsMargins(20, 20, 20, 20)
+
+        if not self._cost_tracker:
+            lay.addWidget(QLabel("Cost tracking is not available."))
+        else:
+            summary = self._cost_tracker.get_summary()
+            total_tokens = summary.get('total_tokens', 0)
+            total_cost = summary.get('total_cost_usd', 0)
+            budget = summary.get('budget_usd', 0)
+            remaining = summary.get('budget_remaining')
+            requests_count = summary.get('total_requests', 0)
+            by_provider = summary.get('costs_by_provider', {})
+
+            # Title
+            title = QLabel("Session Token Usage")
+            title.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {TEXT};")
+            lay.addWidget(title)
+
+            # Main stats grid
+            def add_row(label, value):
+                row = QHBoxLayout()
+                lbl = QLabel(label)
+                lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 13px;")
+                val = QLabel(str(value))
+                val.setStyleSheet(f"color: {TEXT}; font-size: 13px; font-weight: 500;")
+                val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                row.addWidget(lbl)
+                row.addStretch()
+                row.addWidget(val)
+                lay.addLayout(row)
+
+            add_row("Total Requests:", str(requests_count))
+            add_row("Total Tokens:", f"{total_tokens:,}")
+            add_row("Input Tokens:", f"{summary.get('total_input_tokens', 0):,}")
+            add_row("Output Tokens:", f"{summary.get('total_output_tokens', 0):,}")
+            add_row("Estimated Cost:", f"${total_cost:.6f}")
+            if budget > 0:
+                add_row("Budget:", f"${budget:.2f}")
+                if remaining is not None:
+                    add_row("Remaining:", f"${remaining:.6f}")
+
+            # Provider breakdown
+            if by_provider:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setStyleSheet(f"color: {BORDER};")
+                lay.addWidget(sep)
+                prov_title = QLabel("By Provider:")
+                prov_title.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px; font-weight: 600;")
+                lay.addWidget(prov_title)
+                for prov, cost in by_provider.items():
+                    add_row(f"  {prov}", f"${cost:.6f}")
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.setFixedHeight(32)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {BG_HOVER}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 8px;
+                font-size: 13px; padding: 4px 20px;
+            }}
+            QPushButton:hover {{ background: {BG_CARD}; }}
+        """)
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn, alignment=Qt.AlignRight)
+        dlg.exec_()
+
+    def _open_canvas(self):
+        """Open the AI Canvas in a floating window."""
+        if not CANVAS_OK:
+            self.chat.add_message("system", "Canvas requires PyQt5 (already installed).")
+            return
+
+        # Use a persistent window so it doesn't get garbage collected
+        if not hasattr(self, '_canvas_window') or self._canvas_window is None:
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout as _VL
+            self._canvas_window = QDialog(self)
+            self._canvas_window.setWindowTitle("AI Canvas")
+            self._canvas_window.setMinimumSize(900, 600)
+            self._canvas_window.setStyleSheet(f"background: {BG_SURFACE}; color: {TEXT};")
+            canvas_layout = _VL(self._canvas_window)
+            canvas_layout.setContentsMargins(0, 0, 0, 0)
+
+            # Build canvas with AI router
+            router = getattr(self, 'router', None)
+            canvas = create_canvas(ai_router=router) if create_canvas else None
+            if canvas:
+                canvas_layout.addWidget(canvas)
+            else:
+                from PyQt5.QtWidgets import QLabel as _QL
+                canvas_layout.addWidget(_QL("Canvas not available."))
+
+        self._canvas_window.show()
+        self._canvas_window.raise_()
+        self._canvas_window.activateWindow()
+
+    def _open_session_picker(self):
+        """Open dialog to switch to or create a named topic session."""
+        from pathlib import Path as _Path
+
+        sessions_dir = _Path("data/sessions")
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        existing = sorted(p.stem for p in sessions_dir.glob("*.json"))
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Named Sessions")
+        dlg.setMinimumWidth(380)
+        dlg.setStyleSheet(f"background: {BG_SURFACE}; color: {TEXT};")
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+        lay.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel("Your topic sessions")
+        title.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {TEXT};")
+        lay.addWidget(title)
+
+        # Existing sessions list
+        session_list = QListWidget()
+        session_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {BG_MAIN}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 8px;
+                font-size: 13px; padding: 4px;
+            }}
+            QListWidget::item:selected {{ background: {BG_HOVER}; }}
+            QListWidget::item:hover {{ background: {BG_HOVER}; }}
+        """)
+        session_list.setMaximumHeight(160)
+        for name in existing:
+            item = QListWidgetItem(name)
+            session_list.addItem(item)
+        lay.addWidget(session_list)
+
+        # New session input
+        new_lbl = QLabel("Create / switch to:")
+        new_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+        lay.addWidget(new_lbl)
+
+        new_inp = QLineEdit()
+        new_inp.setPlaceholderText("e.g. website project, trip planning, code review")
+        new_inp.setStyleSheet(f"""
+            QLineEdit {{
+                background: {BG_MAIN}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                padding: 6px 10px; font-size: 13px;
+                font-family: '{FONT_FAMILY}';
+            }}
+            QLineEdit:focus {{ border-color: {TEXT_DIM}; }}
+        """)
+        lay.addWidget(new_inp)
+
+        # Populate input when list item is clicked
+        def _on_list_click(item):
+            new_inp.setText(item.text())
+        session_list.itemClicked.connect(_on_list_click)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        start_btn = QPushButton("Switch / Start")
+        start_btn.setFixedHeight(32)
+        start_btn.setCursor(Qt.PointingHandCursor)
+        start_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {BG_HOVER}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 8px;
+                font-size: 13px; padding: 4px 16px;
+            }}
+            QPushButton:hover {{ background: {BG_CARD}; }}
+        """)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(32)
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setStyleSheet(start_btn.styleSheet())
+
+        btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(start_btn)
+        lay.addLayout(btn_row)
+
+        cancel_btn.clicked.connect(dlg.reject)
+
+        def _do_switch():
+            name = new_inp.text().strip()
+            if not name:
+                return
+            dlg.accept()
+            self._switch_to_session(name)
+
+        start_btn.clicked.connect(_do_switch)
+        new_inp.returnPressed.connect(_do_switch)
+
+        dlg.exec_()
+
+    def _switch_to_session(self, name: str):
+        """Save current conversation and load a named topic session."""
+        from pathlib import Path as _Path
+        import json as _json
+
+        sessions_dir = _Path("data/sessions")
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save current conversation to its session file or default save
+        self._save()
+        current_name = getattr(self, '_current_session_name', None)
+        if current_name and self.conv:
+            try:
+                data = {
+                    'session_name': current_name,
+                    'updated_at': datetime.now().isoformat(),
+                    'messages': self.conv,
+                }
+                (sessions_dir / f"{current_name}.json").write_text(
+                    _json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8'
+                )
+            except Exception:
+                pass
+
+        # Load the target session
+        self._current_session_name = name
+        session_path = sessions_dir / f"{name}.json"
+        self.chat.clear_all()
+        self.conv = []
+
+        if session_path.exists():
+            try:
+                data = _json.loads(session_path.read_text(encoding='utf-8'))
+                self.conv = data.get('messages', [])
+                self.conv_file = None  # Don't overwrite session file with daily save
+                for m in self.conv:
+                    self.chat.add(m['role'], m['message'])
+                self.statusbar.showMessage(
+                    f"Resumed session: {name} ({len(self.conv)//2} exchanges)", 4000
+                )
+            except Exception as e:
+                self.chat.add("assistant", f"Could not load session '{name}': {e}")
+        else:
+            self.chat.add("assistant",
+                          f"Started new session: **{name}**\nThis conversation will be saved and resumed next time you select this session.")
+            self.statusbar.showMessage(f"New session: {name}", 3000)
+
+        # Update session button label
+        short = name if len(name) <= 16 else name[:14] + ".."
+        self.session_btn.setText(short)
+
+    def _on_ai(self, r):
+        # Legacy handler - kept for backward compatibility
+        # Remove typing
+        if self.chat.lay.count() > 1:
+            w = self.chat.lay.itemAt(self.chat.lay.count() - 2).widget()
+            if w:
+                w.deleteLater()
+        self.chat.add("assistant", r)
+        self.conv.append({"role": "assistant", "message": r})
+        self.inp.enable(True)
+        self.inp.hide_stop()  # Hide stop button, show send button
+
+        if self.vlay.isVisible() and self.voice:
+            self._set_v(VState.SPEAK)
+            self.vlay.set_text(r[:60] + "..." if len(r) > 60 else r)
+
+            def speak():
+                self.voice.speak(r)
+                if self.vlay.isVisible():
+                    QTimer.singleShot(200, self._listen)
+                else:
+                    self._set_v(VState.IDLE)
+            threading.Thread(target=speak, daemon=True).start()
+
+    def _on_ai_err(self, e):
+        if self._stream_cancelled:
+            return
+        if self.chat.lay.count() > 1:
+            w = self.chat.lay.itemAt(self.chat.lay.count() - 2).widget()
+            if w:
+                w.deleteLater()
+        self.chat.add("assistant", f"Error: {e}")
+        self.inp.enable(True)
+        self.inp.hide_stop()  # Hide stop button, show send button
+        if self.vlay.isVisible():
+            self._set_v(VState.IDLE)
+    
+    def _stop_generation(self):
+        """Stop AI generation immediately"""
+        if hasattr(self, 'ai_worker') and self.ai_worker and self.ai_worker.isRunning():
+            self._stream_cancelled = True
+            # For StreamingAIWorker, use cooperative cancellation first.
+            if hasattr(self.ai_worker, 'cancel'):
+                self.ai_worker.cancel()
+            # Avoid blocking the UI thread while the worker winds down.
+            try:
+                self.ai_worker.chunk_received.disconnect(self._on_ai_chunk)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.done.disconnect(self._on_ai_done)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.error.disconnect(self._on_ai_err)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.source_detected.disconnect(self._on_ai_source)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.web_sources.disconnect(self._on_web_sources)
+            except Exception:
+                pass
+            try:
+                self.ai_worker.finished.connect(self.ai_worker.deleteLater)
+            except Exception:
+                pass
+             
+            # Finalize with partial response or stopped message
+            partial_text = getattr(self, '_streaming_text', '')
+            self._streaming_text = ''  # Reset
+            
+            # Remove streaming placeholder if exists
+            if hasattr(self.chat, '_streaming_msg') and self.chat._streaming_msg:
+                self.chat._streaming_msg.deleteLater()
+                self.chat._streaming_msg = None
+            
+            # Add stopped message with any partial response
+            if partial_text:
+                self.chat.add("assistant", f"{partial_text}\n\n*[Generation stopped]*")
+            else:
+                self.chat.add("assistant", "⚠️ **Generation stopped by user**")
+             
+            self.inp.enable(True)
+            self.inp.hide_stop()
+            self.ai_worker = None
+            if self.vlay.isVisible():
+                self._set_v(VState.IDLE)
+
+    # ============ LADA v7.0 Agent Methods ============
+    
+    def _safety_ui_callback(self, message: str, risk_level: str) -> bool:
+        """UI callback for safety gate permission requests"""
+        reply = QMessageBox.question(
+            self, 
+            f"Permission Required ({risk_level.upper()})",
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        return reply == QMessageBox.Yes
+    
+    def _detect_agent_intent(self, text: str) -> tuple:
+        """Detect if text requires an agent (flight, product, hotel, restaurant, email, calendar)"""
+        text_lower = text.lower()
+        
+        # Use AgentOrchestrator for smarter detection if available
+        if ORCHESTRATOR_OK and AgentOrchestrator:
+            try:
+                orchestrator = AgentOrchestrator()
+                result = orchestrator.detect_intent(text)
+                # Result can be IntentType enum or tuple (type, params)
+                if result:
+                    if hasattr(result, 'value'):
+                        # It's an enum
+                        if result.value != 'general':
+                            return (result.value, {'query': text})
+                    elif isinstance(result, tuple) and len(result) >= 2:
+                        # It's already a tuple
+                        agent_type = result[0]
+                        if hasattr(agent_type, 'value'):
+                            agent_type = agent_type.value
+                        if agent_type and agent_type != 'general':
+                            return (agent_type, result[1] if result[1] else {'query': text})
+            except Exception as e:
+                print(f"[LADA] Orchestrator detection failed: {e}")
+        
+        # Fallback to keyword-based detection
+        # Flight keywords
+        flight_keywords = ['flight', 'flights', 'fly', 'flying', 'airline', 'airport', 'book flight']
+        if any(kw in text_lower for kw in flight_keywords):
+            return ('flight', self._extract_flight_params(text))
+        
+        # Hotel keywords
+        hotel_keywords = ['hotel', 'hotels', 'stay', 'accommodation', 'book room', 'booking', 'resort']
+        if any(kw in text_lower for kw in hotel_keywords):
+            return ('hotel', {'query': text})
+        
+        # Restaurant keywords
+        restaurant_keywords = ['restaurant', 'restaurants', 'food', 'dinner', 'lunch', 'breakfast', 
+                              'reservation', 'table', 'cuisine', 'order food', 'delivery']
+        if any(kw in text_lower for kw in restaurant_keywords):
+            return ('restaurant', {'query': text})
+        
+        # Email keywords
+        email_keywords = ['email', 'mail', 'send email', 'compose', 'inbox', 'gmail']
+        if any(kw in text_lower for kw in email_keywords):
+            return ('email', {'query': text})
+        
+        # Calendar keywords
+        calendar_keywords = ['calendar', 'schedule', 'meeting', 'appointment', 'event', 'remind me']
+        if any(kw in text_lower for kw in calendar_keywords):
+            return ('calendar', {'query': text})
+        
+        # Product keywords
+        product_keywords = ['buy', 'purchase', 'shop', 'price', 'product', 'phone', 'laptop', 
+                           'mobile', 'computer', 'amazon', 'flipkart', 'best', 'cheapest',
+                           'under', 'budget']
+        if any(kw in text_lower for kw in product_keywords):
+            return ('product', self._extract_product_params(text))
+        
+        return (None, None)
+    
+    def _extract_flight_params(self, text: str) -> dict:
+        """Extract flight search parameters from text using AI"""
+        prompt = f"""Extract flight search details from: "{text}"
+Return JSON only: {{"from_city": "Delhi", "to_city": "Bangalore", "date": "tomorrow", "passengers": 1}}
+If not specified, use reasonable defaults. Return ONLY the JSON."""
+        
+        try:
+            response = self.router.query(prompt)
+            import json
+            json_start = response.find('{')
+            json_end = response.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                return json.loads(response[json_start:json_end])
+        except Exception as e:
+            pass
+        
+        return {"from_city": "Delhi", "to_city": "Bangalore", "date": "tomorrow", "passengers": 1}
+    
+    def _extract_product_params(self, text: str) -> dict:
+        """Extract product search parameters from text"""
+        import re
+        
+        # Extract price limit
+        price_match = re.search(r'under\s*₹?\s*(\d+)', text.lower())
+        max_price = int(price_match.group(1)) if price_match else None
+        
+        # Use the query as-is for search
+        return {"query": text, "max_price": max_price}
+    
+    def _handle_flight_agent(self, params: dict):
+        """Handle flight search using fast web API"""
+        from_city = params.get('from_city', 'Delhi')
+        to_city = params.get('to_city', 'Mumbai')
+        date = params.get('date', 'tomorrow')
+        
+        self.chat.add("assistant", f"✈️ Searching flights from **{from_city}** to **{to_city}**...")
+        self.inp.enable(False)
+        self.inp.show_stop()
+        
+        def run_agent():
+            try:
+                from modules.web_search import WebSearchEngine
+                ws = WebSearchEngine()
+                
+                # Build search query for flights
+                search_q = f"flights from {from_city} to {to_city} {date} price India 2025"
+                
+                # Fast API search (1-2 seconds)
+                result = ws.search(search_q)
+                
+                response = f"✈️ **Flight Search: {from_city} → {to_city}**\n\n"
+                
+                if result.get('success') and (result.get('abstract') or result.get('results')):
+                    if result.get('abstract'):
+                        response += f"{result['abstract']}\n\n"
+                    
+                    if result.get('results'):
+                        response += "**Search Results:**\n"
+                        for i, r in enumerate(result['results'][:5], 1):
+                            title = r.get('title', 'Flight')
+                            snippet = r.get('snippet', '')[:100]
+                            response += f"{i}. **{title}**\n   {snippet}...\n\n"
+                    
+                    response += "\n💡 *For booking, try: 'open MakeMyTrip and search flights to {to_city}'*"
+                else:
+                    # Fallback to AI
+                    if self.router:
+                        ai_q = f"What are the current flight prices from {from_city} to {to_city}? Include airlines and approximate prices in INR."
+                        ai_response = self.router.query(ai_q)
+                        if ai_response:
+                            response += ai_response
+                        else:
+                            response = f"❌ Could not find flight information"
+                    else:
+                        response = f"❌ Could not find flight information"
+                
+                QTimer.singleShot(0, lambda r=response: self._agent_complete(r))
+                
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                err_msg = f"❌ Flight search error: {e}"
+                QTimer.singleShot(0, lambda m=err_msg: self._agent_complete(m))
+        
+        threading.Thread(target=run_agent, daemon=True).start()
+    
+    def _handle_product_agent(self, params: dict):
+        """Handle product search using fast web API"""
+        query = params.get('query', '')
+        max_price = params.get('max_price')
+        
+        print(f"[LADA] Product agent: query='{query}', max_price={max_price}")
+        self.chat.add("assistant", f"🔍 Searching for **{query}**...")
+        self.inp.enable(False)
+        self.inp.show_stop()
+        
+        def run_agent():
+            try:
+                from modules.web_search import WebSearchEngine
+                ws = WebSearchEngine()
+                
+                # Build optimized search query
+                search_q = f"{query} price buy India 2025"
+                if max_price:
+                    search_q += f" under ₹{max_price}"
+                
+                print(f"[LADA] Product search query: '{search_q}'")
+                # Fast API search (1-2 seconds)
+                result = ws.search(search_q)
+                print(f"[LADA] Product search result: success={result.get('success')}, has_answer={bool(result.get('answer'))}, has_abstract={bool(result.get('abstract'))}, has_results={bool(result.get('results'))}")
+                
+                response = f"🛍️ **Product Search: {query}**\n\n"
+                
+                if result.get('success') and (result.get('abstract') or result.get('answer') or result.get('results')):
+                    if result.get('answer'):
+                        response += f"**Quick Answer:** {result['answer']}\n\n"
+                    
+                    if result.get('abstract'):
+                        response += f"{result['abstract']}\n\n"
+                    
+                    if result.get('infobox'):
+                        response += "**Key Info:**\n"
+                        for fact in result['infobox'][:5]:
+                            response += f"• {fact}\n"
+                        response += "\n"
+                    
+                    if result.get('results'):
+                        response += "**Search Results:**\n"
+                        for i, r in enumerate(result['results'][:5], 1):
+                            title = r.get('title', 'Result')
+                            snippet = r.get('snippet', '')[:100]
+                            response += f"{i}. **{title}**\n   {snippet}...\n\n"
+                    
+                    response += f"\n💡 *Say 'open Amazon and search for {query}' to browse directly*"
+                else:
+                    # Fallback to AI for product info
+                    print("[LADA] Product search: No web results, falling back to AI")
+                    if self.router:
+                        ai_q = f"What are the best {query} products available in India with approximate prices in INR? List top 5 options."
+                        ai_response = self.router.query(ai_q)
+                        print(f"[LADA] AI fallback response length: {len(ai_response) if ai_response else 0}")
+                        if ai_response:
+                            response += ai_response
+                        else:
+                            response = f"❌ Could not find product information for: {query}"
+                    else:
+                        response = f"❌ Could not find product information for: {query}"
+                
+                print(f"[LADA] Final product response length: {len(response)}")
+                print(f"[LADA] Final product response preview: {response[:200] if response else 'EMPTY'}...")
+                QTimer.singleShot(0, lambda r=response: self._agent_complete(r))
+                
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                err_msg = f"❌ Search error: {e}"
+                QTimer.singleShot(0, lambda m=err_msg: self._agent_complete(m))
+        
+        threading.Thread(target=run_agent, daemon=True).start()
+    
+    def _handle_hotel_agent(self, params: dict):
+        """Handle hotel search using fast web API"""
+        query = params.get('query', '')
+        self.chat.add("assistant", f"🏨 Searching hotels...")
+        self.inp.enable(False)
+        self.inp.show_stop()
+        
+        def run_agent():
+            try:
+                from modules.web_search import WebSearchEngine
+                ws = WebSearchEngine()
+                
+                # Build optimized search query for hotels
+                search_q = f"hotels {query} prices India 2025 booking"
+                
+                # Fast API search (1-2 seconds)
+                result = ws.search(search_q)
+                
+                response = f"🏨 **Hotel Search**\n\n"
+                
+                if result.get('success') and (result.get('abstract') or result.get('results')):
+                    if result.get('abstract'):
+                        response += f"{result['abstract']}\n\n"
+                    
+                    if result.get('infobox'):
+                        response += "**Key Information:**\n"
+                        for fact in result['infobox'][:5]:
+                            response += f"• {fact}\n"
+                        response += "\n"
+                    
+                    if result.get('results'):
+                        response += "**Search Results:**\n"
+                        for i, r in enumerate(result['results'][:5], 1):
+                            title = r.get('title', 'Hotel')
+                            snippet = r.get('snippet', '')[:100]
+                            response += f"{i}. **{title}**\n   {snippet}...\n\n"
+                    
+                    response += "\n💡 *For booking, say 'open MakeMyTrip hotels' or 'open Booking.com'*"
+                else:
+                    # Fallback to AI for hotel info
+                    if self.router:
+                        ai_q = f"What are the best hotels {query}? Include approximate prices in INR and ratings."
+                        ai_response = self.router.query(ai_q)
+                        if ai_response:
+                            response += ai_response
+                        else:
+                            response = f"❌ Could not find hotel information"
+                    else:
+                        response = f"❌ Could not find hotel information"
+                
+                QTimer.singleShot(0, lambda r=response: self._agent_complete(r))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                err_msg = f"❌ Hotel search error: {e}"
+                QTimer.singleShot(0, lambda m=err_msg: self._agent_complete(m))
+        
+        threading.Thread(target=run_agent, daemon=True).start()
+    
+    def _handle_restaurant_agent(self, params: dict):
+        """Handle restaurant search using fast web API"""
+        query = params.get('query', '')
+        self.chat.add("assistant", f"🍽️ Searching restaurants...")
+        self.inp.enable(False)
+        self.inp.show_stop()
+        
+        def run_agent():
+            try:
+                from modules.web_search import WebSearchEngine
+                ws = WebSearchEngine()
+                
+                # Build optimized search query for restaurants
+                search_q = f"restaurants {query} ratings reviews India 2025"
+                
+                # Fast API search (1-2 seconds)
+                result = ws.search(search_q)
+                
+                response = f"🍽️ **Restaurant Search**\n\n"
+                
+                if result.get('success') and (result.get('abstract') or result.get('results')):
+                    if result.get('abstract'):
+                        response += f"{result['abstract']}\n\n"
+                    
+                    if result.get('infobox'):
+                        response += "**Key Information:**\n"
+                        for fact in result['infobox'][:5]:
+                            response += f"• {fact}\n"
+                        response += "\n"
+                    
+                    if result.get('results'):
+                        response += "**Search Results:**\n"
+                        for i, r in enumerate(result['results'][:5], 1):
+                            title = r.get('title', 'Restaurant')
+                            snippet = r.get('snippet', '')[:100]
+                            response += f"{i}. **{title}**\n   {snippet}...\n\n"
+                    
+                    response += "\n💡 *For reservations, say 'open Zomato' or 'open Swiggy'*"
+                else:
+                    # Fallback to AI for restaurant info
+                    if self.router:
+                        ai_q = f"What are the best restaurants {query}? Include ratings and approximate cost for two in INR."
+                        ai_response = self.router.query(ai_q)
+                        if ai_response:
+                            response += ai_response
+                        else:
+                            response = f"❌ Could not find restaurant information"
+                    else:
+                        response = f"❌ Could not find restaurant information"
+                
+                QTimer.singleShot(0, lambda r=response: self._agent_complete(r))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                err_msg = f"❌ Restaurant search error: {e}"
+                QTimer.singleShot(0, lambda m=err_msg: self._agent_complete(m))
+        
+        threading.Thread(target=run_agent, daemon=True).start()
+    
+    def _handle_email_agent(self, params: dict):
+        """Handle email operations"""
+        self.chat.add("assistant", f"📧 Processing email request...")
+        self.inp.enable(False)
+        self.inp.show_stop()
+        
+        def run_agent():
+            try:
+                from modules.agents.email_agent import EmailAgent
+                agent = EmailAgent()
+                result = agent.process(params.get('query', ''))
+                
+                if result.get('success'):
+                    response = f"📧 **Email Result**\n\n"
+                    response += result.get('message', 'Done')
+                    
+                    if result.get('emails'):
+                        response += "\n\n**Recent Emails:**\n"
+                        for i, e in enumerate(result['emails'][:5], 1):
+                            response += f"{i}. {e.get('subject', 'No Subject')}\n"
+                            response += f"   From: {e.get('from', 'Unknown')}\n"
+                    
+                    if result.get('draft_path'):
+                        response += f"\n📝 Draft saved to: {result['draft_path']}"
+                else:
+                    response = f"❌ Email error: {result.get('message', 'Unknown error')}"
+                
+                QTimer.singleShot(0, lambda r=response: self._agent_complete(r))
+            except Exception as e:
+                err_msg = f"❌ Error: {e}"
+                QTimer.singleShot(0, lambda m=err_msg: self._agent_complete(m))
+        
+        threading.Thread(target=run_agent, daemon=True).start()
+    
+    def _handle_calendar_agent(self, params: dict):
+        """Handle calendar operations"""
+        self.chat.add("assistant", f"📅 Checking calendar...")
+        self.inp.enable(False)
+        self.inp.show_stop()
+        
+        def run_agent():
+            try:
+                from modules.agents.calendar_agent import CalendarAgent
+                agent = CalendarAgent()
+                result = agent.process(params.get('query', ''))
+                
+                if result.get('success'):
+                    response = f"📅 **Calendar**\n\n"
+                    response += result.get('message', result.get('summary', 'Done'))
+                    
+                    if result.get('events'):
+                        response += "\n\n**Upcoming Events:**\n"
+                        for e in result['events'][:5]:
+                            response += f"• {e.get('summary', 'Event')} - {e.get('start', 'TBD')}\n"
+                    
+                    if result.get('event_id'):
+                        response += f"\n✅ Event ID: {result['event_id']}"
+                else:
+                    response = f"❌ Calendar error: {result.get('message', 'Unknown error')}"
+                
+                QTimer.singleShot(0, lambda r=response: self._agent_complete(r))
+            except Exception as e:
+                err_msg = f"❌ Error: {e}"
+                QTimer.singleShot(0, lambda m=err_msg: self._agent_complete(m))
+        
+        threading.Thread(target=run_agent, daemon=True).start()
+    
+    def _agent_complete(self, response: str):
+        """Called when agent completes - update UI"""
+        print(f"[LADA] _agent_complete called with response length: {len(response) if response else 0}")
+        
+        # Remove "searching" message
+        if self.chat.lay.count() > 1:
+            w = self.chat.lay.itemAt(self.chat.lay.count() - 2).widget()
+            if w:
+                w.deleteLater()
+        
+        # Ensure we have a valid response
+        if not response or len(response.strip()) == 0:
+            response = "❌ No response received. Please try again."
+            print("[LADA] Warning: Empty response, using fallback message")
+        
+        self.chat.add("assistant", response)
+        self.conv.append({"role": "assistant", "message": response})
+        self.inp.enable(True)
+        self.inp.hide_stop()
+        
+        # Speak if in voice mode
+        if self.vlay.isVisible() and self.voice:
+            self._set_v(VState.SPEAK)
+            # Speak a short summary
+            short_response = response.split('\n')[0][:100]
+            self.vlay.set_text(short_response)
+            def speak():
+                self.voice.speak(short_response)
+                if self.vlay.isVisible():
+                    QTimer.singleShot(200, self._listen)
+                else:
+                    self._set_v(VState.IDLE)
+            threading.Thread(target=speak, daemon=True).start()
+
+    def _set_v(self, s):
+        self.v_state = s
+        self.vlay.set_state(s)
+
+    def _toggle_voice(self):
+        if not self._voice_enabled:
+            self.statusbar.showMessage("Voice is OFF — enable voice first.", 3000)
+            return
+        if self.vlay.isVisible():
+            self._close_voice()
+        else:
+            if hasattr(self, 'continuous_listener') and self.continuous_listener:
+                try:
+                    self.continuous_listener.pause()
+                    self._voice_overlay_paused_listener = True
+                except Exception:
+                    self._voice_overlay_paused_listener = False
+            # Start new voice session
+            self.voice_session = []
+            if hasattr(self, 'voice_session_file'):
+                delattr(self, 'voice_session_file')
+            self.vlay.clear_history()
+            
+            self.vlay.setGeometry(self.side.width(), 0, self.width() - self.side.width(), self.height())
+            self.vlay.show()
+            self.vlay.raise_()
+            self.vlay.set_text("")
+            self._set_v(VState.IDLE)
+            QTimer.singleShot(200, self._listen)
+
+    def _close_voice(self):
+        self.vlay.hide()
+        if self.v_worker:
+            self.v_worker.stop()
+        self._set_v(VState.IDLE)
+        if (
+            self._voice_overlay_paused_listener
+            and self._voice_enabled
+            and self._wakeup_active
+            and hasattr(self, 'continuous_listener')
+            and self.continuous_listener
+        ):
+            try:
+                self.continuous_listener.resume()
+            except Exception:
+                pass
+        self._voice_overlay_paused_listener = False
+        # Refresh sidebar to show new voice session
+        self.side.refresh()
+
+    def _toggle_listen(self):
+        if self.v_state == VState.LISTEN:
+            if self.v_worker:
+                self.v_worker.stop()
+            self._set_v(VState.IDLE)
+        else:
+            self._listen()
+
+    def _listen(self):
+        if not self._voice_enabled:
+            return
+        if not self.vlay.isVisible():
+            return
+        if self.v_worker and self.v_worker.isRunning():
+            return
+        self._set_v(VState.LISTEN)
+        self.vlay.set_text("")
+        self.v_worker = VoiceWorker(self.voice)
+        self.v_worker.result.connect(self._on_voice)
+        self.v_worker.error.connect(self._on_voice_err)
+        self.v_worker.start()
+
+    def _on_voice(self, t):
+        self.vlay.set_text(t)
+        self.vlay.add_message("user", t)  # Add to overlay history
+        self._set_v(VState.PROCESS)
+        # Use voice-only send (doesn't save to main chat history)
+        self._send_voice(t)
+
+    def _send_voice(self, text):
+        """Handle voice input - stays in overlay, saved to separate voice history"""
+        if not text:
+            return
+        
+        # Add to voice session history (separate from text chat)
+        if not hasattr(self, 'voice_session'):
+            self.voice_session = []
+        self.voice_session.append({
+            "role": "user", 
+            "message": text,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Check for system commands first (execute but don't show in main chat)
+        handled, response = self._check_system_command(text)
+        if handled:
+            # Check for stop listening signal
+            if response.startswith("__STOP_LISTENING__"):
+                actual_response = response.replace("__STOP_LISTENING__", "")
+                self.voice_session.append({
+                    "role": "assistant", 
+                    "message": actual_response,
+                    "timestamp": datetime.now().isoformat()
+                })
+                self._save_voice_session()
+                self.vlay.add_message("assistant", actual_response)
+                
+                if self.voice:
+                    self._set_v(VState.SPEAK)
+                    self.vlay.set_text(actual_response)
+                    def speak_and_pause():
+                        self.voice.speak(actual_response)
+                        # Don't auto-restart - go to idle
+                        self._set_v(VState.IDLE)
+                        self.vlay.set_text("Tap mic to speak")
+                    threading.Thread(target=speak_and_pause, daemon=True).start()
+                else:
+                    self._set_v(VState.IDLE)
+                    self.vlay.set_text("Tap mic to speak")
+                return
+            
+            self.voice_session.append({
+                "role": "assistant", 
+                "message": response,
+                "timestamp": datetime.now().isoformat()
+            })
+            self._save_voice_session()
+            self.vlay.add_message("assistant", response)  # Add to overlay history
+            
+            if self.voice:
+                self._set_v(VState.SPEAK)
+                self.vlay.set_text(response[:80] + "..." if len(response) > 80 else response)
+                def speak():
+                    self.voice.speak(response)
+                    if self.vlay.isVisible():
+                        QTimer.singleShot(200, self._listen)  # Continuous: auto-restart
+                    else:
+                        self._set_v(VState.IDLE)
+                threading.Thread(target=speak, daemon=True).start()
+            else:
+                # No voice - auto-restart listening anyway
+                if self.vlay.isVisible():
+                    QTimer.singleShot(500, self._listen)
+            return
+        
+        # AI query for voice (doesn't show in main chat)
+        self.vlay.set_text("Thinking...")
+        selected_model = self.model.currentData() if hasattr(self, 'model') else None
+        if selected_model == 'auto':
+            selected_model = None
+        self.ai_worker = AIWorker(text, self.router, [], preferred_backend=selected_model)
+        self.ai_worker.done.connect(self._on_voice_ai)
+        self.ai_worker.error.connect(self._on_voice_ai_err)
+        self.ai_worker.start()
+    
+    def _on_voice_ai(self, r):
+        """Handle AI response for voice - stays in overlay only"""
+        # Add to voice session
+        if hasattr(self, 'voice_session'):
+            self.voice_session.append({
+                "role": "assistant", 
+                "message": r,
+                "timestamp": datetime.now().isoformat()
+            })
+            self._save_voice_session()
+        
+        self.vlay.add_message("assistant", r)  # Add to overlay history
+        
+        if self.voice:
+            self._set_v(VState.SPEAK)
+            self.vlay.set_text(r[:80] + "..." if len(r) > 80 else r)
+            def speak():
+                self.voice.speak(r)
+                if self.vlay.isVisible():
+                    QTimer.singleShot(200, self._listen)
+                else:
+                    self._set_v(VState.IDLE)
+            threading.Thread(target=speak, daemon=True).start()
+    
+    def _on_voice_ai_err(self, e):
+        """Handle AI error for voice"""
+        self.vlay.set_text(f"Error: {e}")
+        if self.vlay.isVisible():
+            QTimer.singleShot(1500, self._listen)
+    
+    def _save_voice_session(self):
+        """Save voice session to separate folder"""
+        if not hasattr(self, 'voice_session') or not self.voice_session:
+            return
+        try:
+            voice_dir = Path("data/voice_sessions")
+            voice_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Use session start timestamp for filename
+            if not hasattr(self, 'voice_session_file'):
+                self.voice_session_file = voice_dir / f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json"
+            
+            self.voice_session_file.write_text(
+                json.dumps(self.voice_session, indent=2, ensure_ascii=False),
+                encoding='utf-8'
+            )
+        except Exception as e:
+            print(f"[LADA] Could not save voice session: {e}")
+
+    def _on_voice_err(self, e):
+        self.vlay.set_text(f"({e})")
+        self._set_v(VState.IDLE)
+        if self.vlay.isVisible():
+            QTimer.singleShot(1200, self._listen)
+
+    def _on_proactive_suggestion(self, suggestion):
+        """
+        Handle proactive suggestions from the ProactiveAgent.
+        Displays as a notification or chat message based on priority.
+        """
+        if suggestion is None:
+            return
+
+        try:
+            title = getattr(suggestion, 'title', 'Suggestion')
+            message = getattr(suggestion, 'message', '')
+            priority = getattr(suggestion, 'priority', None)
+            action = getattr(suggestion, 'action', None)
+
+            # Critical/High priority: Show as system notification + chat
+            if priority and hasattr(priority, 'value') and priority.value <= 2:
+                # Show system tray notification
+                if hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
+                    self.tray_icon.showMessage(
+                        f"LADA: {title}",
+                        message[:200],
+                        QSystemTrayIcon.Information,
+                        5000
+                    )
+                # Also add to chat
+                self.chat.add("assistant", f"💡 **{title}**\n\n{message}")
+            else:
+                # Normal/Low priority: Just add to chat
+                self.chat.add("assistant", f"💡 {title}: {message}")
+
+            # If there's an action, offer to execute it
+            if action:
+                logger.info(f"[ProactiveAgent] Suggestion action available: {action}")
+
+        except Exception as e:
+            logger.warning(f"[LADA] Proactive suggestion display error: {e}")
+
+    def closeEvent(self, e):
+        """Minimize to system tray instead of closing"""
+        # Minimize to tray instead of quitting
+        e.ignore()
+        self.hide()
+
+        # Keep global autonomous overlay visible only while an active task is running.
+        if hasattr(self, 'floating_comet_overlay') and self.floating_comet_overlay:
+            if not getattr(self, '_active_comet_agent', None):
+                self.floating_comet_overlay.hide()
+        
+        # Show tray notification on first minimize
+        if hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
+            self.tray_icon.showMessage(
+                "LADA AI",
+                "Running in background. Say 'LADA' to activate, or double-click tray icon to open.",
+                QSystemTrayIcon.Information,
+                2000
+            )
+
+
+

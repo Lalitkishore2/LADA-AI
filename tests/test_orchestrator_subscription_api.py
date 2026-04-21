@@ -292,3 +292,39 @@ def test_legacy_task_lifecycle_routes_fallback_to_registry(monkeypatch):
     cancel_response = client.post("/tasks/task-reg-lifecycle/cancel")
     assert cancel_response.status_code == 200
     assert cancel_response.json()["status"] == "cancelled"
+
+
+def test_orchestrator_dispatch_rejects_non_integer_timeout():
+    class _Orchestrator:
+        def submit(self, envelope, wait_for_result=True, timeout_ms=60000):
+            raise AssertionError("submit should not be called for invalid timeout")
+
+    state = _FakeState()
+    state.orchestrator = _Orchestrator()
+    client = _build_client(state)
+
+    response = client.post(
+        "/orchestrator/dispatch",
+        json={"action": "ping", "timeout_ms": "not-a-number"},
+    )
+
+    assert response.status_code == 400
+    assert "timeout_ms must be an integer" in str(response.json().get("detail", ""))
+
+
+def test_orchestrator_dispatch_rejects_non_positive_timeout():
+    class _Orchestrator:
+        def submit(self, envelope, wait_for_result=True, timeout_ms=60000):
+            raise AssertionError("submit should not be called for non-positive timeout")
+
+    state = _FakeState()
+    state.orchestrator = _Orchestrator()
+    client = _build_client(state)
+
+    response = client.post(
+        "/orchestrator/dispatch",
+        json={"action": "ping", "timeout_ms": 0},
+    )
+
+    assert response.status_code == 400
+    assert "timeout_ms must be greater than 0" in str(response.json().get("detail", ""))

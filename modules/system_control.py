@@ -6,6 +6,7 @@ import os
 import subprocess
 import logging
 import threading
+import time
 from typing import Dict, List, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -68,6 +69,131 @@ class SystemController:
                     return
 
         logger.error(f"Error {operation}: {error}")
+
+    def _powershell_core_audio_bootstrap(self) -> str:
+        """Return a PowerShell snippet that exposes CoreAudio endpoint volume APIs."""
+        return r'''
+if (-not ("AudioManager" -as [type])) {
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+[Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioEndpointVolume {
+    int RegisterControlChangeNotify(IntPtr pNotify);
+    int UnregisterControlChangeNotify(IntPtr pNotify);
+    int GetChannelCount(out uint pnChannelCount);
+    int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
+    int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
+    int GetMasterVolumeLevel(out float pfLevelDB);
+    int GetMasterVolumeLevelScalar(out float pfLevel);
+    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
+    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
+    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+    int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, Guid pguidEventContext);
+    int GetMute(out bool pbMute);
+    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+    int VolumeStepUp(Guid pguidEventContext);
+    int VolumeStepDown(Guid pguidEventContext);
+    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+}
+
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDeviceEnumerator {
+    int NotImpl1();
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+}
+
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDevice {
+    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
+}
+
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+class MMDeviceEnumeratorComObject {}
+
+public class AudioManager {
+    public static IAudioEndpointVolume GetEndpointVolume() {
+        var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+        IMMDevice device;
+        Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
+
+        Guid iid = typeof(IAudioEndpointVolume).GUID;
+        IAudioEndpointVolume volume;
+        Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out volume));
+        return volume;
+    }
+}
+"@
+}
+'''
+
+    def _run_powershell(self, script: str, timeout: int = 10):
+        """Run a PowerShell command in a hidden non-interactive process."""
+        try:
+            return subprocess.run(
+                ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            )
+        except Exception as e:
+            logger.debug(f"PowerShell fallback unavailable: {e}")
+            return None
+
+    def _set_volume_with_powershell(self, level: int) -> bool:
+        """Set master volume through native CoreAudio PowerShell interop."""
+        scalar = max(0.0, min(1.0, level / 100.0))
+        script = (
+            self._powershell_core_audio_bootstrap()
+            + f"\n$endpoint = [AudioManager]::GetEndpointVolume()"
+            + f"\n$endpoint.SetMasterVolumeLevelScalar({scalar:.4f}, [Guid]::Empty) | Out-Null"
+            + "\nWrite-Output \"ok\""
+        )
+        proc = self._run_powershell(script, timeout=12)
+        return bool(proc and proc.returncode == 0)
+
+    def _get_volume_with_powershell(self) -> Dict[str, Any]:
+        """Get current master volume through native CoreAudio PowerShell interop."""
+        script = (
+            self._powershell_core_audio_bootstrap()
+            + "\n$endpoint = [AudioManager]::GetEndpointVolume()"
+            + "\n$vol = 0.0"
+            + "\n$muted = $false"
+            + "\n$endpoint.GetMasterVolumeLevelScalar([ref]$vol) | Out-Null"
+            + "\n$endpoint.GetMute([ref]$muted) | Out-Null"
+            + "\n[PSCustomObject]@{volume=[int][Math]::Round($vol * 100); muted=[bool]$muted} | ConvertTo-Json -Compress"
+        )
+        proc = self._run_powershell(script, timeout=12)
+        if not proc or proc.returncode != 0:
+            return {'success': False, 'error': 'PowerShell volume query failed'}
+
+        try:
+            payload = (proc.stdout or '').strip().splitlines()
+            line = payload[-1] if payload else '{}'
+            data = json.loads(line)
+            return {
+                'success': True,
+                'volume': int(data.get('volume', 50)),
+                'muted': bool(data.get('muted', False)),
+            }
+        except Exception as e:
+            return {'success': False, 'error': f'PowerShell parse failed: {e}'}
+
+    def _set_mute_with_powershell(self, mute: bool) -> bool:
+        """Mute/unmute master audio through native CoreAudio PowerShell interop."""
+        mute_literal = '$true' if mute else '$false'
+        script = (
+            self._powershell_core_audio_bootstrap()
+            + "\n$endpoint = [AudioManager]::GetEndpointVolume()"
+            + f"\n$endpoint.SetMute({mute_literal}, [Guid]::Empty) | Out-Null"
+            + "\nWrite-Output \"ok\""
+        )
+        proc = self._run_powershell(script, timeout=12)
+        return bool(proc and proc.returncode == 0)
     
     # ============================================================
     # VOLUME & AUDIO CONTROL
@@ -117,16 +243,32 @@ class SystemController:
         
         except Exception as e:
             self._log_operation_error("setting volume", e, optional_modules=("pycaw",))
-            # Fallback: use Windows command
+            # Fallback 1: use nircmd when available.
             try:
-                os.system(f'nircmd.exe setvolume 0 {level * 655}')
-                return {'success': True, 'volume': level}
-            except:
-                return {
-                    'success': False,
-                    'error': str(e),
-                    'message': 'Could not set volume. Install pycaw: pip install pycaw'
-                }
+                proc = subprocess.run(
+                    ['nircmd.exe', 'setvolume', '0', str(level * 655)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+                )
+                if proc.returncode == 0:
+                    self.current_volume = level
+                    return {'success': True, 'volume': level, 'message': f'Volume set to {level}% (nircmd fallback)'}
+            except Exception:
+                pass
+
+            # Fallback 2: pure PowerShell (no external module required).
+            if self._set_volume_with_powershell(level):
+                self.current_volume = level
+                return {'success': True, 'volume': level, 'message': f'Volume set to {level}% (PowerShell fallback)'}
+
+            return {
+                'success': False,
+                'error': str(e),
+                'message': 'Could not set volume. Install pycaw or keep PowerShell available.'
+            }
     
     def get_volume(self) -> Dict[str, Any]:
         """Get current system volume"""
@@ -155,14 +297,22 @@ class SystemController:
         
         except Exception as e:
             self._log_operation_error("getting volume", e, optional_modules=("pycaw",))
-            return {'success': False, 'error': str(e)}
+            fallback = self._get_volume_with_powershell()
+            if fallback.get('success'):
+                self.current_volume = int(fallback.get('volume', self.current_volume))
+                return fallback
+            return {
+                'success': False,
+                'error': str(e),
+                'message': 'Could not read volume. Install pycaw or keep PowerShell available.'
+            }
     
     def _get_volume(self) -> int:
         """Get volume silently"""
         try:
             result = self.get_volume()
             return result.get('volume', 50)
-        except:
+        except Exception as e:
             return 50
     
     def mute(self) -> Dict[str, Any]:
@@ -179,6 +329,8 @@ class SystemController:
         
         except Exception as e:
             self._log_operation_error("muting", e, optional_modules=("pycaw",))
+            if self._set_mute_with_powershell(True):
+                return {'success': True, 'message': 'System muted (PowerShell fallback)'}
             return {'success': False, 'error': str(e)}
     
     def unmute(self) -> Dict[str, Any]:
@@ -195,6 +347,8 @@ class SystemController:
         
         except Exception as e:
             self._log_operation_error("unmuting", e, optional_modules=("pycaw",))
+            if self._set_mute_with_powershell(False):
+                return {'success': True, 'message': 'System unmuted (PowerShell fallback)'}
             return {'success': False, 'error': str(e)}
     
     # ============================================================
@@ -258,7 +412,7 @@ class SystemController:
         try:
             result = self.get_brightness()
             return result.get('brightness', 75)
-        except:
+        except Exception as e:
             return 75
     
     # ============================================================
@@ -444,41 +598,39 @@ class SystemController:
         """
         try:
             action = action.lower()
+            delay_seconds = max(0, int(delay_seconds or 0))
+
+            if action in {'sleep', 'hibernate', 'lock', 'logoff'} and delay_seconds > 0:
+                time.sleep(delay_seconds)
             
             if action == 'sleep':
-                if delay_seconds > 0:
-                    os.system(f'timeout /t {delay_seconds} && rundll32.exe powrprof.dll,SetSuspendState 0,1,0')
-                else:
-                    os.system('rundll32.exe powrprof.dll,SetSuspendState 0,1,0')
+                subprocess.run(['rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0'], check=False)
                 logger.info(f"Sleep scheduled for {delay_seconds}s")
             
             elif action == 'hibernate':
-                if delay_seconds > 0:
-                    os.system(f'timeout /t {delay_seconds} && rundll32.exe powrprof.dll,SetSuspendState 1,1,0')
-                else:
-                    os.system('rundll32.exe powrprof.dll,SetSuspendState 1,1,0')
+                subprocess.run(['rundll32.exe', 'powrprof.dll,SetSuspendState', '1,1,0'], check=False)
                 logger.info(f"Hibernation scheduled for {delay_seconds}s")
             
             elif action == 'shutdown':
                 if delay_seconds > 0:
-                    os.system(f'shutdown /s /t {delay_seconds}')
+                    subprocess.run(['shutdown', '/s', '/t', str(delay_seconds)], check=False)
                 else:
-                    os.system('shutdown /s /t 1')
+                    subprocess.run(['shutdown', '/s', '/t', '1'], check=False)
                 logger.info(f"Shutdown scheduled for {delay_seconds}s")
             
             elif action == 'restart':
                 if delay_seconds > 0:
-                    os.system(f'shutdown /r /t {delay_seconds}')
+                    subprocess.run(['shutdown', '/r', '/t', str(delay_seconds)], check=False)
                 else:
-                    os.system('shutdown /r /t 1')
+                    subprocess.run(['shutdown', '/r', '/t', '1'], check=False)
                 logger.info(f"Restart scheduled for {delay_seconds}s")
             
             elif action == 'lock':
-                os.system('rundll32.exe user32.dll,LockWorkStation')
+                subprocess.run(['rundll32.exe', 'user32.dll,LockWorkStation'], check=False)
                 logger.info("System locked")
             
             elif action == 'logoff':
-                os.system('shutdown /l /t 1')
+                subprocess.run(['shutdown', '/l', '/t', '1'], check=False)
                 logger.info("Logging off")
             
             else:
@@ -714,9 +866,9 @@ class SystemController:
                                                  for filename in filenames)
                                 shutil.rmtree(item_path)
                                 deleted_count += 1
-                        except:
+                        except Exception as e:
                             pass
-                except:
+                except Exception as e:
                     pass
             
             freed_mb = round(freed_space / (1024**2), 2)
@@ -736,7 +888,13 @@ class SystemController:
     def empty_recycle_bin(self) -> Dict[str, Any]:
         """Empty Windows Recycle Bin"""
         try:
-            os.system('cmd /c "echo Y | powershell Clear-RecycleBin -Force"')
+            subprocess.run(
+                ['powershell', '-Command', 'Clear-RecycleBin -Force -Confirm:$false'],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
             logger.info("Recycle Bin emptied")
             return {
                 'success': True,
@@ -1064,7 +1222,7 @@ class SystemController:
                 return {'success': True, 'enabled': enable, 'message': f'Night light {state}'}
             except (FileNotFoundError, WindowsError):
                 # Fallback: open Night Light settings
-                os.system('start ms-settings:nightlight')
+                os.startfile('ms-settings:nightlight')
                 return {'success': True, 'message': 'Opened Night Light settings. Please toggle manually.'}
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -1111,7 +1269,7 @@ class SystemController:
             if proc.returncode == 0:
                 return {'success': True, 'enabled': enable, 'message': f'Mobile hotspot {state}'}
             # Fallback: open hotspot settings
-            os.system('start ms-settings:network-mobilehotspot')
+            os.startfile('ms-settings:network-mobilehotspot')
             return {'success': True, 'message': f'Opened hotspot settings. Please toggle manually.'}
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -1162,7 +1320,7 @@ class SystemController:
             if proc.returncode == 0:
                 return {'success': True, 'device': device_name, 'message': f'Switched audio to {device_name}'}
             # Fallback: open sound settings
-            os.system('start ms-settings:sound')
+            os.startfile('ms-settings:sound')
             return {'success': True, 'message': 'Opened sound settings. Please switch device manually.'}
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -1532,7 +1690,7 @@ class SystemController:
         }
         uri = settings_map.get(page.lower(), f'ms-settings:{page}')
         try:
-            os.system(f'start {uri}')
+            os.startfile(uri)
             return {'success': True, 'page': page or 'home', 'message': f'Opened Settings: {page or "home"}'}
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -1554,7 +1712,7 @@ class SystemController:
             return {'success': True, 'enabled': enable, 'message': f'Do Not Disturb {state}'}
         except Exception as e:
             # Fallback: open focus assist settings
-            os.system('start ms-settings:quiethours')
+            os.startfile('ms-settings:quiethours')
             return {'success': True, 'message': 'Opened Focus Assist settings.'}
 
 

@@ -9,6 +9,7 @@ import json
 import asyncio
 import logging
 import threading
+import inspect
 import concurrent.futures
 from typing import Optional, Dict
 from datetime import datetime
@@ -23,6 +24,22 @@ from modules.api.deps import REQUEST_ID_HEADER, ensure_request_id, set_request_i
 from modules.error_sanitizer import safe_error_response, SafeErrorResponse, ErrorCategory
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_bearer_token(authorization: Optional[str]) -> str:
+    raw = (authorization or "").strip()
+    if not raw:
+        return ""
+
+    parts = raw.split(None, 1)
+    if len(parts) != 2:
+        return ""
+
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return ""
+
+    return token.strip()
 
 
 def create_chat_router(state):
@@ -54,6 +71,31 @@ def create_chat_router(state):
                 status_code=504,
                 category=ErrorCategory.TIMEOUT,
             ) from exc
+
+    def _supports_router_options(callable_obj) -> bool:
+        try:
+            params = inspect.signature(callable_obj).parameters.values()
+        except (TypeError, ValueError):
+            return True
+
+        has_var_keyword = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params)
+        if has_var_keyword:
+            return True
+
+        names = {param.name for param in params}
+        return "model" in names or "use_web_search" in names
+
+    def _query_ai_router(message: str, effective_model: Optional[str], use_web_search: bool):
+        query_fn = state.ai_router.query
+        if _supports_router_options(query_fn):
+            return query_fn(message, model=effective_model, use_web_search=use_web_search)
+        return query_fn(message)
+
+    def _stream_query_ai_router(message: str, effective_model: Optional[str], use_web_search: bool):
+        stream_fn = state.ai_router.stream_query
+        if _supports_router_options(stream_fn):
+            return stream_fn(message, model=effective_model, use_web_search=use_web_search)
+        return stream_fn(message)
 
     @r.get("/", response_class=JSONResponse)
     async def root():
@@ -106,11 +148,7 @@ def create_chat_router(state):
 
             effective_model = request.model if request.model and request.model != 'auto' else None
             ai_response = await _run_query_with_timeout(
-                lambda: state.ai_router.query(
-                    request.message,
-                    model=effective_model,
-                    use_web_search=request.use_web_search,
-                ),
+                lambda: _query_ai_router(request.message, effective_model, request.use_web_search),
                 "Chat request timed out. Please try again.",
             )
             conv_id = request.conversation_id or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -163,13 +201,19 @@ def create_chat_router(state):
                         return
 
                 last_metadata = {}
+                effective_model = request.model if request.model and request.model != "auto" else None
                 if hasattr(state.ai_router, 'stream_query'):
                     q = asyncio.Queue()
                     loop = asyncio.get_event_loop()
 
                     def _stream_worker():
                         try:
-                            for chunk in state.ai_router.stream_query(request.message):
+                            stream_iter = _stream_query_ai_router(
+                                request.message,
+                                effective_model,
+                                request.use_web_search,
+                            )
+                            for chunk in stream_iter:
                                 asyncio.run_coroutine_threadsafe(q.put(chunk), loop)
                         except Exception as stream_exc:
                             asyncio.run_coroutine_threadsafe(q.put(stream_exc), loop)
@@ -232,7 +276,7 @@ def create_chat_router(state):
                             yield f"data: {json.dumps(payload)}\n\n"
                 else:
                     response = await _run_query_with_timeout(
-                        lambda: state.ai_router.query(request.message),
+                        lambda: _query_ai_router(request.message, effective_model, request.use_web_search),
                         "Streaming request timed out. Please try again.",
                     )
                     yield f"data: {json.dumps({'type': 'chat.chunk', 'data': {'chunk': response, 'request_id': request_id}})}\n\n"
@@ -401,8 +445,9 @@ def create_chat_router(state):
     @r.post("/api/voice/direct")
     async def voice_direct(request: Dict = Body(...), authorization: Optional[str] = Header(None)):
         """Direct voice command endpoint for Alexa/Google Home."""
-        expected_key = os.getenv("LADA_API_KEY", "lada-secret-key-12345")
-        if not authorization or f"Bearer {expected_key}" != authorization:
+        expected_key = os.getenv("LADA_API_KEY", "lada-secret-key-12345").strip()
+        provided_key = _parse_bearer_token(authorization)
+        if provided_key != expected_key:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
         command = request.get("command")

@@ -1,7 +1,7 @@
 """Feature-flagged LADA browser adapter.
 
 This module intentionally keeps browser gateway integration in adapter mode only:
-- No eager imports of archived gateway modules on normal startup
+- No eager imports of OpenClaw gateway modules on normal startup
 - No hard dependency on websockets unless adapter mode is enabled and used
 - Explicit command-driven lifecycle (connect / navigate / snapshot / disconnect)
 
@@ -29,7 +29,7 @@ def _flag_enabled(name: str, default: str = "0") -> bool:
 
 
 class LadaBrowserAdapter:
-    """Lazy adapter around archived browser gateway module."""
+    """Lazy adapter around OpenClaw browser gateway module."""
 
     def __init__(
         self,
@@ -55,21 +55,24 @@ class LadaBrowserAdapter:
         self._state = "disabled" if not self.enabled else "idle"
         self._last_error = ""
 
-    def _archived_gateway_path(self) -> Path:
+    def _gateway_module_path(self) -> Path:
         repo_root = Path(__file__).resolve().parents[1]
+        active_path = repo_root / "integrations" / "openclaw_gateway.py"
+        if active_path.exists():
+            return active_path
         return repo_root / "archived" / "integrations" / "openclaw_gateway.py"
 
     def _load_gateway_module(self):
         if self._gateway_module is not None:
             return self._gateway_module
 
-        path = self._archived_gateway_path()
+        path = self._gateway_module_path()
         if not path.exists():
-            raise FileNotFoundError(f"Archived browser gateway not found at: {path}")
+            raise FileNotFoundError(f"OpenClaw browser gateway not found at: {path}")
 
-        spec = importlib.util.spec_from_file_location("lada_archived_browser_gateway", path)
+        spec = importlib.util.spec_from_file_location("lada_openclaw_browser_gateway", path)
         if spec is None or spec.loader is None:
-            raise RuntimeError("Failed to build import spec for archived browser gateway")
+            raise RuntimeError("Failed to build import spec for OpenClaw browser gateway")
 
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -343,5 +346,3 @@ def get_lada_browser_adapter(force: bool = False) -> Optional[LadaBrowserAdapter
     if _adapter_singleton is None:
         _adapter_singleton = LadaBrowserAdapter(enabled=True)
     return _adapter_singleton
-
-

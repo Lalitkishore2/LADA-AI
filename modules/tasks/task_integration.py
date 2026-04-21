@@ -10,6 +10,7 @@ These adapters allow existing code to continue working while tasks are
 stored in the unified registry for durability and cross-module visibility.
 """
 
+import ast
 import logging
 from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
@@ -35,6 +36,134 @@ from modules.tasks.task_flow_registry import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_eval_condition(condition: str, outputs: Dict[str, Any]) -> bool:
+    """Safely evaluate simple condition expressions against flow outputs.
+
+    Supports comparisons, boolean ops, `len(...)`, and `outputs.get(...)`/subscripting.
+    Disallows arbitrary function calls, attribute access, imports, and execution.
+    """
+
+    parsed = ast.parse(condition, mode="eval")
+    data = outputs or {}
+
+    def _eval(node: ast.AST) -> Any:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+
+        if isinstance(node, ast.Constant):
+            return node.value
+
+        if isinstance(node, ast.Name):
+            if node.id == "outputs":
+                return data
+            raise ValueError(f"Unsupported name in condition: {node.id}")
+
+        if isinstance(node, ast.List):
+            return [_eval(elt) for elt in node.elts]
+
+        if isinstance(node, ast.Tuple):
+            return tuple(_eval(elt) for elt in node.elts)
+
+        if isinstance(node, ast.Dict):
+            return {_eval(k): _eval(v) for k, v in zip(node.keys, node.values)}
+
+        if isinstance(node, ast.Subscript):
+            value = _eval(node.value)
+            key = _eval(node.slice)
+            return value[key]
+
+        if isinstance(node, ast.UnaryOp):
+            value = _eval(node.operand)
+            if isinstance(node.op, ast.Not):
+                return not bool(value)
+            if isinstance(node.op, ast.USub):
+                return -value
+            if isinstance(node.op, ast.UAdd):
+                return +value
+            raise ValueError("Unsupported unary operator in condition")
+
+        if isinstance(node, ast.BinOp):
+            left = _eval(node.left)
+            right = _eval(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                return left / right
+            if isinstance(node.op, ast.Mod):
+                return left % right
+            raise ValueError("Unsupported binary operator in condition")
+
+        if isinstance(node, ast.BoolOp):
+            values = node.values
+            if isinstance(node.op, ast.And):
+                return all(bool(_eval(v)) for v in values)
+            if isinstance(node.op, ast.Or):
+                return any(bool(_eval(v)) for v in values)
+            raise ValueError("Unsupported boolean operator in condition")
+
+        if isinstance(node, ast.Compare):
+            left = _eval(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                right = _eval(comparator)
+                if isinstance(op, ast.Eq):
+                    ok = left == right
+                elif isinstance(op, ast.NotEq):
+                    ok = left != right
+                elif isinstance(op, ast.Gt):
+                    ok = left > right
+                elif isinstance(op, ast.GtE):
+                    ok = left >= right
+                elif isinstance(op, ast.Lt):
+                    ok = left < right
+                elif isinstance(op, ast.LtE):
+                    ok = left <= right
+                elif isinstance(op, ast.In):
+                    ok = left in right
+                elif isinstance(op, ast.NotIn):
+                    ok = left not in right
+                elif isinstance(op, ast.Is):
+                    ok = left is right
+                elif isinstance(op, ast.IsNot):
+                    ok = left is not right
+                else:
+                    raise ValueError("Unsupported comparison operator in condition")
+                if not ok:
+                    return False
+                left = right
+            return True
+
+        if isinstance(node, ast.Call):
+            # Allow len(<expr>)
+            if isinstance(node.func, ast.Name) and node.func.id == "len":
+                if len(node.args) != 1 or node.keywords:
+                    raise ValueError("len() condition call shape is invalid")
+                return len(_eval(node.args[0]))
+
+            # Allow outputs.get(key[, default])
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "outputs"
+            ):
+                args = [_eval(arg) for arg in node.args]
+                if len(args) == 1:
+                    return data.get(args[0])
+                if len(args) == 2:
+                    return data.get(args[0], args[1])
+                raise ValueError("outputs.get() condition call shape is invalid")
+
+            raise ValueError("Unsupported function call in condition")
+
+        raise ValueError(f"Unsupported expression in condition: {type(node).__name__}")
+
+    return bool(_eval(parsed))
 
 
 # ============================================================================
@@ -425,15 +554,19 @@ class PipelineAdapter:
             if step.condition:
                 # Simple condition evaluation
                 try:
-                    if not eval(step.condition, {"outputs": flow.outputs}):
+                    if not _safe_eval_condition(str(step.condition), flow.outputs):
                         result = StepResult(
                             step_id=step.id,
                             status=StepStatus.SKIPPED,
                         )
                         self._flow_registry.complete_step(flow_id, step.id, result)
                         continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "[PipelineAdapter] Condition evaluation failed for %s: %s",
+                        step.id,
+                        exc,
+                    )
             
             # Handle approval step
             if step.step_type == StepType.APPROVAL:

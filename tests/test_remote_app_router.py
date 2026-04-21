@@ -1,6 +1,7 @@
 """Tests for secure remote control and file access endpoints in app router."""
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -61,6 +62,10 @@ def test_remote_status_exposes_flags_and_roots(monkeypatch, tmp_path):
     assert payload["command_rpm"] == 12
     assert payload["files_rpm"] == 24
     assert payload["download_rpm"] == 8
+    assert payload["bridge_supported"] is True
+    assert payload["bridge_auto_dispatch"] is False
+    assert payload["bridge_default_device_id"] == ""
+    assert payload["bridge_online_device_count"] == 0
 
 
 def test_sessions_list_propagates_request_id_header():
@@ -404,6 +409,224 @@ def test_remote_command_idempotency_conflict_returns_409(monkeypatch):
     assert first.status_code == 200
     assert conflict.status_code == 409
     assert "Idempotency key reuse" in str(conflict.json().get("detail", ""))
+
+
+def test_remote_command_idempotency_scope_separates_lowercase_bearer_tokens(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("LADA_ROLLOUT_STAGE", "canary")
+
+    client = _build_client(_FakeState())
+    register = client.post("/remote/device/register", json={"device_id": "laptop-1"})
+    assert register.status_code == 200
+
+    common_body = {"command": "open calculator", "device_id": "laptop-1"}
+    first = client.post(
+        "/remote/command",
+        json=common_body,
+        headers={
+            "Idempotency-Key": "bridge-idem-token-scope",
+            "Authorization": "bearer token-a",
+        },
+    )
+    second = client.post(
+        "/remote/command",
+        json=common_body,
+        headers={
+            "Idempotency-Key": "bridge-idem-token-scope",
+            "Authorization": "bearer token-b",
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload["idempotency"]["replayed"] is False
+    assert second_payload["idempotency"]["replayed"] is False
+    assert first_payload["command_id"] != second_payload["command_id"]
+    assert second_payload["queue_length"] == 2
+
+
+def test_remote_bridge_device_registration_and_listing(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("LADA_ROLLOUT_STAGE", "canary")
+
+    client = _build_client(_FakeState())
+
+    register = client.post(
+        "/remote/device/register",
+        json={"device_id": "laptop-1", "label": "Main Laptop", "capabilities": {"shell": True}},
+    )
+    assert register.status_code == 200
+    assert register.json()["registered"] is True
+
+    devices = client.get("/remote/devices")
+    assert devices.status_code == 200
+    payload = devices.json()
+    assert payload["success"] is True
+    assert len(payload["devices"]) == 1
+    assert payload["devices"][0]["device_id"] == "laptop-1"
+    assert payload["devices"][0]["online"] is True
+    assert payload["devices"][0]["queue_length"] == 0
+
+
+def test_remote_command_auto_dispatches_to_online_bridge_device(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("LADA_ROLLOUT_STAGE", "canary")
+
+    state = _FakeState()
+    client = _build_client(state)
+
+    register = client.post(
+        "/remote/device/register",
+        json={"device_id": "laptop-1", "label": "Main Laptop"},
+    )
+    assert register.status_code == 200
+
+    enqueue = client.post(
+        "/remote/command",
+        json={"command": "set volume to 40"},
+    )
+    assert enqueue.status_code == 200
+    payload = enqueue.json()
+    assert payload["queued"] is True
+    assert payload["device_id"] == "laptop-1"
+    assert payload["auto_dispatched"] is True
+    assert payload["engine"] == "remote_bridge_queue"
+    assert state.jarvis.commands == []
+
+
+def test_remote_command_auto_dispatch_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("LADA_ROLLOUT_STAGE", "canary")
+    monkeypatch.setenv("LADA_REMOTE_BRIDGE_AUTO_DISPATCH", "false")
+
+    state = _FakeState()
+    client = _build_client(state)
+
+    register = client.post(
+        "/remote/device/register",
+        json={"device_id": "laptop-1", "label": "Main Laptop"},
+    )
+    assert register.status_code == 200
+
+    local_exec = client.post(
+        "/remote/command",
+        json={"command": "open notepad"},
+    )
+    assert local_exec.status_code == 200
+    payload = local_exec.json()
+    assert payload["engine"] == "jarvis"
+    assert payload["handled"] is True
+    assert payload["auto_dispatched"] is False
+    assert state.jarvis.commands == ["open notepad"]
+
+
+def test_remote_bridge_queue_and_result_flow(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("LADA_ROLLOUT_STAGE", "canary")
+
+    client = _build_client(_FakeState())
+
+    register = client.post("/remote/device/register", json={"device_id": "laptop-1"})
+    assert register.status_code == 200
+
+    enqueue = client.post(
+        "/remote/command",
+        json={"command": "open calculator", "device_id": "laptop-1"},
+        headers={"Idempotency-Key": "bridge-idem-1"},
+    )
+    assert enqueue.status_code == 200
+    enqueue_payload = enqueue.json()
+    assert enqueue_payload["queued"] is True
+    command_id = enqueue_payload["command_id"]
+
+    next_command = client.get("/remote/device/laptop-1/next-command")
+    assert next_command.status_code == 200
+    next_payload = next_command.json()
+    assert next_payload["has_command"] is True
+    assert next_payload["command"]["command_id"] == command_id
+    assert next_payload["command"]["command"] == "open calculator"
+
+    result = client.post(
+        "/remote/device/laptop-1/command-result",
+        json={"command_id": command_id, "success": True, "response": "done"},
+    )
+    assert result.status_code == 200
+
+    get_result = client.get(f"/remote/device/laptop-1/command-result/{command_id}")
+    assert get_result.status_code == 200
+    result_payload = get_result.json()
+    assert result_payload["status"] == "completed"
+    assert result_payload["result"]["success"] is True
+    assert result_payload["result"]["response"] == "done"
+
+
+def test_remote_bridge_redelivers_after_dispatch_timeout(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("LADA_ROLLOUT_STAGE", "canary")
+    monkeypatch.setenv("LADA_REMOTE_BRIDGE_DISPATCH_TIMEOUT_SEC", "1")
+
+    client = _build_client(_FakeState())
+
+    register = client.post("/remote/device/register", json={"device_id": "laptop-1"})
+    assert register.status_code == 200
+
+    enqueue = client.post(
+        "/remote/command",
+        json={"command": "open calculator", "device_id": "laptop-1"},
+    )
+    assert enqueue.status_code == 200
+    command_id = enqueue.json()["command_id"]
+
+    first_dispatch = client.get("/remote/device/laptop-1/next-command")
+    assert first_dispatch.status_code == 200
+    assert first_dispatch.json()["has_command"] is True
+
+    immediate_retry = client.get("/remote/device/laptop-1/next-command")
+    assert immediate_retry.status_code == 200
+    assert immediate_retry.json()["has_command"] is False
+
+    time.sleep(1.1)
+    redelivered = client.get("/remote/device/laptop-1/next-command")
+    assert redelivered.status_code == 200
+    payload = redelivered.json()
+    assert payload["has_command"] is True
+    assert payload["command"]["command_id"] == command_id
+    assert payload["command"]["command"] == "open calculator"
+
+
+def test_remote_bridge_command_requires_registered_device(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("LADA_ROLLOUT_STAGE", "canary")
+
+    client = _build_client(_FakeState())
+    enqueue = client.post(
+        "/remote/command",
+        json={"command": "open calc", "device_id": "missing-device"},
+    )
+    assert enqueue.status_code == 404
+    assert "Device not registered" in str(enqueue.json().get("detail", ""))
+
+
+def test_remote_bridge_devices_requires_remote_control_enabled(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "false")
+
+    client = _build_client(_FakeState())
+    response = client.get("/remote/devices")
+
+    assert response.status_code == 403
+    assert "Remote control is disabled" in str(response.json().get("detail", ""))
+
+
+def test_remote_bridge_result_lookup_requires_remote_control_enabled(monkeypatch):
+    monkeypatch.setenv("LADA_REMOTE_CONTROL_ENABLED", "false")
+
+    client = _build_client(_FakeState())
+    response = client.get("/remote/device/laptop-1/command-result/rcmd-1")
+
+    assert response.status_code == 403
+    assert "Remote control is disabled" in str(response.json().get("detail", ""))
 
 
 def test_remote_files_and_download_with_allowed_roots(monkeypatch, tmp_path):

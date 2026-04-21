@@ -105,7 +105,7 @@ class HotelAgent:
             nights = (check_out_dt - check_in_dt).days
             if nights < 1:
                 nights = 1
-        except:
+        except Exception as e:
             nights = 1
         
         # If browser available, try real search

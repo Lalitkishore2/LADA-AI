@@ -1,0 +1,113 @@
+{
+  "id": "e72997a8",
+  "timestamp": "2026-04-20T10:39:44.442780",
+  "duration_ms": 24032.43613243103,
+  "summary": {
+    "total_checks": 5,
+    "passed": 4,
+    "failed": 1,
+    "warnings": 0
+  },
+  "results": [
+    {
+      "id": "python-version",
+      "name": "Python Version",
+      "category": "dependency",
+      "severity": "info",
+      "passed": true,
+      "message": "Python 3.11.9",
+      "details": {},
+      "duration_ms": 0.0,
+      "timestamp": "2026-04-20T10:39:20.411365",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "env-config",
+      "name": "Environment Configuration",
+      "category": "config",
+      "severity": "info",
+      "passed": true,
+      "message": "2 AI provider key(s) configured",
+      "details": {
+        "configured_providers": [
+          "GEMINI_API_KEY",
+          "GROQ_API_KEY"
+        ],
+        "warnings": []
+      },
+      "duration_ms": 0.0,
+      "timestamp": "2026-04-20T10:39:20.412872",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "storage-access",
+      "name": "Storage Access",
+      "category": "storage",
+      "severity": "info",
+      "passed": true,
+      "message": "Data directory accessible: data",
+      "details": {
+        "path": "data"
+      },
+      "duration_ms": 2.078533172607422,
+      "timestamp": "2026-04-20T10:39:20.415967",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "provider-connectivity",
+      "name": "AI Provider Connectivity",
+      "category": "provider",
+      "severity": "error",
+      "passed": false,
+      "message": "Provider check failed: 'ProviderManager' object has no attribute 'get_health_status'",
+      "details": {
+        "error": "'ProviderManager' object has no attribute 'get_health_status'"
+      },
+      "duration_ms": 2197.1919536590576,
+      "timestamp": "2026-04-20T10:39:22.611080",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "core-modules",
+      "name": "Core Modules",
+      "category": "module",
+      "severity": "info",
+      "passed": true,
+      "message": "All 6 core modules available",
+      "details": {
+        "modules": {
+          "lada_ai_router": "ok",
+          "lada_jarvis_core": "ok",
+          "lada_memory": "ok",
+          "modules.providers.provider_manager": "ok",
+          "modules.tool_registry": "ok",
+          "modules.session_manager": "ok"
+        }
+      },
+      "duration_ms": 24030.420303344727,
+      "timestamp": "2026-04-20T10:39:44.442780",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    }
+  ],
+  "system_info": {
+    "platform": "Windows-10-10.0.26220-SP0",
+    "python_version": "3.11.9",
+    "hostname": "LALIT",
+    "timestamp": "2026-04-20T10:39:44.484490",
+    "memory": {
+      "total_gb": 13.81,
+      "available_gb": 2.86,
+      "percent_used": 79.3
+    }
+  }
+}

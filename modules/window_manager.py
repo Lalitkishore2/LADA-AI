@@ -202,7 +202,7 @@ class WindowManager:
                         is_maximized=win.isMaximized,
                         process_name=""
                     ))
-                except:
+                except Exception as e:
                     continue
             
             return {
@@ -351,7 +351,7 @@ class WindowManager:
                             'window': win.title,
                             'message': f"Switched to {win.title}"
                         }
-                    except:
+                    except Exception as e:
                         continue
             
             return {
@@ -374,7 +374,7 @@ class WindowManager:
                 'message': f"Attempted to switch windows (limited mode)",
                 'note': 'Install pygetwindow for precise window control'
             }
-        except:
+        except Exception as e:
             return {'success': False, 'error': 'Window switching not available'}
     
     def switch_back(self) -> Dict[str, Any]:
@@ -513,7 +513,7 @@ class WindowManager:
             import pyautogui
             pyautogui.hotkey('alt', 'F4')
             return {'success': True, 'message': 'Sent close command (Alt+F4)'}
-        except:
+        except Exception as e:
             return {'success': False, 'error': 'Cannot close window'}
     
     def minimize_all_windows(self) -> Dict[str, Any]:
@@ -700,7 +700,7 @@ class WindowManager:
             
             return {'success': False, 'error': f'Layout {layout} not supported in fallback mode'}
         
-        except:
+        except Exception as e:
             return {'success': False, 'error': 'Window arrangement not available'}
     
     def snap_window(self, direction: str, window_name: Optional[str] = None) -> Dict[str, Any]:
@@ -787,7 +787,7 @@ class WindowManager:
                             if args:
                                 subprocess.Popen([path] + args)
                             else:
-                                subprocess.Popen(path, shell=True)
+                                subprocess.Popen([path])
                             
                             logger.info(f"[OK] Opened: {app_name}")
                             return {
@@ -796,7 +796,7 @@ class WindowManager:
                                 'path': path,
                                 'message': f"Opened {app_name}"
                             }
-                        except:
+                        except Exception as e:
                             continue
                 
                 return {'success': False, 'error': f"Could not find {app_name} installation"}
@@ -804,16 +804,16 @@ class WindowManager:
             # Try to run as a command
             try:
                 if args:
-                    subprocess.Popen([app_name] + args, shell=True)
+                    subprocess.Popen([app_name] + args)
                 else:
-                    subprocess.Popen(app_name, shell=True)
+                    subprocess.Popen([app_name])
                 
                 return {
                     'success': True,
                     'app': app_name,
                     'message': f"Opened {app_name}"
                 }
-            except:
+            except Exception as e:
                 return {
                     'success': False,
                     'error': f"Unknown application: {app_name}"
@@ -944,7 +944,7 @@ class WindowManager:
                     name = proc.info['name']
                     if name.endswith('.exe'):
                         apps.add(name)
-                except:
+                except Exception as e:
                     continue
             
             return {

@@ -269,7 +269,7 @@ class ChatManager:
                     'updated_at': data.get('updated_at'),
                     'message_count': len(data.get('messages', []))
                 })
-            except:
+            except Exception as e:
                 continue
         
         # Sort by updated_at descending

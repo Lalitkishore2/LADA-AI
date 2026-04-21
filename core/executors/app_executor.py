@@ -6,6 +6,7 @@ Extracted from JarvisCommandProcessor._handle_open_command, _launch_app, _handle
 
 import os
 import re
+import shlex
 import subprocess
 import webbrowser
 import logging
@@ -65,7 +66,8 @@ class AppExecutor(BaseExecutor):
                 webbrowser.open('https://google.com')
                 return True, f"{LadaPersonality.get_acknowledgment()} Opening your browser."
 
-            subprocess.Popen(target, shell=True)
+            launch_args = shlex.split(target, posix=False) or [target]
+            subprocess.Popen(launch_args)
             return True, f"{LadaPersonality.get_acknowledgment()} Opening {target}."
         except Exception:
             return True, f"I couldn't find an app called '{target}'. Could you be more specific?"
@@ -80,19 +82,19 @@ class AppExecutor(BaseExecutor):
             path = path.replace('{user}', username)
 
             if path.startswith('ms-'):
-                os.system(f'start {path}')
+                os.startfile(path)
                 return True, f"{LadaPersonality.get_acknowledgment()} Opening {app_name}."
 
             if Path(path).exists():
                 try:
-                    subprocess.Popen([path], shell=True)
+                    subprocess.Popen([path])
                     return True, f"{LadaPersonality.get_acknowledgment()} Opening {app_name}."
                 except Exception:
                     continue
 
             if path.endswith('.exe') and '\\' not in path:
                 try:
-                    subprocess.Popen(path, shell=True)
+                    subprocess.Popen([path])
                     return True, f"{LadaPersonality.get_acknowledgment()} Opening {app_name}."
                 except Exception:
                     continue
@@ -105,7 +107,7 @@ class AppExecutor(BaseExecutor):
                 pass
 
         try:
-            os.system(f'start {app_name}')
+            subprocess.Popen([app_name])
             return True, f"{LadaPersonality.get_acknowledgment()} Opening {app_name}."
         except Exception:
             return True, f"I couldn't open {app_name}. Make sure it's installed."
@@ -131,7 +133,7 @@ class AppExecutor(BaseExecutor):
         proc_name = process_map.get(target, f'{target}.exe')
 
         try:
-            os.system(f'taskkill /im {proc_name} /f')
+            subprocess.run(['taskkill', '/im', proc_name, '/f'], check=False, capture_output=True)
             return True, f"{LadaPersonality.get_confirmation()} Closed {target}."
         except Exception:
             return True, f"I couldn't close {target}."

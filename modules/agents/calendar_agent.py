@@ -235,7 +235,7 @@ class CalendarAgent:
         # Parse date
         try:
             check_date = datetime.strptime(date, '%Y-%m-%d')
-        except:
+        except Exception as e:
             check_date = datetime.now()
         
         # Get events for that day
@@ -256,7 +256,7 @@ class CalendarAgent:
                     'end': end.strftime('%H:%M'),
                     'event': event['summary']
                 })
-            except:
+            except Exception as e:
                 pass
         
         # Calculate free slots (simplified)

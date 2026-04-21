@@ -74,38 +74,65 @@ class SystemExecutor(BaseExecutor):
     def _handle_volume(self, cmd: str, system) -> Tuple[bool, str]:
         from lada_jarvis_core import LadaPersonality
 
-        if any(x in cmd for x in ['set volume', 'volume to', 'change volume', 'make volume']):
-            match = re.search(r'(\d+)', cmd)
-            if match:
-                level = int(match.group(1))
-                result = system.set_volume(level)
-                if result.get('success'):
-                    return True, f"{LadaPersonality.get_acknowledgment()} Volume set to {level}%."
-                return True, f"I couldn't change the volume. {result.get('error', '')}"
+        explicit_level_match = re.search(
+            r'\b(?:set|change|adjust|make)\s+(?:the\s+)?(?:laptop\s+|system\s+|speaker\s+)?volume(?:\s+(?:to|at|by))?\s*(\d{1,3})\s*%?\b',
+            cmd,
+        )
+        if not explicit_level_match:
+            explicit_level_match = re.search(r'\bvolume\s*(?:to|at|by)\s*(\d{1,3})\s*%?\b', cmd)
 
-        if 'mute' in cmd:
-            system.set_volume(0)
-            return True, "Volume muted."
+        if explicit_level_match:
+            level = max(0, min(100, int(explicit_level_match.group(1))))
+            result = system.set_volume(level)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"I couldn't change the volume. {detail}"
+            return True, f"{LadaPersonality.get_acknowledgment()} Volume set to {level}%."
 
         if 'unmute' in cmd or 'full volume' in cmd or 'max volume' in cmd:
-            system.set_volume(100)
+            result = system.set_volume(100)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"I couldn't change the volume. {detail}"
             return True, "Volume set to maximum."
+
+        if 'mute' in cmd and 'unmute' not in cmd:
+            result = system.set_volume(0)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"I couldn't change the volume. {detail}"
+            return True, "Volume muted."
 
         if any(x in cmd for x in ['volume up', 'increase volume', 'louder']):
             vol = system.get_volume()
-            new_vol = min(100, vol.get('volume', 50) + 10)
-            system.set_volume(new_vol)
+            current = vol.get('volume', 50) if isinstance(vol, dict) else 50
+            if not isinstance(current, (int, float)):
+                current = 50
+            new_vol = min(100, int(current) + 10)
+            result = system.set_volume(new_vol)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"I couldn't change the volume. {detail}"
             return True, f"Volume increased to {new_vol}%."
 
         if any(x in cmd for x in ['volume down', 'decrease volume', 'quieter', 'lower volume']):
             vol = system.get_volume()
-            new_vol = max(0, vol.get('volume', 50) - 10)
-            system.set_volume(new_vol)
+            current = vol.get('volume', 50) if isinstance(vol, dict) else 50
+            if not isinstance(current, (int, float)):
+                current = 50
+            new_vol = max(0, int(current) - 10)
+            result = system.set_volume(new_vol)
+            if isinstance(result, dict) and not result.get('success', False):
+                detail = result.get('error') or result.get('message') or 'unknown error'
+                return True, f"I couldn't change the volume. {detail}"
             return True, f"Volume decreased to {new_vol}%."
 
         if any(x in cmd for x in ['what is the volume', 'current volume', 'volume level']):
             vol = system.get_volume()
-            return True, f"Volume is at {vol.get('volume', 'unknown')}%."
+            if isinstance(vol, dict) and vol.get('success', True) is False:
+                return True, "I couldn't read the current volume level."
+            current = vol.get('volume', 'unknown') if isinstance(vol, dict) else vol
+            return True, f"Volume is at {current}%."
 
         return False, ""
 
@@ -605,30 +632,30 @@ class SystemExecutor(BaseExecutor):
     # ── Power Commands (shutdown/restart/lock/sleep) ────────
 
     def _handle_power(self, cmd: str) -> Tuple[bool, str]:
-        if 'shutdown' in cmd or 'turn off computer' in cmd:
-            return True, "Are you sure you want to shut down? Say 'confirm shutdown' to proceed."
-
         if 'confirm shutdown' in cmd:
-            os.system('shutdown /s /t 60')
+            subprocess.run(['shutdown', '/s', '/t', '60'], check=False)
             return True, "Shutting down in 60 seconds. Say 'cancel shutdown' to abort."
 
         if 'cancel shutdown' in cmd:
-            os.system('shutdown /a')
+            subprocess.run(['shutdown', '/a'], check=False)
             return True, "Shutdown cancelled."
+
+        if 'confirm restart' in cmd:
+            subprocess.run(['shutdown', '/r', '/t', '60'], check=False)
+            return True, "Restarting in 60 seconds."
+
+        if 'shutdown' in cmd or 'turn off computer' in cmd:
+            return True, "Are you sure you want to shut down? Say 'confirm shutdown' to proceed."
 
         if 'restart' in cmd or 'reboot' in cmd:
             return True, "Are you sure you want to restart? Say 'confirm restart' to proceed."
 
-        if 'confirm restart' in cmd:
-            os.system('shutdown /r /t 60')
-            return True, "Restarting in 60 seconds."
-
         if any(x in cmd for x in ['lock screen', 'lock computer', 'lock pc']):
-            subprocess.run('rundll32.exe user32.dll,LockWorkStation', shell=True)
+            subprocess.run(['rundll32.exe', 'user32.dll,LockWorkStation'], check=False)
             return True, "Locking the screen."
 
         if any(x in cmd for x in ['sleep', 'go to sleep', 'sleep mode']):
-            subprocess.run('rundll32.exe powrprof.dll,SetSuspendState 0,1,0', shell=True)
+            subprocess.run(['rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0'], check=False)
             return True, "Going to sleep."
 
         return False, ""

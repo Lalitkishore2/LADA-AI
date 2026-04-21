@@ -53,6 +53,15 @@ class _FailingProviderManager:
         return self._provider
 
 
+class _MissingProviderManager:
+    def __init__(self):
+        self.model_registry = _FakeModelRegistry([])
+        self._rate_limiter = None
+
+    def get_provider_for_model(self, model_id):
+        return None
+
+
 class _FakeRouter:
     def __init__(self, entries, dropdown_items):
         self.provider_manager = _FakeProviderManager(_FakeModelRegistry(entries))
@@ -145,3 +154,25 @@ def test_v1_chat_completions_sanitizes_provider_error(monkeypatch):
     assert response.status_code == 502
     detail = response.json().get("detail", "")
     assert sensitive_key not in detail
+
+
+def test_v1_chat_completions_stream_invalid_model_returns_404(monkeypatch):
+    monkeypatch.setenv("LADA_API_KEY", "")
+
+    class _Router:
+        def __init__(self):
+            self.provider_manager = _MissingProviderManager()
+            self.system_prompt = ""
+
+    client = _build_client(_FakeState(_Router()))
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "missing-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 404
+    assert "missing-model" in response.json().get("detail", "")

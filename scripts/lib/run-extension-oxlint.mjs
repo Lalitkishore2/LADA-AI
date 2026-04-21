@@ -6,10 +6,10 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
 } from "./local-heavy-check-runtime.mjs";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 
 export function runExtensionOxlint(params) {
   const repoRoot = process.cwd();
-  const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
   const releaseLock = acquireLocalHeavyCheckLockSync({
     cwd: repoRoot,
     env: process.env,
@@ -33,11 +33,13 @@ export function runExtensionOxlint(params) {
 
     const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
     const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
-    const result = spawnSync(oxlintPath, finalArgs, {
+    const spawnSpec = createPnpmRunnerSpawnSpec({
+      pnpmArgs: ["exec", "oxlint", ...finalArgs],
+      cwd: repoRoot,
       stdio: "inherit",
       env,
-      shell: process.platform === "win32",
     });
+    const result = spawnSync(spawnSpec.command, spawnSpec.args, spawnSpec.options);
 
     if (result.error) {
       throw result.error;

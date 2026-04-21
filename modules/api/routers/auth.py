@@ -13,6 +13,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth"])
 
 
+def _parse_bearer_token(authorization: Optional[str]) -> str:
+    raw = (authorization or "").strip()
+    if not raw:
+        return ""
+
+    parts = raw.split(None, 1)
+    if len(parts) != 2:
+        return ""
+
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return ""
+
+    return token.strip()
+
+
 def create_auth_router(state):
     """Create auth router bound to server state."""
     async def _trace_request(request: Request, response: Response):
@@ -32,9 +48,7 @@ def create_auth_router(state):
     @r.get("/auth/check")
     async def auth_check(authorization: Optional[str] = Header(None)):
         """Check if current session token is still valid."""
-        token = ""
-        if authorization and authorization.startswith("Bearer "):
-            token = authorization[7:]
+        token = _parse_bearer_token(authorization)
         if state.validate_session_token(token):
             return {"valid": True}
         raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -42,9 +56,7 @@ def create_auth_router(state):
     @r.post("/auth/logout")
     async def auth_logout(authorization: Optional[str] = Header(None)):
         """Invalidate a session token."""
-        token = ""
-        if authorization and authorization.startswith("Bearer "):
-            token = authorization[7:]
+        token = _parse_bearer_token(authorization)
         state.invalidate_token(token)
         return {"success": True}
 

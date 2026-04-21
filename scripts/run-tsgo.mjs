@@ -1,13 +1,12 @@
 import { spawnSync } from "node:child_process";
-import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const { args: finalArgs, env } = applyLocalTsgoPolicy(process.argv.slice(2), process.env);
 
-const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
 const releaseLock = acquireLocalHeavyCheckLockSync({
   cwd: process.cwd(),
   env,
@@ -15,11 +14,13 @@ const releaseLock = acquireLocalHeavyCheckLockSync({
 });
 
 try {
-  const result = spawnSync(tsgoPath, finalArgs, {
+  const spawnSpec = createPnpmRunnerSpawnSpec({
+    pnpmArgs: ["exec", "tsgo", ...finalArgs],
+    cwd: process.cwd(),
     stdio: "inherit",
     env,
-    shell: process.platform === "win32",
   });
+  const result = spawnSync(spawnSpec.command, spawnSpec.args, spawnSpec.options);
 
   if (result.error) {
     throw result.error;

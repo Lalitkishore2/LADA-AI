@@ -284,7 +284,7 @@ class MemorySystem:
             try:
                 with open(conv_file, 'r', encoding='utf-8') as f:
                     existing = json.load(f)
-            except:
+            except Exception as e:
                 existing = []
         
         # Add current conversation
@@ -401,7 +401,7 @@ class MemorySystem:
                         data = json.load(f)
                         self.long_term_memory = data.get('memory', {})
                         logger.info("Loaded from backup")
-                except:
+                except Exception as e:
                     pass
     
     def _save_memory(self) -> None:

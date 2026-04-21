@@ -19,6 +19,7 @@ import json
 import logging
 import threading
 import queue
+import shlex
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from dataclasses import dataclass, field, asdict
@@ -195,12 +196,29 @@ class TaskOrchestrator:
         return {'success': True, 'slept': seconds}
     
     def _action_shell(self, command: str, timeout: int = 60, **kwargs) -> Dict:
-        """Execute shell command."""
+        """Execute a command with shell disabled by default."""
         import subprocess
         try:
+            allow_shell = bool(kwargs.get('shell') or kwargs.get('allow_shell'))
+            run_target: Any = command
+
+            if allow_shell:
+                if not isinstance(command, str):
+                    return {
+                        'success': False,
+                        'error': 'Shell mode requires command as a string'
+                    }
+            elif isinstance(command, str):
+                run_target = shlex.split(command, posix=(os.name != 'nt'))
+                if not run_target:
+                    return {
+                        'success': False,
+                        'error': 'Empty command'
+                    }
+
             result = subprocess.run(
-                command,
-                shell=True,
+                run_target,
+                shell=allow_shell,
                 capture_output=True,
                 text=True,
                 timeout=timeout
@@ -209,10 +227,13 @@ class TaskOrchestrator:
                 'success': result.returncode == 0,
                 'stdout': result.stdout,
                 'stderr': result.stderr,
-                'return_code': result.returncode
+                'return_code': result.returncode,
+                'shell': allow_shell,
             }
         except subprocess.TimeoutExpired:
             return {'success': False, 'error': 'Command timed out'}
+        except ValueError as e:
+            return {'success': False, 'error': f'Invalid command: {e}'}
         except Exception as e:
             return {'success': False, 'error': str(e)}
     

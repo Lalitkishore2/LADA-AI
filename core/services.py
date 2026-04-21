@@ -7,27 +7,57 @@ Replaces the 52 try/except import blocks at the top of lada_jarvis_core.py.
 
 import importlib
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class _ServiceEntry:
-    __slots__ = ('module_path', 'names', 'factory', 'required',
-                 'available', 'loaded', '_cached')
+    __slots__ = (
+        'module_path',
+        'names',
+        'factory',
+        'required',
+        'env_flag',
+        'env_enabled_values',
+        'available',
+        'loaded',
+        '_cached',
+    )
 
     def __init__(self, module_path: str, names: List[str],
-                 factory: Optional[str] = None, required: bool = False):
+                 factory: Optional[str] = None, required: bool = False,
+                 env_flag: Optional[str] = None,
+                 env_enabled_values: Optional[List[str]] = None):
         self.module_path = module_path
         self.names = names            # class/function names to import
         self.factory = factory         # optional factory function name
         self.required = required
+        self.env_flag = env_flag
+        if env_enabled_values:
+            self.env_enabled_values = {str(value).strip().lower() for value in env_enabled_values}
+        else:
+            self.env_enabled_values = {"1", "true", "yes", "on"}
         self.available = False         # True if import succeeded
         self.loaded = False
         self._cached: Dict[str, Any] = {}
 
+    def _env_enabled(self) -> bool:
+        if not self.env_flag:
+            return True
+        raw_value = str(os.getenv(self.env_flag, "")).strip().lower()
+        return raw_value in self.env_enabled_values
+
     def probe(self) -> bool:
         """Try to import the module; set self.available accordingly."""
+        if not self._env_enabled():
+            for n in self.names:
+                self._cached[n] = None
+            self.available = False
+            self.loaded = False
+            return False
+
         try:
             mod = importlib.import_module(self.module_path)
             for n in self.names:
@@ -68,9 +98,18 @@ class ServiceRegistry:
     # ── Registration ────────────────────────────────────────
 
     def register(self, key: str, module_path: str, names: List[str],
-                 factory: Optional[str] = None, required: bool = False):
+                 factory: Optional[str] = None, required: bool = False,
+                 env_flag: Optional[str] = None,
+                 env_enabled_values: Optional[List[str]] = None):
         """Register a service (module) by key."""
-        self._entries[key] = _ServiceEntry(module_path, names, factory, required)
+        self._entries[key] = _ServiceEntry(
+            module_path,
+            names,
+            factory,
+            required,
+            env_flag=env_flag,
+            env_enabled_values=env_enabled_values,
+        )
 
     # ── Bulk probe ──────────────────────────────────────────
 
@@ -248,6 +287,18 @@ def build_default_registry() -> ServiceRegistry:
     svc.register('spotify', 'modules.spotify_controller', ['SpotifyController'])
     svc.register('smart_home', 'modules.smart_home', ['SmartHomeHub'])
     svc.register('alexa_server', 'integrations.alexa_server', ['AlexaSkillServer'])
+    svc.register(
+        'openclaw_gateway',
+        'integrations.openclaw_gateway',
+        ['OpenClawGateway', 'OpenClawConfig', 'get_openclaw_gateway'],
+        env_flag='LADA_OPENCLAW_MODE',
+    )
+    svc.register(
+        'openclaw_skills',
+        'integrations.openclaw_skills',
+        ['SkillsManager', 'get_skills_manager', 'load_skills', 'match_skill'],
+        env_flag='LADA_OPENCLAW_MODE',
+    )
     svc.register('lada_browser_adapter', 'integrations.lada_browser_adapter',
                  ['LadaBrowserAdapter', 'get_lada_browser_adapter', 'lada_browser_adapter_enabled'])
     svc.register('stealth_browser', 'modules.stealth_browser',

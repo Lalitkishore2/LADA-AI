@@ -22,6 +22,7 @@ Flow:
 Works with both chat and voice (both call _check_system_command).
 """
 
+import os
 import re
 import json
 import time
@@ -163,6 +164,24 @@ try:
 except ImportError:
     SPECIALIST_POOL_OK = False
 
+try:
+    from modules.agent_collaboration import get_collaboration_hub
+    COLLAB_HUB_OK = True
+except ImportError:
+    COLLAB_HUB_OK = False
+
+try:
+    from modules.plugin_system import get_plugin_registry
+    PLUGIN_SYSTEM_OK = True
+except ImportError:
+    PLUGIN_SYSTEM_OK = False
+
+try:
+    from modules.comet_agent import create_comet_agent
+    COMET_OK = True
+except ImportError:
+    COMET_OK = False
+
 
 @dataclass
 class AgentResult:
@@ -170,10 +189,15 @@ class AgentResult:
     handled: bool           # True if agent handled the command
     response: str           # Text response to show the user
     tool_calls_made: int = 0  # Number of tool calls executed
+    tool_count: int = 0     # Canonical telemetry alias for tool_calls_made
     tier_used: str = ""     # fast / smart
     model_used: str = ""    # Model ID used
     elapsed_ms: float = 0   # Total processing time
     recovery_used: str = "" # Recovery strategy used (if any)
+    intent_type: str = ""   # intent classification label
+    executor_used: str = "" # planner-selected executor
+    fallback_count: int = 0  # number of fallback hops used
+    final_status: str = ""  # completed / delegated / failed
 
 
 # ============================================================
@@ -184,6 +208,8 @@ class AgentResult:
 ACTION_VERBS = [
     'find', 'search', 'locate', 'look for', 'where is', 'where are',
     'open', 'close', 'launch', 'start', 'run', 'quit', 'exit', 'kill', 'stop',
+    'book', 'reserve',
+    'analyze', 'analyse', 'inspect', 'scan', 'control', 'automate',
     'create', 'make', 'new', 'delete', 'remove', 'rename', 'move', 'copy',
     'set', 'change', 'adjust', 'increase', 'decrease', 'turn',
     'play', 'pause', 'skip', 'next', 'previous',
@@ -253,6 +279,17 @@ class AICommandAgent:
         config = config or {}
         self.enabled = config.get('enabled', True)
         self.max_rounds = config.get('max_rounds', 5)
+        self.specialist_wait_enabled = config.get('specialist_wait_enabled', True)
+        self.specialist_wait_timeout_s = float(config.get('specialist_wait_timeout_s', 6.0))
+        self.specialist_poll_interval_s = float(config.get('specialist_poll_interval_s', 0.2))
+
+        plugin_env = str(os.getenv('LADA_SKILL_MD_ENABLED', '1')).strip().lower()
+        default_plugin_enabled = plugin_env not in {'0', 'false', 'no', 'off'}
+        self.plugin_enabled = bool(config.get('plugin_enabled', default_plugin_enabled))
+        self.comet_enabled = bool(config.get('comet_enabled', True))
+
+        self._plugin_registry = None
+        self._plugins_ready = False
 
         # Build agent system prompt
         home = str(Path.home())
@@ -272,7 +309,10 @@ class AICommandAgent:
             f"- Current date: {{current_date}}\n"
         )
 
-        logger.info(f"[Agent] AICommandAgent initialized (max_rounds={self.max_rounds})")
+        logger.info(
+            "[Agent] AICommandAgent initialized "
+            f"(max_rounds={self.max_rounds}, plugin={self.plugin_enabled}, comet={self.comet_enabled})"
+        )
 
     def try_handle(self, text: str) -> AgentResult:
         """
@@ -288,6 +328,7 @@ class AICommandAgent:
             return AgentResult(handled=False, response="")
 
         text = text.strip()
+        fallback_count = 0
 
         # Step 1: Classify — is this an actionable command?
         if not self._is_actionable(text):
@@ -296,28 +337,47 @@ class AICommandAgent:
         # Step 2: Select tier (fast local vs smart cloud)
         tier = self._select_tier(text)
 
-        # Step 2.5: Check if this should be delegated to a specialist agent
-        if SPECIALIST_POOL_OK:
-            should_delegate, specialist, capability = self._should_delegate(text)
-            if should_delegate and specialist:
-                try:
-                    pool = get_specialist_pool()
-                    task_id = pool.delegate_to_specialist(
-                        task_description=text,
-                        required_capability=capability,
-                        context={'original_text': text, 'tier': tier}
-                    )
-                    if task_id:
-                        logger.info(f"[Agent] Delegated to {specialist}: {task_id}")
-                        # For now, return a response indicating delegation
-                        # In future, we could wait for result via hub
-                        return AgentResult(
-                            handled=True,
-                            response=f"Task delegated to {specialist} specialist.",
-                            tier_used=tier,
-                        )
-                except Exception as e:
-                    logger.warning(f"[Agent] Delegation failed: {e}, falling back to direct execution")
+        # Step 2.5: Shared planner chooses the best executor path.
+        plan = self._plan_executor(text)
+
+        if plan['executor'] == 'specialist':
+            specialist_result = self._execute_with_specialist(
+                text=text,
+                tier=tier,
+                specialist=plan.get('specialist', ''),
+                capability=plan.get('capability', ''),
+            )
+            if specialist_result:
+                return specialist_result
+            fallback_count += 1
+
+        elif plan['executor'] == 'plugin':
+            plugin_result = self._try_plugin_execution(text)
+            if plugin_result:
+                return AgentResult(
+                    handled=True,
+                    response=plugin_result,
+                    tier_used=tier,
+                    intent_type='command',
+                    executor_used='plugin',
+                    fallback_count=fallback_count,
+                    final_status='completed',
+                )
+            fallback_count += 1
+
+        elif plan['executor'] == 'comet':
+            comet_result = self._execute_with_comet(text)
+            if comet_result:
+                return AgentResult(
+                    handled=True,
+                    response=comet_result,
+                    tier_used=tier,
+                    intent_type='command',
+                    executor_used='comet',
+                    fallback_count=fallback_count,
+                    final_status='completed',
+                )
+            fallback_count += 1
 
         # Step 3: Execute via AI tool-calling loop
         start = time.time()
@@ -330,14 +390,26 @@ class AICommandAgent:
                     handled=True,
                     response=response,
                     tool_calls_made=tool_count,
+                    tool_count=tool_count,
                     tier_used=tier,
                     model_used=model_id or "",
                     elapsed_ms=elapsed,
+                    intent_type='command',
+                    executor_used='tool_loop',
+                    fallback_count=fallback_count,
+                    final_status='completed',
                 )
         except Exception as e:
             logger.error(f"[Agent] Execution failed: {e}", exc_info=True)
 
-        return AgentResult(handled=False, response="")
+        return AgentResult(
+            handled=False,
+            response="",
+            intent_type='command',
+            executor_used='tool_loop',
+            fallback_count=fallback_count,
+            final_status='failed',
+        )
 
     def _is_actionable(self, text: str) -> bool:
         """
@@ -442,12 +514,231 @@ class AICommandAgent:
             'delivery status': ('package_tracking_agent', 'package_tracking'),
         }
 
-        for trigger, (agent, capability) in specialist_triggers.items():
+        for trigger, (agent, capability) in sorted(
+            specialist_triggers.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
             if trigger in t:
                 logger.info(f"[Agent] Detected specialist trigger '{trigger}' -> {agent}")
                 return True, agent, capability
 
         return False, None, None
+
+    def _plan_executor(self, text: str) -> Dict[str, Any]:
+        """
+        Shared planner for routing commands across specialist/plugin/comet/tool loop.
+        """
+        if SPECIALIST_POOL_OK:
+            should_delegate, specialist, capability = self._should_delegate(text)
+            if should_delegate and specialist:
+                return {
+                    'executor': 'specialist',
+                    'specialist': specialist,
+                    'capability': capability,
+                }
+
+        if self.plugin_enabled and self._has_matching_plugin_handler(text):
+            return {'executor': 'plugin'}
+
+        if self.comet_enabled and self._is_multi_step_task(text):
+            return {'executor': 'comet'}
+
+        return {'executor': 'tool_loop'}
+
+    def _is_multi_step_task(self, text: str) -> bool:
+        """Heuristic detector for commands that benefit from autonomous planning."""
+        t = text.lower()
+        markers = [
+            ' and then ',
+            ' then ',
+            ' after that ',
+            ' step by step ',
+            'workflow',
+            'multi-step',
+            'autonomous',
+            'on my behalf',
+        ]
+        return any(marker in f" {t} " for marker in markers)
+
+    def _execute_with_specialist(self,
+                                 text: str,
+                                 tier: str,
+                                 specialist: str,
+                                 capability: str) -> Optional[AgentResult]:
+        """Delegate to specialist pool and optionally wait for completion."""
+        try:
+            pool = get_specialist_pool()
+            task_id = pool.delegate_to_specialist(
+                task_description=text,
+                required_capability=capability,
+                context={'original_text': text, 'tier': tier},
+            )
+            if not task_id:
+                return None
+
+            logger.info(f"[Agent] Delegated to {specialist}: {task_id}")
+
+            if not self.specialist_wait_enabled:
+                return AgentResult(
+                    handled=True,
+                    response=f"Task delegated to {specialist} specialist (task {task_id}).",
+                    tier_used=tier,
+                    intent_type='command',
+                    executor_used='specialist',
+                    final_status='delegated',
+                )
+
+            response_text, final_status = self._wait_for_specialist_result(task_id, specialist)
+            return AgentResult(
+                handled=True,
+                response=response_text,
+                tier_used=tier,
+                intent_type='command',
+                executor_used='specialist',
+                final_status=final_status,
+            )
+        except Exception as e:
+            logger.warning(f"[Agent] Delegation failed: {e}, falling back to direct execution")
+            return None
+
+    def _wait_for_specialist_result(self, task_id: str, specialist: str) -> tuple:
+        """Poll hub task status until complete/failed or timeout."""
+        if not COLLAB_HUB_OK:
+            return (
+                f"Task delegated to {specialist} specialist (task {task_id}) and is running.",
+                'delegated',
+            )
+
+        hub = get_collaboration_hub()
+        deadline = time.time() + max(0.1, self.specialist_wait_timeout_s)
+
+        while time.time() <= deadline:
+            status = hub.get_task_status(task_id)
+            if not status:
+                break
+
+            state = str(status.get('status', '')).lower()
+            if state == 'completed':
+                payload = status.get('result')
+                return self._format_specialist_result(specialist, payload), 'completed'
+
+            if state == 'failed':
+                payload = status.get('result') or {}
+                error_text = ''
+                if isinstance(payload, dict):
+                    error_text = str(payload.get('error', '')).strip()
+                if not error_text:
+                    error_text = 'Unknown error'
+                return f"{specialist} specialist failed: {error_text}", 'failed'
+
+            time.sleep(max(0.05, self.specialist_poll_interval_s))
+
+        return (
+            f"Task delegated to {specialist} specialist (task {task_id}) and is still running.",
+            'delegated',
+        )
+
+    def _format_specialist_result(self, specialist: str, payload: Any) -> str:
+        """Normalize specialist task output into an actionable user-facing string."""
+        detail = ""
+        if isinstance(payload, dict):
+            data = payload.get('data')
+            if data is None and payload:
+                data = payload
+
+            if isinstance(data, str):
+                detail = data.strip()
+            elif data is not None:
+                detail = json.dumps(data, ensure_ascii=True, default=str)
+        elif payload is not None:
+            detail = str(payload).strip()
+
+        if detail and len(detail) > 320:
+            detail = detail[:317] + '...'
+
+        if detail:
+            return f"{specialist} specialist completed: {detail}"
+
+        return f"Task completed by {specialist} specialist."
+
+    def _execute_with_comet(self, text: str) -> Optional[str]:
+        """Execute a multi-step command through Comet's autonomous loop."""
+        if not COMET_OK:
+            return None
+
+        comet = None
+        try:
+            comet = create_comet_agent()
+            result = comet.execute_task_sync(text, max_steps=20)
+            if getattr(result, 'success', False):
+                return getattr(result, 'message', '') or 'Task completed by Comet executor.'
+
+            error_text = getattr(result, 'error', '') or getattr(result, 'message', '')
+            if error_text:
+                logger.warning(f"[Agent] Comet execution failed: {error_text}")
+        except Exception as e:
+            logger.warning(f"[Agent] Comet unavailable for task '{text[:80]}': {e}")
+        finally:
+            if comet and hasattr(comet, 'cleanup'):
+                try:
+                    comet.cleanup()
+                except Exception:
+                    pass
+
+        return None
+
+    def _ensure_plugin_registry(self):
+        """Lazy-load plugin registry and activate handlers once."""
+        if not PLUGIN_SYSTEM_OK:
+            return None
+
+        if self._plugin_registry is None:
+            self._plugin_registry = get_plugin_registry()
+
+        if not self._plugin_registry:
+            return None
+
+        if not self._plugins_ready:
+            try:
+                self._plugin_registry.load_all()
+            except Exception as e:
+                logger.warning(f"[Agent] Plugin load failed: {e}")
+            try:
+                self._plugin_registry.start_watcher()
+            except Exception:
+                pass
+            self._plugins_ready = True
+
+        return self._plugin_registry
+
+    def _has_matching_plugin_handler(self, text: str) -> bool:
+        """Check whether any active plugin advertises a matching handler."""
+        registry = self._ensure_plugin_registry()
+        if not registry:
+            return False
+
+        finder = getattr(registry, 'find_handler', None)
+        if not callable(finder):
+            return False
+
+        try:
+            return finder(text) is not None
+        except Exception:
+            return False
+
+    def _try_plugin_execution(self, text: str) -> Optional[str]:
+        """Execute matching plugin handler and return direct plugin output."""
+        registry = self._ensure_plugin_registry()
+        if not registry:
+            return None
+
+        try:
+            result = registry.execute_handler(text)
+            return str(result) if result is not None else None
+        except Exception as e:
+            logger.warning(f"[Agent] Plugin execution failed: {e}")
+            return None
 
     def _execute(self, text: str, tier: str) -> tuple:
         """
@@ -464,13 +755,18 @@ class AICommandAgent:
             logger.warning("[Agent] No model available")
             return None, 0, None
 
-        model_id = selection['model_id']
-        provider_id = selection.get('provider_id', '')
+        model_id = selection.get('model_id') or selection.get('id')
+        provider_id = selection.get('provider_id') or selection.get('provider', '')
+        if not model_id:
+            logger.warning(f"[Agent] Model selection missing id: {selection}")
+            return None, 0, None
 
         logger.info(f"[Agent] Using {model_id} ({provider_id}) for tier={tier}")
 
         # Get tools schema
-        tools_schema = self.tool_registry.to_ai_schema() if self.tool_registry else []
+        tools_schema = []
+        if self.tool_registry and hasattr(self.tool_registry, 'to_ai_schema'):
+            tools_schema = self.tool_registry.to_ai_schema()
         if not tools_schema:
             logger.warning("[Agent] No tools available")
             return None, 0, model_id
@@ -878,4 +1174,7 @@ class AICommandAgent:
             'max_rounds': self.max_rounds,
             'tools_available': tool_count,
             'provider_available': bool(self.provider_manager),
+            'plugin_enabled': self.plugin_enabled,
+            'comet_enabled': self.comet_enabled,
+            'specialist_wait_enabled': self.specialist_wait_enabled,
         }

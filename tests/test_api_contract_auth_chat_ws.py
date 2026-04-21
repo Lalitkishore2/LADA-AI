@@ -269,6 +269,69 @@ def test_auth_login_check_logout_contract():
     assert after_logout.status_code == 401
 
 
+def test_auth_accepts_lowercase_bearer_scheme():
+    state = _FakeState()
+    client = _build_client(create_auth_router(state))
+
+    login = client.post(
+        "/auth/login",
+        json={"password": state._auth_password},
+        headers={"X-Request-ID": "auth-login-lower-bearer-req-1"},
+    )
+    assert login.status_code == 200
+    token = login.json()["token"]
+
+    check = client.get(
+        "/auth/check",
+        headers={
+            "Authorization": f"bearer {token}",
+            "X-Request-ID": "auth-check-lower-bearer-req-1",
+        },
+    )
+    assert check.status_code == 200
+    assert check.json() == {"valid": True}
+
+    logout = client.post(
+        "/auth/logout",
+        headers={
+            "Authorization": f"bearer {token}",
+            "X-Request-ID": "auth-logout-lower-bearer-req-1",
+        },
+    )
+    assert logout.status_code == 200
+
+    after_logout = client.get(
+        "/auth/check",
+        headers={
+            "Authorization": f"bearer {token}",
+            "X-Request-ID": "auth-check-lower-bearer-after-logout-req-1",
+        },
+    )
+    assert after_logout.status_code == 401
+
+
+def test_voice_direct_accepts_lowercase_bearer_scheme(monkeypatch):
+    monkeypatch.setenv("LADA_API_KEY", "voice-direct-key")
+
+    state = _FakeState()
+    client = _build_client(create_chat_router(state))
+
+    response = client.post(
+        "/api/voice/direct",
+        json={"command": "what time is it?", "source": "webhook"},
+        headers={
+            "Authorization": "bearer voice-direct-key",
+            "X-Request-ID": "voice-direct-lower-bearer-req-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "voice-direct-lower-bearer-req-1"
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["voice_response"] == "echo:what time is it?"
+
+
 def test_chat_contract_auto_model_and_web_flag():
     state = _FakeState()
     client = _build_client(create_chat_router(state))
@@ -292,6 +355,83 @@ def test_chat_contract_auto_model_and_web_flag():
     assert payload["model"] == "test-model"
     assert state.ai_router.last_query["model"] is None
     assert state.ai_router.last_query["use_web_search"] is True
+
+
+def test_chat_supports_legacy_query_signature_without_optional_kwargs():
+    class _LegacyQueryAIRouter:
+        def __init__(self):
+            self.current_model = "legacy-model"
+            self.current_backend_name = "legacy-backend"
+            self.last_message = None
+
+        def query(self, message):
+            self.last_message = message
+            return f"legacy:{message}"
+
+        def get_status(self):
+            return {"backend": "legacy"}
+
+        def clear_history(self):
+            return None
+
+    state = _FakeState(ai_router=_LegacyQueryAIRouter())
+    client = _build_client(create_chat_router(state))
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "legacy hello",
+            "model": "gpt-5",
+            "use_web_search": True,
+        },
+        headers={"X-Request-ID": "chat-legacy-query-req-1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["response"] == "legacy:legacy hello"
+    assert payload["model"] == "legacy-model"
+    assert state.ai_router.last_message == "legacy hello"
+
+
+def test_chat_stream_supports_legacy_query_signature_without_optional_kwargs():
+    class _LegacyQueryAIRouter:
+        def __init__(self):
+            self.current_model = "legacy-model"
+            self.current_backend_name = "legacy-backend"
+            self.last_message = None
+
+        def query(self, message):
+            self.last_message = message
+            return f"legacy:{message}"
+
+        def get_status(self):
+            return {"backend": "legacy"}
+
+        def clear_history(self):
+            return None
+
+    state = _FakeState(ai_router=_LegacyQueryAIRouter())
+    client = _build_client(create_chat_router(state))
+    request_id = "chat-stream-legacy-query-req-1"
+
+    response = client.post(
+        "/chat/stream",
+        json={
+            "message": "legacy stream",
+            "model": "gpt-5",
+            "use_web_search": True,
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert '"type": "chat.chunk"' in body
+    assert '"chunk": "legacy:legacy stream"' in body
+    assert f'"request_id": "{request_id}"' in body
+    assert state.ai_router.last_message == "legacy stream"
 
 
 def test_chat_health_propagates_request_id_header():
@@ -476,6 +616,28 @@ def test_agent_not_found_preserves_404_and_request_id_header():
     assert "not found" in response.json()["detail"].lower()
 
 
+def test_agent_process_allows_non_dict_result_payload():
+    class _StringResultAgent:
+        def process(self, _query: str):
+            return "done"
+
+    state = _FakeState()
+    state.agents["demo"] = _StringResultAgent()
+    client = _build_client(create_chat_router(state))
+
+    response = client.post(
+        "/agent",
+        json={"agent": "demo", "action": "run", "params": {"query": "hello"}},
+        headers={"X-Request-ID": "agent-string-result-req-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "agent-string-result-req-1"
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["result"] == "done"
+
+
 def test_websocket_rejects_invalid_token(monkeypatch):
     state = _FakeState()
     monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
@@ -486,6 +648,78 @@ def test_websocket_rejects_invalid_token(monkeypatch):
         with client.websocket_connect("/ws?token=invalid"):
             pass
     assert excinfo.value.code == 4001
+    assert sum(ws_router._connections_per_ip.values()) == 0
+
+
+def test_websocket_invalid_handshake_cleans_connection_tracking(monkeypatch):
+    state = _FakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    monkeypatch.setattr(ws_router, "WS_PROTOCOL_ENABLED", True)
+    monkeypatch.setattr(ws_router, "WS_PROTOCOL_HANDSHAKE_TIMEOUT", 5)
+    monkeypatch.setattr(ws_router, "_get_protocol_validator", lambda: object())
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with client.websocket_connect(f"/ws?token={token}") as ws:
+            ws.send_text("{not-json")
+            error_frame = ws.receive_json()
+            assert error_frame["type"] == "error"
+            assert "Invalid JSON in handshake" in error_frame["data"]["message"]
+            ws.receive_json()
+
+    assert excinfo.value.code == 4003
+    assert state.ws_connections == {}
+    assert state.ws_sessions == {}
+    assert sum(ws_router._connections_per_ip.values()) == 0
+
+
+def test_websocket_protocol_reject_handshake_cleans_connection_tracking(monkeypatch):
+    class _HandshakeError:
+        message = "Protocol rejected"
+
+    class _HandshakeRejectResponse:
+        success = False
+        error = _HandshakeError()
+
+        def to_dict(self):
+            return {
+                "type": "error",
+                "error": {"message": self.error.message},
+            }
+
+    class _RejectingValidator:
+        def validate_connect(self, _payload):
+            return _HandshakeRejectResponse(), None
+
+        def remove_session(self, _session_id):
+            return None
+
+    state = _FakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    monkeypatch.setattr(ws_router, "WS_PROTOCOL_ENABLED", True)
+    monkeypatch.setattr(ws_router, "WS_PROTOCOL_HANDSHAKE_TIMEOUT", 5)
+    monkeypatch.setattr(ws_router, "_get_protocol_validator", lambda: _RejectingValidator())
+    ws_router._connections_per_ip.clear()
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        ws.send_json({"type": "connect", "protocol_version": "1.0"})
+        error_frame = ws.receive_json()
+        assert error_frame["type"] == "error"
+        assert error_frame["error"]["message"] == "Protocol rejected"
+
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            ws.receive_json()
+        assert excinfo.value.code == 4003
+
+    assert state.ws_connections == {}
+    assert state.ws_sessions == {}
+    assert sum(ws_router._connections_per_ip.values()) == 0
 
 
 def test_websocket_ping_pong_and_size_limit(monkeypatch):
@@ -1094,6 +1328,102 @@ def test_agent_websocket_accepts_bearer_token_header(monkeypatch):
     with client.websocket_connect("/agent", headers={"Authorization": f"Bearer {token}"}) as ws:
         connected = ws.receive_json()
         assert connected["type"] == "agent.connected"
+
+
+def test_ws_openclaw_event_envelope_maps_to_internal_system(monkeypatch):
+    class _FakeBrowser:
+        def navigate(self, url):
+            return {"success": True, "url": url}
+
+        def click(self, selector, by="css"):
+            return {"success": True, "selector": selector, "by": by}
+
+        def type_text(self, selector, text, by="css"):
+            return {"success": True, "selector": selector, "text": text, "by": by}
+
+        def scroll(self, direction="down", amount=500):
+            return {"success": True, "direction": direction, "amount": amount}
+
+    state = _FakeState()
+    token = state.create_session_token()
+
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    import modules.stealth_browser as stealth_browser_mod
+    monkeypatch.setattr(stealth_browser_mod, "get_stealth_browser", lambda: _FakeBrowser())
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        ws.receive_json()  # system.connected
+
+        ws.send_json(
+            {
+                "type": "openclaw.event",
+                "id": "oc-ws-1",
+                "request_id": "oc-ws-req-1",
+                "data": {
+                    "event_type": "system.command",
+                    "payload": {"action": "status"},
+                },
+            }
+        )
+
+        done = ws.receive_json()
+        assert done["type"] == "system.status"
+        assert done["data"]["request_id"] == "oc-ws-req-1"
+
+
+def test_acp_websocket_session_setup_failure_cleans_connection_tracking(monkeypatch):
+    class _BrokenACPServer:
+        def create_session(self, **kwargs):
+            raise RuntimeError("acp session boom")
+
+        async def handle_request(self, session_id, request):
+            return {"jsonrpc": "2.0", "result": {}, "id": None}
+
+        def close_session(self, session_id):
+            return True
+
+    state = _FakeState()
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+    monkeypatch.setattr("modules.acp_bridge.get_acp_server", lambda: _BrokenACPServer())
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect("/acp") as ws:
+        error_frame = ws.receive_json()
+        assert error_frame["jsonrpc"] == "2.0"
+        assert error_frame["error"]["message"] == "ACP session setup failed"
+
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            ws.receive_json()
+        assert excinfo.value.code == 1011
+
+    assert sum(ws_router._connections_per_ip.values()) == 0
+
+
+def test_acp_websocket_bridge_init_failure_cleans_connection_tracking(monkeypatch):
+    state = _FakeState()
+    monkeypatch.setattr(ws_router, "WS_MAX_CONNECTIONS_PER_IP", 5)
+    ws_router._connections_per_ip.clear()
+
+    def _raise_acp_init_error():
+        raise RuntimeError("acp init boom")
+
+    monkeypatch.setattr("modules.acp_bridge.get_acp_server", _raise_acp_init_error)
+
+    client = _build_client(create_ws_router(state))
+    with client.websocket_connect("/acp") as ws:
+        error_frame = ws.receive_json()
+        assert error_frame["jsonrpc"] == "2.0"
+        assert error_frame["error"]["message"] == "ACP bridge not available"
+
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            ws.receive_json()
+        assert excinfo.value.code == 1011
+
+    assert sum(ws_router._connections_per_ip.values()) == 0
 
 
 def test_voice_direct_unauthorized_preserves_401():

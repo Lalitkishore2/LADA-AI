@@ -395,7 +395,7 @@ print(json.dumps({{"output": "\\n".join(_output), "success": True}}))
                         output=actual_output or result_json.get('output', ''),
                         error=result.stderr if result.stderr else None
                     )
-                except:
+                except Exception as e:
                     pass
             
             return ExecutionResult(
@@ -421,7 +421,7 @@ print(json.dumps({{"output": "\\n".join(_output), "success": True}}))
             if code_file.exists():
                 try:
                     code_file.unlink()
-                except:
+                except Exception as e:
                     pass
     
     def _execute_direct_python(
@@ -516,7 +516,7 @@ print(json.dumps({{"output": "\\n".join(_output), "success": True}}))
             if code_file.exists():
                 try:
                     code_file.unlink()
-                except:
+                except Exception as e:
                     pass
     
     def _execute_powershell(self, code: str, timeout: float) -> ExecutionResult:
@@ -549,7 +549,7 @@ print(json.dumps({{"output": "\\n".join(_output), "success": True}}))
             if code_file.exists():
                 try:
                     code_file.unlink()
-                except:
+                except Exception as e:
                     pass
     
     def _indent_code(self, code: str, spaces: int) -> str:
@@ -680,7 +680,7 @@ try:
         if isinstance(_val, pd.DataFrame) and not _name.startswith('_'):
             _val.to_html(r'{table_path}', classes='dataframe', index=True)
             break
-except:
+except Exception as e:
     pass
 
 # Print captured output

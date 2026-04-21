@@ -297,6 +297,41 @@ class TestDiagnosticsRunner:
         finally:
             runner._get_system_info = original_get_system_info
 
+    def test_provider_connectivity_uses_current_provider_manager_api(self, runner):
+        """Provider connectivity should rely on check_all_health, not removed legacy methods."""
+        class _FakeProviderManager:
+            def auto_configure(self):
+                return 2
+
+            def check_all_health(self):
+                return {
+                    "provider-a": {"available": True},
+                    "provider-b": {"available": False},
+                }
+
+        with patch("modules.providers.provider_manager.ProviderManager", _FakeProviderManager):
+            passed, message, details = runner._check_provider_connectivity()
+
+        assert passed is True
+        assert message == "1/2 providers healthy"
+        assert "providers" in details
+
+    def test_provider_connectivity_reports_unconfigured_providers(self, runner):
+        """Provider connectivity should return an actionable result when no providers are configured."""
+        class _FakeProviderManager:
+            def auto_configure(self):
+                return 0
+
+            def check_all_health(self):
+                return {}
+
+        with patch("modules.providers.provider_manager.ProviderManager", _FakeProviderManager):
+            passed, message, details = runner._check_provider_connectivity()
+
+        assert passed is False
+        assert message == "No AI providers configured"
+        assert details["fix_id"] == "set-api-key"
+
 
 # ============================================================================
 # Health Check Tests
@@ -696,6 +731,41 @@ class TestAutoFixEngine:
         result = engine.execute("disabled-fix")
         
         assert result.status == FixStatus.SKIPPED
+
+    def test_fix_reset_providers_uses_current_provider_manager_api(self, engine):
+        """Reset providers fix should use check_all_health and report healthy count."""
+        class _FakeProviderManager:
+            def auto_configure(self):
+                return 2
+
+            def check_all_health(self):
+                return {
+                    "provider-a": {"available": True},
+                    "provider-b": {"available": False},
+                }
+
+        with patch("modules.providers.provider_manager.ProviderManager", _FakeProviderManager):
+            success, message, details = engine._fix_reset_providers({})
+
+        assert success is True
+        assert message == "Providers reset: 1 healthy"
+        assert "providers" in details
+
+    def test_fix_reset_providers_reports_missing_configuration(self, engine):
+        """Reset providers fix should fail with guidance when no providers can be configured."""
+        class _FakeProviderManager:
+            def auto_configure(self):
+                return 0
+
+            def check_all_health(self):
+                return {}
+
+        with patch("modules.providers.provider_manager.ProviderManager", _FakeProviderManager):
+            success, message, details = engine._fix_reset_providers({})
+
+        assert success is False
+        assert message == "No providers configured. Set API keys and retry."
+        assert details["fix_id"] == "set-api-key"
 
 
 if __name__ == "__main__":

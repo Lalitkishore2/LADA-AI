@@ -2,7 +2,7 @@
 LADA API — Pydantic request/response models.
 """
 
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 try:
     from pydantic import BaseModel, Field
@@ -25,7 +25,7 @@ if PYDANTIC_OK:
         response: str
         conversation_id: str
         model: str
-        sources: List[Dict] = []
+        sources: List[Dict] = Field(default_factory=list)
         timestamp: str
 
     class AgentRequest(BaseModel):
@@ -39,7 +39,7 @@ if PYDANTIC_OK:
         success: bool
         agent: str
         action: str
-        result: Dict
+        result: Any
         timestamp: str
 
     class ConversationInfo(BaseModel):

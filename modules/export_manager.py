@@ -139,7 +139,7 @@ class ExportManager:
                 try:
                     dt = datetime.fromisoformat(timestamp)
                     lines.append(f"*{dt.strftime('%I:%M %p')}*")
-                except:
+                except Exception as e:
                     pass
             
             lines.append("")

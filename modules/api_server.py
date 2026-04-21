@@ -12,6 +12,31 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Ensure env-backed runtime config is available when api_server is launched directly.
+try:
+    from dotenv import load_dotenv
+
+    _PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    load_dotenv(_PROJECT_ROOT / ".env")
+except Exception:
+    pass
+
+
+def _parse_bearer_token(authorization: str) -> str:
+    raw = str(authorization or "").strip()
+    if not raw:
+        return ""
+
+    parts = raw.split(None, 1)
+    if len(parts) != 2:
+        return ""
+
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return ""
+
+    return token.strip()
+
 # Try to import FastAPI
 try:
     from fastapi import FastAPI
@@ -48,6 +73,7 @@ class LADAAPIServer:
         self.host = host
         self.port = port
         self._state = None
+        self.app = None  # Always initialise so tests can assert app is None in no-FastAPI mode
 
         if not FASTAPI_OK:
             logger.error("[APIServer] FastAPI not available")
@@ -123,7 +149,7 @@ class LADAAPIServer:
                 return _with_request_id(await call_next(request))
 
             auth_header = request.headers.get("authorization", "")
-            token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+            token = _parse_bearer_token(auth_header)
             if not token:
                 token = request.query_params.get("token", "")
 
@@ -141,6 +167,7 @@ class LADAAPIServer:
         from modules.api.routers.orchestration import create_orchestration_router
         from modules.api.routers.openai_compat import create_openai_compat_router
         from modules.api.routers.lada_browser_compat import create_lada_browser_compat_router
+        from modules.api.routers.openclaw_compat import create_openclaw_compat_router
         from modules.api.routers.websocket import create_ws_router
 
         self.app.include_router(create_auth_router(self._state))
@@ -150,6 +177,7 @@ class LADAAPIServer:
         self.app.include_router(create_orchestration_router(self._state))
         self.app.include_router(create_openai_compat_router(self._state))
         self.app.include_router(create_lada_browser_compat_router(self._state))
+        self.app.include_router(create_openclaw_compat_router(self._state))
         self.app.include_router(create_ws_router(self._state))
 
         # Mount static files

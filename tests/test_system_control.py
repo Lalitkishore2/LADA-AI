@@ -114,6 +114,47 @@ class TestVolumeControl:
         result = controller.get_volume()
         assert 'success' in result
 
+    def test_set_volume_uses_powershell_fallback_when_pycaw_and_nircmd_unavailable(self):
+        """Volume set should still succeed via PowerShell fallback."""
+        from modules import system_control as sc
+        import pycaw.pycaw as pycaw_mod
+
+        controller = sc.SystemController()
+
+        with patch.object(pycaw_mod.AudioUtilities, 'GetSpeakers', side_effect=RuntimeError("pycaw failed")):
+            def _fake_run(cmd, **kwargs):
+                if cmd and cmd[0] == 'nircmd.exe':
+                    raise FileNotFoundError("nircmd missing")
+                if cmd and cmd[0] == 'powershell':
+                    return MagicMock(returncode=0, stdout='ok\n', stderr='')
+                raise AssertionError(f"Unexpected command: {cmd}")
+
+            with patch('modules.system_control.subprocess.run', side_effect=_fake_run):
+                result = controller.set_volume(42)
+
+        assert result.get('success') is True
+        assert result.get('volume') == 42
+
+    def test_get_volume_uses_powershell_fallback_when_pycaw_fails(self):
+        """Volume get should parse PowerShell JSON fallback output."""
+        from modules import system_control as sc
+        import pycaw.pycaw as pycaw_mod
+
+        controller = sc.SystemController()
+
+        with patch.object(pycaw_mod.AudioUtilities, 'GetSpeakers', side_effect=RuntimeError("pycaw failed")):
+            def _fake_run(cmd, **kwargs):
+                if cmd and cmd[0] == 'powershell':
+                    return MagicMock(returncode=0, stdout='{"volume":37,"muted":false}\n', stderr='')
+                raise AssertionError(f"Unexpected command: {cmd}")
+
+            with patch('modules.system_control.subprocess.run', side_effect=_fake_run):
+                result = controller.get_volume()
+
+        assert result.get('success') is True
+        assert result.get('volume') == 37
+        assert result.get('muted') is False
+
 
 class TestBrightnessControl:
     """Tests for brightness control."""

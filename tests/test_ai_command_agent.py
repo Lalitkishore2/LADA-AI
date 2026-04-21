@@ -95,6 +95,7 @@ class TestActionClassification:
             "delete temp files",
             "create a new folder",
             "take a screenshot",
+            "analyze the screen and control laptop volume",
             "show me recent files",
             "play music",
             "set volume to 50",

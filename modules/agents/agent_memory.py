@@ -155,7 +155,7 @@ class AgentMemoryMixin:
                 "agent_history"
             ) or []
             return history[-limit:]
-        except:
+        except Exception as e:
             return []
     
     def get_frequent_searches(self, limit: int = 5) -> List[str]:

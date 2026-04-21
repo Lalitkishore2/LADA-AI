@@ -20,6 +20,43 @@ from core.executors import BaseExecutor
 logger = logging.getLogger(__name__)
 
 
+def _flag_enabled(name: str, default: str = "true") -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _domain_allowlist() -> Set[str]:
+    raw = str(os.getenv("LADA_STEALTH_DOMAIN_ALLOWLIST", "")).strip()
+    if not raw:
+        return set()
+    return {item.strip().lower() for item in raw.split(',') if item.strip()}
+
+
+def _domain_allowed(url: str) -> bool:
+    allowlist = _domain_allowlist()
+    if not allowlist:
+        return True
+
+    try:
+        host = (urlparse(url).hostname or "").lower().strip('.')
+    except Exception:
+        return False
+
+    if not host:
+        return False
+
+    for entry in allowlist:
+        if entry.startswith("*."):
+            suffix = entry[2:]
+            if host == suffix or host.endswith(f".{suffix}"):
+                return True
+            continue
+
+        if host == entry or host.endswith(f".{entry}"):
+            return True
+
+    return False
+
+
 # ============================================================================
 # HARD BOUNDARIES - Security constraints for browser automation
 # ============================================================================
@@ -146,6 +183,9 @@ def validate_navigation_url(url: str) -> Tuple[bool, str]:
     
     if is_url_blocked(url):
         return False, f"Navigation blocked: {url} (security policy)"
+
+    if not _domain_allowed(url):
+        return False, f"Navigation blocked by allowlist policy: {url}"
     
     # Ensure it has a valid scheme
     if not url.startswith(('http://', 'https://', 'www.')):
@@ -439,6 +479,9 @@ class BrowserExecutor(BaseExecutor):
     def _handle_stealth(self, cmd: str) -> Tuple[bool, str]:
         if not any(x in cmd for x in ['stealth', 'undetected', 'anti-bot', 'antibot']):
             return False, ""
+
+        if not _flag_enabled("LADA_STEALTH_BROWSER_ENABLED", "true"):
+            return True, "Stealth browser mode is disabled by LADA_STEALTH_BROWSER_ENABLED."
 
         try:
             from modules.stealth_browser import get_stealth_browser

@@ -276,7 +276,7 @@ class JarvisCommandProcessor:
             try:
                 from lada_ai_router import HybridAIRouter
                 self._ai_router = HybridAIRouter()
-            except:
+            except Exception as e:
                 pass
         
         # Flight agent for automated flight search (requires ai_router)
@@ -625,6 +625,21 @@ class JarvisCommandProcessor:
             'gemini': 'https://gemini.google.com',
             'claude': 'https://claude.ai',
         }
+
+        # Plugin command fallback (SKILL.md + plugin.json handlers)
+        self._plugin_commands_enabled = (
+            os.getenv("LADA_SKILL_MD_ENABLED", "true").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self._plugin_handlers_ready = False
+        self.plugin_registry = None
+        if self._plugin_commands_enabled:
+            try:
+                from modules.plugin_system import get_plugin_registry
+
+                self.plugin_registry = get_plugin_registry()
+            except Exception as e:
+                logger.warning(f"[LADA Core] Plugin registry unavailable: {e}")
         
         # ── Executors (decomposed command handlers) ──────────
         from core.executors.app_executor import AppExecutor
@@ -786,7 +801,7 @@ class JarvisCommandProcessor:
         if hasattr(self, 'gui') and self.gui:
             try:
                 return self.gui.confirm_dialog(title, message)
-            except:
+            except Exception as e:
                 pass
         
         # For voice/CLI mode, we set pending_confirmation and wait
@@ -965,9 +980,13 @@ class JarvisCommandProcessor:
         if not command:
             return False, ""
 
+        raw_command = command.strip()
+        if not raw_command:
+            return False, ""
+
         self._record_activity()
-        
-        cmd = command.lower().strip()
+
+        cmd = raw_command.lower()
         
         # === CHECK FOR PENDING CONFIRMATION ===
         if self.pending_confirmation:
@@ -1082,8 +1101,37 @@ class JarvisCommandProcessor:
                 status_lines.append(f"  {icon} {name}")
             return True, '\n'.join(status_lines)
 
+        # === PLUGIN SKILL FALLBACK ===
+        plugin_response = self._try_plugin_execution(raw_command)
+        if plugin_response:
+            return True, plugin_response
+
         # Not a system command - let AI handle it
         return False, ""
+
+    def _try_plugin_execution(self, query: str) -> Optional[str]:
+        """Try plugin handlers after built-ins to preserve local command precedence."""
+        if not getattr(self, "_plugin_commands_enabled", True):
+            return None
+
+        registry = getattr(self, "plugin_registry", None)
+        if registry is None:
+            return None
+
+        if not getattr(self, "_plugin_handlers_ready", False):
+            try:
+                registry.load_all()
+                registry.start_watcher()
+                self._plugin_handlers_ready = True
+            except Exception as e:
+                logger.warning(f"[LADA Core] Plugin registry init failed: {e}")
+                return None
+
+        try:
+            return registry.execute_handler(query)
+        except Exception as e:
+            logger.warning(f"[LADA Core] Plugin execution error: {e}")
+            return None
 
     def _record_activity(self):
         self._last_activity_ts = time.time()
@@ -1212,7 +1260,7 @@ class JarvisCommandProcessor:
             battery = psutil.sensors_battery()
             if battery and not battery.power_plugged and battery.percent < 20:
                 alerts.append(f"Heads up - battery is at {battery.percent}%. You might want to plug in soon.")
-        except:
+        except Exception as e:
             pass
         
         # High CPU warning
@@ -1220,7 +1268,7 @@ class JarvisCommandProcessor:
             cpu = psutil.cpu_percent(interval=0.1)
             if cpu > 90:
                 alerts.append(f"Your CPU is running quite hot at {cpu}%. Some processes might be using a lot of resources.")
-        except:
+        except Exception as e:
             pass
         
         # High memory warning
@@ -1228,7 +1276,7 @@ class JarvisCommandProcessor:
             mem = psutil.virtual_memory()
             if mem.percent > 90:
                 alerts.append(f"Memory usage is high at {mem.percent}%. Consider closing some applications.")
-        except:
+        except Exception as e:
             pass
         
         return " ".join(alerts) if alerts else None
@@ -1248,10 +1296,10 @@ class JarvisCommandProcessor:
         
         if 'shutdown' in action or 'restart' in action:
             if 'shutdown' in action:
-                os.system('shutdown /s /t 60')
+                subprocess.run(['shutdown', '/s', '/t', '60'], check=False)
                 return True, "Computer will shut down in 60 seconds. Say 'cancel shutdown' to abort."
             elif 'restart' in action:
-                os.system('shutdown /r /t 60')
+                subprocess.run(['shutdown', '/r', '/t', '60'], check=False)
                 return True, "Computer will restart in 60 seconds. Say 'cancel shutdown' to abort."
         
         if 'empty recycle' in action or 'empty trash' in action:
@@ -1268,7 +1316,7 @@ class JarvisCommandProcessor:
             if self.system:
                 result = self.system.power_action('logoff')
                 return True, "Logging off..." if result.get('success') else f"Could not log off: {result.get('error', '')}"
-            os.system('shutdown /l /t 1')
+            subprocess.run(['shutdown', '/l', '/t', '1'], check=False)
             return True, "Logging off..."
 
         return True, f"Action '{action}' confirmed but execution not implemented."
@@ -1346,7 +1394,7 @@ class JarvisCommandProcessor:
                 for win in self.window_mgr.getAllWindows():
                     try:
                         win.minimize()
-                    except:
+                    except Exception as e:
                         pass
                 return True, "Minimized all windows."
             
@@ -1362,7 +1410,7 @@ class JarvisCommandProcessor:
                         try:
                             win.activate()
                             return True, f"Switched to {win.title[:50]}."
-                        except:
+                        except Exception as e:
                             return True, f"Found '{target}' but couldn't activate it."
                 return True, f"No window matching '{target}' found."
             

@@ -1,0 +1,162 @@
+{
+  "id": "b1b43734",
+  "timestamp": "2026-04-20T10:43:46.566125",
+  "duration_ms": 14309.773445129395,
+  "summary": {
+    "total_checks": 5,
+    "passed": 5,
+    "failed": 0,
+    "warnings": 0
+  },
+  "results": [
+    {
+      "id": "env-config",
+      "name": "Environment Configuration",
+      "category": "config",
+      "severity": "info",
+      "passed": true,
+      "message": "2 AI provider key(s) configured",
+      "details": {
+        "configured_providers": [
+          "GEMINI_API_KEY",
+          "GROQ_API_KEY"
+        ],
+        "warnings": []
+      },
+      "duration_ms": 0.0,
+      "timestamp": "2026-04-20T10:43:32.258470",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "python-version",
+      "name": "Python Version",
+      "category": "dependency",
+      "severity": "info",
+      "passed": true,
+      "message": "Python 3.11.9",
+      "details": {},
+      "duration_ms": 0.0,
+      "timestamp": "2026-04-20T10:43:32.258470",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "storage-access",
+      "name": "Storage Access",
+      "category": "storage",
+      "severity": "info",
+      "passed": true,
+      "message": "Data directory accessible: data",
+      "details": {
+        "path": "data"
+      },
+      "duration_ms": 3.1070709228515625,
+      "timestamp": "2026-04-20T10:43:32.262773",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "core-modules",
+      "name": "Core Modules",
+      "category": "module",
+      "severity": "info",
+      "passed": true,
+      "message": "All 6 core modules available",
+      "details": {
+        "modules": {
+          "lada_ai_router": "ok",
+          "lada_jarvis_core": "ok",
+          "lada_memory": "ok",
+          "modules.providers.provider_manager": "ok",
+          "modules.tool_registry": "ok",
+          "modules.session_manager": "ok"
+        }
+      },
+      "duration_ms": 10502.68816947937,
+      "timestamp": "2026-04-20T10:43:42.761159",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    },
+    {
+      "id": "provider-connectivity",
+      "name": "AI Provider Connectivity",
+      "category": "provider",
+      "severity": "info",
+      "passed": true,
+      "message": "4/4 providers healthy",
+      "details": {
+        "providers": {
+          "ollama-local": {
+            "provider_id": "ollama-local",
+            "name": "Local Ollama",
+            "status": "available",
+            "available": true,
+            "local": true,
+            "priority": 1,
+            "avg_latency_ms": 0,
+            "total_requests": 0,
+            "total_errors": 0,
+            "last_error": ""
+          },
+          "google": {
+            "provider_id": "google",
+            "name": "Google Gemini",
+            "status": "available",
+            "available": true,
+            "local": false,
+            "priority": 2,
+            "avg_latency_ms": 0,
+            "total_requests": 0,
+            "total_errors": 0,
+            "last_error": ""
+          },
+          "groq": {
+            "provider_id": "groq",
+            "name": "Groq Cloud",
+            "status": "available",
+            "available": true,
+            "local": false,
+            "priority": 3,
+            "avg_latency_ms": 0,
+            "total_requests": 0,
+            "total_errors": 0,
+            "last_error": ""
+          },
+          "ollama-cloud": {
+            "provider_id": "ollama-cloud",
+            "name": "Ollama Cloud",
+            "status": "available",
+            "available": true,
+            "local": false,
+            "priority": 4,
+            "avg_latency_ms": 0,
+            "total_requests": 0,
+            "total_errors": 0,
+            "last_error": ""
+          }
+        }
+      },
+      "duration_ms": 14306.459426879883,
+      "timestamp": "2026-04-20T10:43:46.566125",
+      "fixable": false,
+      "fix_id": null,
+      "fix_description": ""
+    }
+  ],
+  "system_info": {
+    "platform": "Windows-10-10.0.26220-SP0",
+    "python_version": "3.11.9",
+    "hostname": "LALIT",
+    "timestamp": "2026-04-20T10:43:46.628050",
+    "memory": {
+      "total_gb": 13.81,
+      "available_gb": 2.4,
+      "percent_used": 82.6
+    }
+  }
+}

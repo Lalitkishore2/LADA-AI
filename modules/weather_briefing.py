@@ -41,7 +41,7 @@ class WeatherBriefing:
             if self.cache_file.exists():
                 with open(self.cache_file, 'r') as f:
                     return json.load(f)
-        except:
+        except Exception as e:
             pass
         return {}
     
@@ -51,7 +51,7 @@ class WeatherBriefing:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.cache_file, 'w') as f:
                 json.dump(self.cache, f)
-        except:
+        except Exception as e:
             pass
     
     def get_weather(self, city: str = None, country: str = None) -> Optional[Dict[str, Any]]:
@@ -172,7 +172,7 @@ class WeatherBriefing:
                     return False  # Already gave briefing today
             
             return True
-        except:
+        except Exception as e:
             return True
     
     def mark_briefing_given(self):
@@ -180,7 +180,7 @@ class WeatherBriefing:
         try:
             self.briefing_file.parent.mkdir(parents=True, exist_ok=True)
             self.briefing_file.write_text(datetime.now().strftime('%Y-%m-%d'))
-        except:
+        except Exception as e:
             pass
     
     def get_morning_briefing(self, calendar=None) -> str:

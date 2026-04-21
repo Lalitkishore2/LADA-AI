@@ -336,7 +336,7 @@ class GoogleCalendar:
                 return datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
             # Date only
             return datetime.strptime(dt_str, '%Y-%m-%d')
-        except:
+        except Exception as e:
             return None
 
 

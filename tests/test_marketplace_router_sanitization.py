@@ -26,6 +26,15 @@ class _HappyMarketplace:
         return {"count": 1}
 
 
+class _InstallTrackingMarketplace:
+    def __init__(self):
+        self.install_calls = []
+
+    def install(self, name):
+        self.install_calls.append(name)
+        return {"success": True, "name": name}
+
+
 def test_marketplace_list_sanitizes_internal_errors(monkeypatch):
     sensitive_key = "sk-" + ("z" * 48)
     message = f"marketplace backend failed with token {sensitive_key}"
@@ -61,3 +70,25 @@ def test_marketplace_list_propagates_request_id_header(monkeypatch):
     assert response.status_code == 200
     assert response.headers["x-request-id"] == "marketplace-req-1"
     assert response.json()["success"] is True
+
+
+def test_marketplace_install_rejects_whitespace_name(monkeypatch):
+    tracking = _InstallTrackingMarketplace()
+    monkeypatch.setattr(
+        "modules.plugin_marketplace.get_marketplace",
+        lambda: tracking,
+    )
+
+    app = FastAPI()
+    app.include_router(create_marketplace_router(object()))
+    client = TestClient(app)
+
+    response = client.post(
+        "/marketplace/install",
+        json={"name": "   "},
+        headers={"X-Request-ID": "marketplace-install-whitespace-req-1"},
+    )
+
+    assert response.status_code == 400
+    assert "Plugin name required" in str(response.json().get("detail", ""))
+    assert tracking.install_calls == []

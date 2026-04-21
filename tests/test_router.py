@@ -6,6 +6,7 @@ Tests for the unified ProviderManager-based routing system
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 import sys
+from types import SimpleNamespace
 
 # Mock modules that may not be installed in test environment
 sys.modules.setdefault("modules.web_search", MagicMock())
@@ -147,6 +148,85 @@ class TestHybridAIRouter:
         result = router.get_backend_from_name("auto")
         assert result is None
         assert router._phase2_forced_model is None
+
+    def test_get_all_available_models_uses_live_provider_health(self, router):
+        """Dropdown availability should reflect current provider health, including local providers."""
+        router.model_registry = MagicMock()
+        router.model_registry.to_dropdown_items.return_value = [
+            {
+                "id": "llama-local",
+                "name": "Llama 3.1",
+                "provider": "ollama-local",
+                "available": True,
+            },
+            {
+                "id": "gemini-2.5",
+                "name": "Gemini 2.5 (offline)",
+                "provider": "google",
+                "available": False,
+            },
+        ]
+
+        local_provider = MagicMock()
+        local_provider.ensure_available.return_value = False
+        cloud_provider = MagicMock()
+        cloud_provider.ensure_available.return_value = True
+        router.provider_manager.providers = {
+            "ollama-local": local_provider,
+            "google": cloud_provider,
+        }
+
+        models = router.get_all_available_models()
+        by_id = {item["id"]: item for item in models}
+
+        assert by_id["llama-local"]["available"] is False
+        assert by_id["llama-local"]["name"].endswith("(offline)")
+        assert by_id["gemini-2.5"]["available"] is True
+        assert "(offline)" not in by_id["gemini-2.5"]["name"].lower()
+
+    def test_query_forced_model_unavailable_returns_offline_message(self, router):
+        """Forced model should not silently fall back to another provider."""
+        router.provider_manager.get_provider_for_model.return_value = None
+
+        response = router.query("Hello", model="ollama-local-model")
+
+        assert "unavailable" in response.lower() or "offline" in response.lower()
+        router.provider_manager.get_best_model.assert_not_called()
+
+    def test_stream_forced_model_unavailable_emits_terminal_error(self, router):
+        """Streaming should end with explicit model-unavailable message when forced model is offline."""
+        router.provider_manager.get_provider_for_model.return_value = None
+
+        chunks = list(router.stream_query("Hello", model="ollama-local-model"))
+
+        assert chunks
+        final = chunks[-1]
+        assert final.get("done") is True
+        assert final.get("source") == "error"
+        assert "unavailable" in final.get("chunk", "").lower() or "offline" in final.get("chunk", "").lower()
+
+    def test_get_all_available_models_preserves_provider_without_ensure_available(self, router):
+        """Providers without ensure_available should not be forced offline in dropdown output."""
+        router.model_registry = MagicMock()
+        router.model_registry.to_dropdown_items.return_value = [
+            {
+                "id": "custom-model",
+                "name": "Custom Model",
+                "provider": "custom-provider",
+                "available": True,
+            }
+        ]
+
+        provider_without_health_check = SimpleNamespace(is_available=True)
+        router.provider_manager.providers = {
+            "custom-provider": provider_without_health_check,
+        }
+
+        models = router.get_all_available_models()
+
+        assert len(models) == 1
+        assert models[0]["available"] is True
+        assert "(offline)" not in models[0]["name"].lower()
 
     def test_conversation_history_property(self, router):
         """Test conversation_history property delegates to ProviderManager"""

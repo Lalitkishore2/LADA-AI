@@ -115,15 +115,18 @@ class RateLimiter:
         if user_id:
             return f"user:{user_id}"
         
-        # Get IP from request
+        # Get IP from request (prefer forwarded client IP when available)
         ip = "unknown"
-        if hasattr(request, 'client') and request.client:
-            ip = request.client.host
-        elif hasattr(request, 'headers'):
-            # Check X-Forwarded-For for proxied requests
-            forwarded = request.headers.get('x-forwarded-for', '')
+        headers = getattr(request, 'headers', None)
+        if headers is not None:
+            forwarded = headers.get('x-forwarded-for', '') or headers.get('X-Forwarded-For', '')
             if forwarded:
-                ip = forwarded.split(',')[0].strip()
+                candidate = forwarded.split(',')[0].strip()
+                if candidate:
+                    ip = candidate
+
+        if ip == "unknown" and hasattr(request, 'client') and request.client:
+            ip = request.client.host
         
         return f"ip:{ip}"
     
@@ -269,9 +272,10 @@ def rate_limit(
                 # Get user ID from auth token if available
                 user_id = None
                 auth_header = request.headers.get('authorization', '')
-                if auth_header.startswith('Bearer '):
+                auth_parts = auth_header.split(None, 1)
+                if len(auth_parts) == 2 and auth_parts[0].lower() == 'bearer' and auth_parts[1].strip():
                     # Hash the token for privacy
-                    token_hash = hashlib.sha256(auth_header[7:].encode()).hexdigest()[:16]
+                    token_hash = hashlib.sha256(auth_parts[1].strip().encode()).hexdigest()[:16]
                     user_id = token_hash
                 
                 endpoint = request.url.path

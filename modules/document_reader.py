@@ -255,7 +255,7 @@ class DocumentReader:
                             plumber_page = pdf.pages[page_idx]
                             extracted_tables = plumber_page.extract_tables()
                             tables = extracted_tables if extracted_tables else []
-                except:
+                except Exception as e:
                     pass
             
             extracted_pages.append(DocumentPage(

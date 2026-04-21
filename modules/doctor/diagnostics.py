@@ -654,9 +654,16 @@ class DiagnosticsRunner:
             from modules.providers.provider_manager import ProviderManager
             
             pm = ProviderManager()
-            status = pm.get_health_status()
+            pm.auto_configure()
+            status = pm.check_all_health()
             
-            healthy = sum(1 for s in status.values() if s.get("healthy", False))
+            if not status:
+                return False, "No AI providers configured", {
+                    "providers": status,
+                    "fix_id": "set-api-key",
+                }
+
+            healthy = sum(1 for s in status.values() if s.get("available", False))
             total = len(status)
             
             if healthy == 0:

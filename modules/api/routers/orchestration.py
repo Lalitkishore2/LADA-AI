@@ -205,7 +205,13 @@ def create_orchestration_router(state):
         from modules.standalone.contracts import CommandEnvelope
 
         wait_for_result = bool(body.get("wait", True))
-        timeout_ms = int(body.get("timeout_ms", body.get("timeout", 60000)))
+        raw_timeout = body.get("timeout_ms", body.get("timeout", 60000))
+        try:
+            timeout_ms = int(raw_timeout)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="timeout_ms must be an integer")
+        if timeout_ms <= 0:
+            raise HTTPException(status_code=400, detail="timeout_ms must be greater than 0")
 
         envelope_data = body.get("envelope")
         if isinstance(envelope_data, dict):

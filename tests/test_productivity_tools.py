@@ -216,16 +216,17 @@ class TestInternetSpeedTest:
     
     @patch('urllib.request.urlopen')
     def test_download_speed(self, mock_urlopen):
-        # Mock response
+        # Mock response: simulate a successful context-manager-based urlopen call
         mock_response = MagicMock()
-        mock_response.read.return_value = b'x' * 1000000  # 1MB
+        mock_response.read.return_value = b'x' * 1_000_000  # 1 MB
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response
-        
+
         result = InternetSpeedTest.test_download_speed()
-        assert result["status"] == "success"
+        assert result["status"] == "success", f"Unexpected result: {result}"
         assert "download_mbps" in result
+        assert result["download_mbps"] >= 0
         
     @patch('subprocess.run')
     def test_latency_windows(self, mock_run):

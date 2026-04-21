@@ -22,6 +22,7 @@ import os
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Dict
 from cryptography.fernet import Fernet, InvalidToken
@@ -29,10 +30,27 @@ from cryptography.fernet import Fernet, InvalidToken
 logger = logging.getLogger(__name__)
 
 
+def _resolve_vault_path(vault_path: Optional[Path] = None) -> Path:
+    """Resolve the vault path from explicit input or environment."""
+    if vault_path is not None:
+        return Path(vault_path)
+
+    configured = str(os.getenv("LADA_SECURE_VAULT_PATH", "")).strip()
+    if configured:
+        return Path(configured)
+
+    return Path("data/secure_vault.enc")
+
+
 class SecureVault:
     """Encrypted key-value store for API keys and secrets."""
     
-    def __init__(self, vault_path: Optional[Path] = None, master_key: Optional[str] = None):
+    def __init__(
+        self,
+        vault_path: Optional[Path] = None,
+        master_key: Optional[str] = None,
+        recover_on_invalid_key: bool = False,
+    ):
         """
         Initialize secure vault.
         
@@ -43,7 +61,8 @@ class SecureVault:
         Raises:
             ValueError: If master_key is not set and LADA_MASTER_KEY env var is missing
         """
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._recover_on_invalid_key = recover_on_invalid_key
         
         # Get master key from env or param
         self._master_key = master_key or os.getenv("LADA_MASTER_KEY")
@@ -59,7 +78,7 @@ class SecureVault:
             raise ValueError(f"Invalid master key format: {e}")
         
         # Vault file location
-        self._vault_path = vault_path or Path("data/secure_vault.enc")
+        self._vault_path = _resolve_vault_path(vault_path)
         self._vault_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Set restrictive permissions on parent directory (Windows: skip, Unix: 0o700)
@@ -78,6 +97,26 @@ class SecureVault:
         self._load_vault()
         
         logger.info(f"[SecureVault] Initialized with vault at {self._vault_path}")
+
+    def _quarantine_invalid_vault_file(self) -> None:
+        """Move an unreadable vault file aside so a fresh vault can be created."""
+        if not self._vault_path.exists():
+            return
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        quarantine_path = self._vault_path.with_name(
+            f"{self._vault_path.name}.invalid.{timestamp}"
+        )
+
+        try:
+            self._vault_path.replace(quarantine_path)
+            logger.warning(
+                f"[SecureVault] Moved unreadable vault to {quarantine_path} and starting fresh"
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[SecureVault] Could not quarantine unreadable vault file: {exc}"
+            )
     
     @staticmethod
     def generate_master_key() -> str:
@@ -108,6 +147,12 @@ class SecureVault:
         
         except InvalidToken:
             logger.error("[SecureVault] Failed to decrypt vault - wrong master key")
+            if self._recover_on_invalid_key:
+                self._quarantine_invalid_vault_file()
+                with self._lock:
+                    self._cache.clear()
+                logger.warning("[SecureVault] Started with an empty vault after decryption failure")
+                return
             raise ValueError("Invalid master key - cannot decrypt vault")
         except json.JSONDecodeError as e:
             logger.error(f"[SecureVault] Vault data corrupted (invalid JSON): {e}")
@@ -118,46 +163,47 @@ class SecureVault:
     
     def _save_vault(self):
         """Save encrypted vault to disk."""
-        # Decrypt all cached values for saving (acquire lock)
-        vault_data = {}
         with self._lock:
+            # Decrypt all cached values for saving.
+            vault_data = {}
             for key, encrypted_value in self._cache.items():
                 decrypted_value = self._cipher.decrypt(encrypted_value).decode('utf-8')
                 vault_data[key] = decrypted_value
-        
-        # Encrypt and write outside of lock to avoid deadlock
-        try:
-            json_data = json.dumps(vault_data, indent=2)
-            encrypted_data = self._cipher.encrypt(json_data.encode('utf-8'))
-            
-            # Write to disk atomically
-            temp_path = self._vault_path.with_suffix('.tmp')
-            with open(temp_path, 'wb') as f:
-                f.write(encrypted_data)
-            
-            # Set restrictive permissions on temp file before rename (Unix only)
-            import platform
-            if platform.system() != 'Windows':
-                import stat
-                try:
-                    os.chmod(temp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
-                except OSError:
-                    pass
-            
-            temp_path.replace(self._vault_path)
-            
-            # Set restrictive permissions on final file (Unix only)
-            if platform.system() != 'Windows':
-                try:
-                    os.chmod(self._vault_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
-                except OSError:
-                    pass
-            
-            logger.debug(f"[SecureVault] Saved {len(vault_data)} keys to vault")
-        
-        except Exception as e:
-            logger.error(f"[SecureVault] Failed to save vault: {e}")
-            raise
+
+            try:
+                json_data = json.dumps(vault_data, indent=2)
+                encrypted_data = self._cipher.encrypt(json_data.encode('utf-8'))
+
+                # Write to a unique temp file then atomically replace destination.
+                temp_path = self._vault_path.with_name(
+                    f"{self._vault_path.name}.{threading.get_ident()}.{time.time_ns()}.tmp"
+                )
+                with open(temp_path, 'wb') as f:
+                    f.write(encrypted_data)
+
+                # Set restrictive permissions on temp file before rename (Unix only).
+                import platform
+                if platform.system() != 'Windows':
+                    import stat
+                    try:
+                        os.chmod(temp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+                    except OSError:
+                        pass
+
+                temp_path.replace(self._vault_path)
+
+                # Set restrictive permissions on final file (Unix only).
+                if platform.system() != 'Windows':
+                    try:
+                        os.chmod(self._vault_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+                    except OSError:
+                        pass
+
+                logger.debug(f"[SecureVault] Saved {len(vault_data)} keys to vault")
+
+            except Exception as e:
+                logger.error(f"[SecureVault] Failed to save vault: {e}")
+                raise
     
     def set(self, key: str, value: str) -> None:
         """
@@ -280,14 +326,34 @@ def get_secure_vault() -> SecureVault:
         ValueError: If LADA_MASTER_KEY is not set
     """
     global _vault_instance
+
+    configured_key = os.getenv("LADA_MASTER_KEY")
+    configured_path = _resolve_vault_path()
     
-    if _vault_instance is not None:
+    if (
+        _vault_instance is not None
+        and _vault_instance._vault_path == configured_path
+        and (
+            configured_key is None
+            or _vault_instance._master_key == configured_key
+        )
+    ):
         return _vault_instance
     
     with _vault_lock:
-        # Double-check pattern
-        if _vault_instance is None:
-            _vault_instance = SecureVault()
+        # Double-check pattern / allow re-init when key or path changed.
+        configured_key = os.getenv("LADA_MASTER_KEY")
+        configured_path = _resolve_vault_path()
+        if (
+            _vault_instance is None
+            or _vault_instance._vault_path != configured_path
+            or (configured_key is not None and _vault_instance._master_key != configured_key)
+        ):
+            _vault_instance = SecureVault(
+                vault_path=configured_path,
+                master_key=configured_key,
+                recover_on_invalid_key=True,
+            )
         return _vault_instance
 
 

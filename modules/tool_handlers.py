@@ -212,7 +212,7 @@ def _handle_open_app(app_name: str = "") -> ToolResult:
         if exe.startswith('ms-'):
             os.startfile(exe)
         else:
-            subprocess.Popen(exe, shell=True)
+            subprocess.Popen([exe])
         return ToolResult(success=True, output=f"Opened {app_name}")
     except Exception as e:
         return ToolResult(success=False, output="", error=f"Could not open {app_name}: {e}")
@@ -309,7 +309,7 @@ def _handle_play_music(query: str = "") -> ToolResult:
             webbrowser.open(f"https://open.spotify.com/search/{urllib.parse.quote(query)}")
             return ToolResult(success=True, output=f"Searching Spotify for: {query}")
         else:
-            subprocess.Popen("spotify", shell=True)
+            subprocess.Popen(["spotify"])
             return ToolResult(success=True, output="Opening Spotify")
     except Exception as e:
         return ToolResult(success=False, output="", error=str(e))

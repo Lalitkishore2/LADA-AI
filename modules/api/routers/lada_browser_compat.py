@@ -130,7 +130,6 @@ def create_lada_browser_compat_router(state):
         text = str(body.get("text", ""))
         by = str(body.get("by", "css")).strip() or "css"
         direction = str(body.get("direction", "down")).strip().lower() or "down"
-        amount = int(body.get("amount", 500))
 
         if not action:
             raise HTTPException(status_code=400, detail="action is required")
@@ -180,6 +179,14 @@ def create_lada_browser_compat_router(state):
         if action == "scroll":
             if direction not in {"up", "down"}:
                 raise HTTPException(status_code=400, detail="direction must be 'up' or 'down'")
+
+            raw_amount = body.get("amount", 500)
+            try:
+                amount = int(raw_amount)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="amount must be an integer")
+            if amount <= 0:
+                raise HTTPException(status_code=400, detail="amount must be greater than 0")
 
             if adapter:
                 ok = bool(adapter.scroll(direction=direction, amount=amount))

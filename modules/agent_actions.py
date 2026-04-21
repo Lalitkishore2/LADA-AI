@@ -17,6 +17,7 @@ import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
+from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +31,14 @@ except ImportError:
 try:
     from modules.system_control import SystemController
     SYS_OK = True
-except:
+except Exception as e:
     SystemController = None
     SYS_OK = False
 
 try:
     from modules.google_calendar import GoogleCalendar
     CALENDAR_OK = True
-except:
+except Exception as e:
     GoogleCalendar = None
     CALENDAR_OK = False
 
@@ -312,16 +313,16 @@ class AgentActions:
                     # Windows settings URI
                     os.startfile(exe)
                 else:
-                    subprocess.Popen(exe, shell=True)
+                    subprocess.Popen([exe])
                 return True, f"Opening {app_name}."
             except Exception as e:
                 return True, f"Couldn't open {app_name}. It might not be installed."
         else:
             # Try to open directly
             try:
-                subprocess.Popen(app_name, shell=True)
+                subprocess.Popen([app_name])
                 return True, f"Opening {app_name}."
-            except:
+            except Exception as e:
                 return True, f"I couldn't find an app called '{app_name}'."
     
     def _close_app(self, app_name: Optional[str]) -> Tuple[bool, str]:
@@ -334,10 +335,10 @@ class AgentActions:
             return True, "Which app would you like me to close?"
         
         try:
-            subprocess.run(['taskkill', '/IM', f'{app_name}.exe', '/F'], 
-                          capture_output=True, shell=True)
+            subprocess.run(['taskkill', '/IM', f'{app_name}.exe', '/F'],
+                           capture_output=True, check=False)
             return True, f"Closing {app_name}."
-        except:
+        except Exception as e:
             return True, f"Couldn't close {app_name}."
     
     # ============ Email Actions ============
@@ -411,7 +412,7 @@ class AgentActions:
                 return True, f"Screenshot saved as {filename}"
             else:
                 # Use Windows Snipping Tool
-                subprocess.Popen('snippingtool', shell=True)
+                subprocess.Popen(['snippingtool'])
                 return True, "Opening Snipping Tool for screenshot."
                 
         except Exception as e:
@@ -423,25 +424,33 @@ class AgentActions:
         """Control system volume"""
         if not self.sys:
             return True, "System control not available."
+
+        def _set_and_report(target_level: int, success_text: str) -> Tuple[bool, str]:
+            result = self.sys.set_volume(target_level)
+            if isinstance(result, dict) and not result.get("success", False):
+                detail = result.get("error") or result.get("message") or "unknown error"
+                return True, f"Couldn't change volume: {detail}"
+            return True, success_text
         
         if 'mute' in full_cmd and 'unmute' not in full_cmd:
-            self.sys.set_volume(0)
-            return True, "Volume muted."
+            return _set_and_report(0, "Volume muted.")
         elif 'unmute' in full_cmd:
-            self.sys.set_volume(50)
-            return True, "Volume unmuted and set to 50%."
+            return _set_and_report(50, "Volume unmuted and set to 50%.")
         elif 'max' in full_cmd or 'full' in full_cmd:
-            self.sys.set_volume(100)
-            return True, "Volume set to maximum."
+            return _set_and_report(100, "Volume set to maximum.")
         elif level:
             try:
                 vol = int(level)
-                self.sys.set_volume(min(100, max(0, vol)))
-                return True, f"Volume set to {vol}%."
-            except:
+                effective_vol = min(100, max(0, vol))
+                return _set_and_report(effective_vol, f"Volume set to {effective_vol}%.")
+            except Exception as e:
                 pass
-        
-        return True, f"Current volume: {self.sys.get_volume()}%"
+
+        volume_info = self.sys.get_volume()
+        current = volume_info.get('volume') if isinstance(volume_info, dict) else None
+        if isinstance(current, (int, float)):
+            return True, f"Current volume: {int(current)}%."
+        return True, "I couldn't read the current volume level."
     
     def _control_media(self, cmd: str) -> Tuple[bool, str]:
         """Control media playback"""
@@ -475,8 +484,12 @@ class AgentActions:
             pyautogui.typewrite(query, interval=0.02)
             return True, f"Searching for files named '{query}'."
         else:
-            # Open Explorer search
-            subprocess.Popen(f'explorer /root,"search-ms:query={query}&"', shell=True)
+            # Open Explorer search URI without shell invocation.
+            search_uri = f"search-ms:query={quote_plus(query)}&"
+            try:
+                os.startfile(search_uri)
+            except Exception:
+                webbrowser.open(search_uri)
             return True, f"Searching for '{query}'."
     
     # ============ System Power ============
@@ -487,10 +500,10 @@ class AgentActions:
             return True, "Restart requested. For safety, please use the Start menu to restart your computer."
         elif 'sleep' in cmd:
             # Sleep the system
-            subprocess.run('rundll32.exe powrprof.dll,SetSuspendState 0,1,0', shell=True)
+            subprocess.run(['rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0'], check=False)
             return True, "Putting the computer to sleep."
         elif 'hibernate' in cmd:
-            subprocess.run('shutdown /h', shell=True)
+            subprocess.run(['shutdown', '/h'], check=False)
             return True, "Hibernating the computer."
         elif 'shutdown' in cmd or 'power off' in cmd:
             return True, "Shutdown requested. For safety, please use the Start menu to shut down your computer."

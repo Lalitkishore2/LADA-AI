@@ -536,13 +536,19 @@ class AutoFixEngine:
         try:
             from modules.providers.provider_manager import ProviderManager
             
-            # Reset provider manager
+            # Reinitialize provider manager state from current environment.
             pm = ProviderManager()
-            pm.reset_connections()
+            pm.auto_configure()
             
-            # Check health after reset
-            status = pm.get_health_status()
-            healthy = sum(1 for s in status.values() if s.get("healthy", False))
+            # Check health after reconfiguration.
+            status = pm.check_all_health()
+            if not status:
+                return False, "No providers configured. Set API keys and retry.", {
+                    "providers": status,
+                    "fix_id": "set-api-key",
+                }
+
+            healthy = sum(1 for s in status.values() if s.get("available", False))
             
             return True, f"Providers reset: {healthy} healthy", {"providers": status}
         except Exception as e:

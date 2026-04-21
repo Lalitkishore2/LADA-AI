@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from enum import Enum
 
+from modules.openclaw_skill_adapter import parse_skill_manifest
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_LADA_RUNTIME_VERSION = "8.0.0"
@@ -60,35 +62,87 @@ class PluginWatcher(_FSHandler):
         self._registry = registry
         self._debounce: Dict[str, float] = {}
 
+    def _resolve_plugin_dir_name(self, src_path: str) -> Optional[str]:
+        """Resolve any watched path to its top-level plugin directory name."""
+        try:
+            rel_path = Path(src_path).resolve().relative_to(self._registry.plugins_dir.resolve())
+        except Exception:
+            return None
+
+        if not rel_path.parts:
+            return None
+
+        plugin_dir_name = rel_path.parts[0]
+        if plugin_dir_name.startswith(('_', '.')):
+            return None
+
+        return plugin_dir_name
+
+    def _reload_plugin(self, plugin_dir_name: str) -> None:
+        plugin_name = self._registry.resolve_plugin_name(plugin_dir_name)
+        if plugin_name is None:
+            try:
+                self._registry.discover_plugins()
+            except Exception:
+                pass
+            plugin_name = self._registry.resolve_plugin_name(plugin_dir_name)
+            if plugin_name is None:
+                logger.debug(f"[PluginSystem] No plugin found for directory: {plugin_dir_name}")
+                return
+
+        logger.info(f"[PluginSystem] Hot-reload triggered: {plugin_name}")
+        try:
+            self._registry.deactivate_plugin(plugin_name)
+        except Exception:
+            pass
+        try:
+            self._registry.unload_plugin(plugin_name)
+        except Exception:
+            pass
+        try:
+            self._registry.load_plugin(plugin_name)
+            self._registry.activate_plugin(plugin_name)
+            logger.info(f"[PluginSystem] Hot-reloaded: {plugin_name}")
+        except Exception as e:
+            logger.warning(f"[PluginSystem] Hot-reload failed for {plugin_name}: {e}")
+
     def on_modified(self, event) -> None:
         if event.is_directory:
             return
-        plugin_dir_name = Path(event.src_path).parent.name
+
+        file_name = Path(event.src_path).name.lower()
+        is_skill_manifest = file_name == 'skill.md' or file_name.endswith('.skill.md')
+        is_plugin_manifest = file_name in {'plugin.yaml', 'plugin.yml', 'plugin.json'}
+        is_plugin_code = file_name.endswith('.py')
+        if not (is_skill_manifest or is_plugin_manifest or is_plugin_code):
+            return
+
+        plugin_dir_name = self._resolve_plugin_dir_name(event.src_path)
+        if not plugin_dir_name:
+            return
+
         now = time.time()
         # Debounce: ignore rapid successive events within 500ms
         if now - self._debounce.get(plugin_dir_name, 0) < 0.5:
             return
         self._debounce[plugin_dir_name] = now
-        logger.info(f"[PluginSystem] Hot-reload triggered: {plugin_dir_name}")
-        try:
-            self._registry.deactivate_plugin(plugin_dir_name)
-        except Exception:
-            pass
-        try:
-            self._registry.unload_plugin(plugin_dir_name)
-        except Exception:
-            pass
-        try:
-            self._registry.load_plugin(plugin_dir_name)
-            self._registry.activate_plugin(plugin_dir_name)
-            logger.info(f"[PluginSystem] Hot-reloaded: {plugin_dir_name}")
-        except Exception as e:
-            logger.warning(f"[PluginSystem] Hot-reload failed for {plugin_dir_name}: {e}")
+
+        self._reload_plugin(plugin_dir_name)
 
     def on_created(self, event) -> None:
         if not event.is_directory:
             return
-        new_dir = Path(event.src_path).name
+
+        try:
+            rel_path = Path(event.src_path).resolve().relative_to(self._registry.plugins_dir.resolve())
+        except Exception:
+            return
+
+        # Only top-level plugin directory creation should trigger discovery.
+        if len(rel_path.parts) != 1:
+            return
+
+        new_dir = rel_path.parts[0]
         if new_dir.startswith(('_', '.')):
             return
         logger.info(f"[PluginSystem] New plugin directory detected: {new_dir}")
@@ -101,10 +155,15 @@ class PluginWatcher(_FSHandler):
     def on_deleted(self, event) -> None:
         if not event.is_directory:
             return
-        plugin_dir_name = Path(event.src_path).name
+
+        plugin_dir_name = self._resolve_plugin_dir_name(event.src_path)
+        if not plugin_dir_name:
+            return
+
+        plugin_name = self._registry.resolve_plugin_name(plugin_dir_name) or plugin_dir_name
         logger.info(f"[PluginSystem] Plugin directory removed: {plugin_dir_name}")
         try:
-            self._registry.unload_plugin(plugin_dir_name)
+            self._registry.unload_plugin(plugin_name)
         except Exception:
             pass
 
@@ -285,92 +344,28 @@ class PluginRegistry:
 
     def _load_skill_manifest(self, skill_path: Path, plugin_dir: Path) -> Optional[PluginManifest]:
         """Parse SKILL.md and adapt it to PluginManifest."""
-        try:
-            content = skill_path.read_text(encoding='utf-8')
-
-            fm_match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
-            if not fm_match:
-                logger.warning(f"[PluginSystem] SKILL.md frontmatter missing: {skill_path}")
-                return None
-
-            fm_text = fm_match.group(1)
-            frontmatter: Dict[str, Any]
-            if YAML_OK:
-                frontmatter = yaml.safe_load(fm_text) or {}
-            else:
-                # Fallback parser when PyYAML is unavailable.
-                frontmatter = {}
-                for line in fm_text.splitlines():
-                    line = line.strip()
-                    if not line or ':' not in line:
-                        continue
-                    key, value = line.split(':', 1)
-                    key = key.strip()
-                    value = value.strip()
-                    if value.startswith('[') and value.endswith(']'):
-                        try:
-                            frontmatter[key] = json.loads(value.replace("'", '"'))
-                        except Exception:
-                            frontmatter[key] = [value]
-                    else:
-                        frontmatter[key] = value
-
-            body = content[fm_match.end():]
-
-            desc_match = re.search(r'^#[^\n]+\n+([^\n#]+)', body, re.MULTILINE)
-            description = desc_match.group(1).strip() if desc_match else ""
-
-            actions = []
-            action_pattern = r'^###\s+([A-Za-z_][\w]*)\(([^)]*)\)\s*\n([^\n#]*)'
-            for match in re.finditer(action_pattern, body, re.MULTILINE):
-                action_name = match.group(1).strip()
-                action_desc = match.group(3).strip()
-                actions.append((action_name, action_desc))
-
-            triggers_raw = frontmatter.get('triggers', [])
-            if isinstance(triggers_raw, str):
-                triggers = [triggers_raw]
-            elif isinstance(triggers_raw, list):
-                triggers = [str(t) for t in triggers_raw]
-            else:
-                triggers = []
-
-            capabilities = []
-            for action_name, action_desc in actions:
-                action_keywords = list(triggers) if triggers else [action_name.replace('_', ' ')]
-                capabilities.append({
-                    'intent': action_name,
-                    'keywords': action_keywords,
-                    'handler': action_name,
-                    'description': action_desc,
-                })
-
-            # Choose the most likely python entry point for SKILL handlers.
-            entry_point = 'skill.py'
-            if not (plugin_dir / entry_point).exists():
-                if (plugin_dir / 'plugin.py').exists():
-                    entry_point = 'plugin.py'
-                elif (plugin_dir / 'main.py').exists():
-                    entry_point = 'main.py'
-
-            return PluginManifest(
-                name=str(frontmatter.get('name', plugin_dir.name)),
-                version=str(frontmatter.get('version', '1.0.0')),
-                description=description or str(frontmatter.get('description', '')),
-                author=str(frontmatter.get('author', 'unknown')),
-                entry_point=entry_point,
-                class_name=str(frontmatter.get('class_name', '')),
-                capabilities=capabilities,
-                dependencies=list(frontmatter.get('dependencies', [])) if isinstance(frontmatter.get('dependencies', []), list) else [],
-                permissions=list(frontmatter.get('permissions', [])) if isinstance(frontmatter.get('permissions', []), list) else [],
-                plugin_api_version=str(frontmatter.get('plugin_api_version', frontmatter.get('api_version', DEFAULT_PLUGIN_API_VERSION))),
-                min_lada_version=str(frontmatter.get('min_lada_version', '')),
-                max_lada_version=str(frontmatter.get('max_lada_version', '')),
-                enabled=bool(frontmatter.get('enabled', True)),
-            )
-        except Exception as e:
-            logger.error(f"[PluginSystem] Failed to parse SKILL manifest {skill_path}: {e}")
+        yaml_loader = yaml.safe_load if YAML_OK else None
+        manifest_data = parse_skill_manifest(
+            skill_path=skill_path,
+            plugin_dir=plugin_dir,
+            yaml_loader=yaml_loader,
+            default_plugin_api_version=DEFAULT_PLUGIN_API_VERSION,
+        )
+        if manifest_data is None:
             return None
+
+        return PluginManifest.from_dict(manifest_data)
+
+    def resolve_plugin_name(self, directory_name: str) -> Optional[str]:
+        """Resolve plugin directory name to the canonical registry key."""
+        if directory_name in self.plugins:
+            return directory_name
+
+        for plugin_name, plugin in self.plugins.items():
+            if Path(plugin.directory).name == directory_name:
+                return plugin_name
+
+        return None
 
     def load_plugin(self, name: str) -> bool:
         """

@@ -46,6 +46,62 @@ _connections_per_ip: dict = defaultdict(int)
 _protocol_validator: Optional[Any] = None
 
 
+def _openclaw_ws_compat_enabled() -> bool:
+    """Return whether OpenClaw WS envelope normalization is enabled."""
+    return str(os.getenv("LADA_OPENCLAW_WS_COMPAT_ENABLED", "true")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _normalize_openclaw_message(msg_type: str, msg_data: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+    """Map OpenClaw-style WS envelopes to internal LADA message types/data."""
+    mt = str(msg_type or "").strip().lower()
+    data = msg_data if isinstance(msg_data, dict) else {}
+
+    if not _openclaw_ws_compat_enabled():
+        return mt, data
+
+    direct_map = {
+        "openclaw.chat": "chat",
+        "openclaw.agent": "agent",
+        "openclaw.system": "system",
+        "openclaw.orchestrator": "orchestrator",
+        "openclaw.plan": "plan",
+        "openclaw.workflow": "workflow",
+        "openclaw.task": "task",
+        "openclaw.approval": "approval",
+    }
+    if mt in direct_map:
+        return direct_map[mt], data
+
+    if mt != "openclaw.event":
+        return mt, data
+
+    event_type = str(data.get("event_type", "")).strip().lower()
+    payload = data.get("payload", {}) if isinstance(data.get("payload", {}), dict) else {}
+
+    event_map = {
+        "chat.message": "chat",
+        "chat.send": "chat",
+        "agent.rpc": "agent",
+        "system.command": "system",
+        "orchestrator.dispatch": "orchestrator",
+        "plan.create": "plan",
+        "workflow.execute": "workflow",
+        "task.control": "task",
+        "approval.control": "approval",
+    }
+
+    internal_type = event_map.get(event_type)
+    if not internal_type:
+        return mt, data
+
+    return internal_type, payload
+
+
 def _extract_ws_auth_token(websocket: WebSocket) -> str:
     """Extract session token from Authorization header or query string."""
     auth_header = (websocket.headers.get("authorization") or "").strip()
@@ -631,6 +687,9 @@ def create_ws_router(state):
             
             token = _extract_ws_auth_token(websocket)
             if not state.validate_session_token(token):
+                if reserved:
+                    _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+                    reserved = False
                 await websocket.close(code=4001, reason="Authentication required")
                 return
 
@@ -662,6 +721,38 @@ def create_ws_router(state):
         # Protocol v1.0 handshake (optional, backward compatible)
         protocol_session = None
         validator = _get_protocol_validator()
+        session_cleaned = False
+
+        def _cleanup_ws_session():
+            nonlocal session_cleaned
+            if session_cleaned:
+                return
+
+            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+
+            session_data = state.ws_sessions.get(session_id, {})
+            protocol_state = session_data.get('protocol_session')
+            if protocol_state and validator:
+                try:
+                    validator.remove_session(protocol_state.session_id)
+                except Exception:
+                    pass
+
+            state.ws_connections.pop(session_id, None)
+            state.ws_sessions.pop(session_id, None)
+
+            if hasattr(state, 'ws_orchestrator_subscribers'):
+                state.ws_orchestrator_subscribers.discard(session_id)
+                if hasattr(state, 'ws_orchestrator_subscription_filters'):
+                    state.ws_orchestrator_subscription_filters.pop(session_id, None)
+                _maybe_cleanup_orchestrator_event_bridge(state)
+
+            if hasattr(state, 'ws_approval_subscribers'):
+                state.ws_approval_subscribers.discard(session_id)
+                if hasattr(state, 'ws_approval_subscription_filters'):
+                    state.ws_approval_subscription_filters.pop(session_id, None)
+
+            session_cleaned = True
         
         if validator and WS_PROTOCOL_ENABLED:
             try:
@@ -679,9 +770,16 @@ def create_ws_router(state):
                     response, protocol_session = validator.validate_connect(handshake_data)
                     
                     if not response.success:
-                        await websocket.send_json(response.to_dict())
-                        await websocket.close(code=4003, reason=response.error.message if response.error else "Handshake failed")
+                        try:
+                            await websocket.send_json(response.to_dict())
+                        except Exception:
+                            pass
+                        try:
+                            await websocket.close(code=4003, reason=response.error.message if response.error else "Handshake failed")
+                        except Exception:
+                            pass
                         logger.warning(f"[WS] Protocol handshake failed for {session_id}: {response.error}")
+                        _cleanup_ws_session()
                         return
                     
                     # Store protocol session state
@@ -737,11 +835,18 @@ def create_ws_router(state):
                              }},
                 })
             except json.JSONDecodeError:
-                await websocket.send_json({
-                    "type": "error",
-                    "data": {"message": "Invalid JSON in handshake", "request_id": connect_request_id},
-                })
-                await websocket.close(code=4003, reason="Invalid handshake")
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "data": {"message": "Invalid JSON in handshake", "request_id": connect_request_id},
+                    })
+                except Exception:
+                    pass
+                try:
+                    await websocket.close(code=4003, reason="Invalid handshake")
+                except Exception:
+                    pass
+                _cleanup_ws_session()
                 return
         else:
             # Protocol disabled - send legacy connected message immediately
@@ -837,9 +942,12 @@ def create_ws_router(state):
                     )
                     continue
 
-                msg_type = msg.get("type", "")
+                raw_msg_type = msg.get("type", "")
+                raw_msg_data = msg.get("data", {})
+                if not isinstance(raw_msg_data, dict):
+                    raw_msg_data = {}
+                msg_type, msg_data = _normalize_openclaw_message(raw_msg_type, raw_msg_data)
                 msg_id = msg.get("id", "")
-                msg_data = msg.get("data", {})
                 if not isinstance(msg_data, dict):
                     msg_data = {}
                 msg_request_id = normalize_request_id(
@@ -984,44 +1092,34 @@ def create_ws_router(state):
         except Exception as e:
             logger.error(f"[WS] Error for {session_id}: {e}")
         finally:
-            # Cleanup connection tracking
-            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
-            
-            # Cleanup protocol session if present
-            session_data = state.ws_sessions.get(session_id, {})
-            protocol_session = session_data.get('protocol_session')
-            if protocol_session and validator:
-                validator.remove_session(protocol_session.session_id)
-            
-            state.ws_connections.pop(session_id, None)
-            state.ws_sessions.pop(session_id, None)
-            if hasattr(state, 'ws_orchestrator_subscribers'):
-                state.ws_orchestrator_subscribers.discard(session_id)
-                if hasattr(state, 'ws_orchestrator_subscription_filters'):
-                    state.ws_orchestrator_subscription_filters.pop(session_id, None)
-                _maybe_cleanup_orchestrator_event_bridge(state)
-            if hasattr(state, 'ws_approval_subscribers'):
-                state.ws_approval_subscribers.discard(session_id)
-                if hasattr(state, 'ws_approval_subscription_filters'):
-                    state.ws_approval_subscription_filters.pop(session_id, None)
+            _cleanup_ws_session()
 
     @r.websocket("/agent")
     async def websocket_agent_rpc(websocket: WebSocket):
         """Dedicated WS channel for high-frequency browser automation RPC."""
         client_ip = websocket.client.host if websocket.client else "unknown"
 
-        if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
-            await websocket.close(code=4029, reason="Too many connections from this IP")
-            return
+        reserved = False
+        try:
+            if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
+                await websocket.close(code=4029, reason="Too many connections from this IP")
+                return
 
-        _connections_per_ip[client_ip] += 1
-        token = _extract_ws_auth_token(websocket)
-        if not state.validate_session_token(token):
-            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
-            await websocket.close(code=4001, reason="Authentication required")
-            return
+            _connections_per_ip[client_ip] += 1
+            reserved = True
+            token = _extract_ws_auth_token(websocket)
+            if not state.validate_session_token(token):
+                _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+                reserved = False
+                await websocket.close(code=4001, reason="Authentication required")
+                return
 
-        await websocket.accept()
+            await websocket.accept()
+        except Exception:
+            if reserved:
+                _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+            raise
+
         session_id = f"agent_{uuid.uuid4().hex[:8]}"
         connect_request_id = normalize_request_id(websocket.headers.get("x-request-id"), prefix="ws-agent")
         try:
@@ -1083,39 +1181,89 @@ def create_ws_router(state):
         Supports JSON-RPC 2.0 style communication.
         """
         client_ip = websocket.client.host if websocket.client else "unknown"
-        
-        # Check connection limit
-        if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
-            await websocket.close(code=1013, reason="Too many connections")
-            return
-        
-        await websocket.accept()
-        _connections_per_ip[client_ip] += 1
-        
+
+        reserved = False
+        acp_server = None
+        session_created = False
+        session_cleaned = False
         acp_session_id = f"acp_{uuid.uuid4().hex[:8]}"
+
+        def _cleanup_acp_session():
+            nonlocal reserved, session_cleaned
+            if session_cleaned:
+                return
+
+            if reserved:
+                _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+                reserved = False
+
+            if acp_server and session_created:
+                try:
+                    acp_server.close_session(acp_session_id)
+                except Exception:
+                    pass
+
+            session_cleaned = True
+
+        try:
+            # Atomic reservation to preserve connection-limit guarantees.
+            if _connections_per_ip[client_ip] >= WS_MAX_CONNECTIONS_PER_IP:
+                await websocket.close(code=1013, reason="Too many connections")
+                return
+
+            _connections_per_ip[client_ip] += 1
+            reserved = True
+            await websocket.accept()
+        except Exception:
+            _cleanup_acp_session()
+            raise
+
         logger.info(f"[ACP] Client connected: {acp_session_id} from {client_ip}")
-        
+
         # Lazy import ACP bridge
         try:
             from modules.acp_bridge import get_acp_server
             acp_server = get_acp_server()
-        except ImportError as e:
+        except Exception as e:
             logger.error(f"[ACP] Bridge not available: {e}")
-            await websocket.send_json({
-                "jsonrpc": "2.0",
-                "error": {"code": -32603, "message": "ACP bridge not available"},
-                "id": None,
-            })
-            await websocket.close(code=1011)
-            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
+            try:
+                await websocket.send_json({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "ACP bridge not available"},
+                    "id": None,
+                })
+            except Exception:
+                pass
+            try:
+                await websocket.close(code=1011)
+            except Exception:
+                pass
+            _cleanup_acp_session()
             return
-        
-        # Create ACP session
-        acp_session = acp_server.create_session(
-            session_id=acp_session_id,
-            metadata={"ip": client_ip, "transport": "websocket"},
-        )
-        
+
+        try:
+            acp_server.create_session(
+                session_id=acp_session_id,
+                metadata={"ip": client_ip, "transport": "websocket"},
+            )
+            session_created = True
+        except Exception as e:
+            logger.error(f"[ACP] Session setup failed for {acp_session_id}: {e}")
+            try:
+                await websocket.send_json({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "ACP session setup failed"},
+                    "id": None,
+                })
+            except Exception:
+                pass
+            try:
+                await websocket.close(code=1011)
+            except Exception:
+                pass
+            _cleanup_acp_session()
+            return
+
         try:
             while True:
                 # Receive message
@@ -1165,8 +1313,7 @@ def create_ws_router(state):
         except Exception as e:
             logger.error(f"[ACP] Error for {acp_session_id}: {e}")
         finally:
-            _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
-            acp_server.close_session(acp_session_id)
+            _cleanup_acp_session()
 
     return r
 

@@ -142,7 +142,8 @@ class ShutdownManager:
         """
         with self._lock:
             self._cleanup_callbacks.append(callback)
-            logger.debug(f"[ShutdownManager] Registered cleanup: {description or callback.__name__}")
+            callback_name = description or getattr(callback, "__name__", callback.__class__.__name__)
+            logger.debug(f"[ShutdownManager] Registered cleanup: {callback_name}")
     
     def unregister_thread(self, name: str) -> None:
         """

@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import subprocess
 import threading
 import time
@@ -410,7 +411,7 @@ def _evaluate_condition(condition: str, results: Dict[str, StepResult]) -> bool:
 # ---------------------------------------------------------------------------
 
 def _handle_exec(step: PipelineStep, stdin_data: Optional[str], _results: Dict[str, StepResult]) -> StepResult:
-    """Execute a shell command via subprocess."""
+    """Execute a command via subprocess with shell disabled by default."""
     sr = StepResult(step_id=step.id, status=StepStatus.RUNNING, started_at=datetime.now(timezone.utc).isoformat())
     t0 = time.monotonic()
     try:
@@ -420,11 +421,22 @@ def _handle_exec(step: PipelineStep, stdin_data: Optional[str], _results: Dict[s
         timeout_s = step.timeout_ms / 1000.0
 
         command = _interpolate(step.command, _results) if step.command else ""
+        allow_shell = bool(step.metadata.get("shell")) if isinstance(step.metadata, dict) else False
+        if not command.strip():
+            raise ValueError(f"Step '{step.id}' has an empty command")
+
+        if allow_shell:
+            run_target: Union[str, List[str]] = command
+        else:
+            run_target = shlex.split(command, posix=(os.name != 'nt'))
+            if not run_target:
+                raise ValueError(f"Step '{step.id}' resolved to an empty command")
+
         input_data = stdin_data.encode("utf-8") if stdin_data else None
 
         proc = subprocess.run(
-            command,
-            shell=True,
+            run_target,
+            shell=allow_shell,
             input=input_data,
             capture_output=True,
             timeout=timeout_s,
