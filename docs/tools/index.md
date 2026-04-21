@@ -59,6 +59,7 @@ These tools ship with LADA and are available without installing any plugins:
 | `code_execution`                           | Run sandboxed remote Python analysis                                  | [Code Execution](/tools/code-execution)     |
 | `browser`                                  | Control a Chromium browser (navigate, click, screenshot)              | [Browser](/tools/browser)                   |
 | `web_search` / `x_search` / `web_fetch`    | Search the web, search X posts, fetch page content                    | [Web](/tools/web)                           |
+| `focus_modes`                              | Tailor search sources and AI response formatting based on context     | [Focus Modes](/tools/focus-modes)           |
 | `read` / `write` / `edit`                  | File I/O in the workspace                                             |                                             |
 | `apply_patch`                              | Multi-hunk file patches                                               | [Apply Patch](/tools/apply-patch)           |
 | `message`                                  | Send messages across all channels                                     | [Agent Send](/tools/agent-send)             |
