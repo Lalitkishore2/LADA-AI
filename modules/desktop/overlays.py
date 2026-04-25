@@ -449,7 +449,8 @@ class CometOverlay(QFrame):
     }
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        flags = Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+        super().__init__(parent, flags)
         self.setStyleSheet("background: rgba(10, 10, 10, 230);")
         self._steps = []  # List of (phase, detail) tuples for the log
         self._current_phase = 'see'

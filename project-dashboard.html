@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Dashboard - Desktop Parity WebUI</title>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* CSS Variables for Light/Dark Mode & WCAG AA Contrast */
+        :root[data-theme="dark"] {
+            --bg-base: #0f172a;
+            --bg-surface: #1e293b;
+            --bg-hover: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --border: #334155;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+            --skeleton-bg: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+        }
+
+        :root[data-theme="light"] {
+            --bg-base: #f8fafc;
+            --bg-surface: #ffffff;
+            --bg-hover: #e2e8f0;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --border: #cbd5e1;
+            --danger: #dc2626;
+            --success: #16a34a;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --skeleton-bg: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+        }
+
+        /* Native-feel transitions */
+        :root {
+            --ease-physical: cubic-bezier(0.16, 1, 0.3, 1);
+            --transition-speed: 0.3s;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            transition: background-color var(--transition-speed) var(--ease-physical), color var(--transition-speed) var(--ease-physical);
+        }
+
+        /* Layout */
+        aside {
+            width: 250px;
+            background-color: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            resize: horizontal;
+            overflow: hidden;
+            min-width: 200px;
+            max-width: 400px;
+        }
+
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            aside { 
+                width: 100%; 
+                height: 60px; 
+                flex-direction: row; 
+                border-right: none; 
+                border-bottom: 1px solid var(--border);
+                resize: none;
+                max-width: 100%;
+            }
+            aside .nav-label { display: none; }
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+            height: 60px;
+        }
+
+        .nav-items {
+            flex: 1;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow-y: auto;
+        }
+
+        @media (max-width: 768px) {
+            .nav-items { flex-direction: row; padding: 0 16px; align-items: center; }
+            header { display: none; }
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: background-color 0.2s, color 0.2s;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            background-color: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background-color: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            height: 60px;
+        }
+
+        .toolbar-group {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        button {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s var(--ease-physical);
+            min-height: 44px; /* Touch target size */
+            min-width: 44px;
+            justify-content: center;
+        }
+
+        button:hover {
+            background-color: var(--bg-hover);
+        }
+
+        button.primary {
+            background-color: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        button.primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        /* Virtual Scrolling Table */
+        .table-container {
+            flex: 1;
+            overflow: auto;
+            position: relative;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            position: relative;
+        }
+
+        th {
+            background-color: var(--bg-surface);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            font-weight: 600;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+
+        .resizer {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 5px;
+            cursor: col-resize;
+            user-select: none;
+            height: 100%;
+        }
+
+        .resizer:hover {
+            background-color: var(--accent);
+        }
+
+        tr {
+            transition: background-color 0.15s;
+        }
+
+        tr:hover {
+            background-color: var(--bg-hover);
+        }
+
+        tr.selected {
+            background-color: rgba(59, 130, 246, 0.1);
+        }
+
+        /* Draggable Rows */
+        tr[draggable="true"] {
+            cursor: grab;
+        }
+        tr[draggable="true"]:active {
+            cursor: grabbing;
+        }
+        tr.drag-over {
+            border-top: 2px solid var(--accent);
+        }
+
+        /* Inline Editing */
+        td[contenteditable="true"] {
+            outline: none;
+            transition: background-color 0.2s;
+        }
+        td[contenteditable="true"]:focus {
+            background-color: var(--bg-surface);
+            box-shadow: inset 0 0 0 2px var(--accent);
+            border-radius: 4px;
+        }
+
+        /* Skeleton Loader */
+        .skeleton {
+            background: var(--skeleton-bg);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite linear;
+            border-radius: 4px;
+            color: transparent !important;
+            min-height: 20px;
+            display: inline-block;
+            width: 100%;
+        }
+
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Context Menu */
+        .context-menu {
+            position: absolute;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            box-shadow: var(--shadow);
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+            padding: 8px 0;
+            opacity: 0;
+            transform: scale(0.95);
+            transition: opacity 0.1s, transform 0.1s var(--ease-physical);
+        }
+
+        .context-menu.active {
+            display: flex;
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .context-menu-item {
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            color: var(--text-primary);
+        }
+
+        .context-menu-item:hover {
+            background-color: var(--bg-hover);
+        }
+        
+        .context-menu-shortcut {
+            margin-left: auto;
+            color: var(--text-secondary);
+            font-size: 0.8em;
+        }
+
+        /* Command Palette */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 10vh;
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .command-palette {
+            background-color: var(--bg-surface);
+            width: 100%;
+            max-width: 600px;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            transform: translateY(-20px);
+            transition: transform 0.3s var(--ease-physical);
+        }
+
+        .modal-overlay.active .command-palette {
+            transform: translateY(0);
+        }
+
+        .command-input {
+            width: 100%;
+            padding: 16px 20px;
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-primary);
+            font-size: 1.1em;
+            outline: none;
+        }
+
+        .command-list {
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+
+        .command-item {
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+        }
+
+        .command-item.selected, .command-item:hover {
+            background-color: var(--bg-hover);
+        }
+
+        /* Toasts */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 3000;
+        }
+
+        .toast {
+            background-color: var(--bg-surface);
+            color: var(--text-primary);
+            padding: 16px 20px;
+            border-radius: 6px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 300px;
+            justify-content: space-between;
+            animation: slideIn 0.3s var(--ease-physical);
+        }
+
+        .toast.closing {
+            animation: slideOut 0.3s var(--ease-physical) forwards;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            gap: 16px;
+            text-align: center;
+        }
+
+        .empty-state i {
+            width: 64px;
+            height: 64px;
+            opacity: 0.5;
+        }
+
+        /* Status indicators */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 99px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        .status-online { background: rgba(34, 197, 94, 0.1); color: var(--success); }
+        .status-offline { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
+        
+        .draft-indicator {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* Bulk Action Toolbar */
+        .bulk-toolbar {
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            transition: transform 0.4s var(--ease-physical);
+            z-index: 20;
+        }
+
+        .bulk-toolbar.visible {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* Checkbox styling */
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .virtual-scroll-spacer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 1px;
+            opacity: 0;
+        }
+
+        .virtual-scroll-content {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Offline Banner -->
+    <div id="offlineBanner" style="display: none; position: fixed; top: 0; left: 0; right: 0; background: var(--danger); color: white; text-align: center; padding: 4px; z-index: 9999; font-size: 0.9em;">
+        You are currently offline. Changes will be synced when connection is restored.
+    </div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+        <header>
+            <div style="display: flex; align-items: center; gap: 8px; font-weight: bold; font-size: 1.2em;">
+                <i data-lucide="boxes"></i> LadaOS
+            </div>
+            <button id="themeToggle" style="border:none; padding:4px; min-width:auto; min-height:auto;" aria-label="Toggle Theme">
+                <i data-lucide="moon" id="themeIcon"></i>
+            </button>
+        </header>
+        <nav class="nav-items">
+            <a href="#projects" class="nav-item active">
+                <i data-lucide="folder"></i> <span class="nav-label">Projects</span>
+            </a>
+            <a href="#team" class="nav-item">
+                <i data-lucide="users"></i> <span class="nav-label">Team</span>
+            </a>
+            <a href="#reports" class="nav-item">
+                <i data-lucide="bar-chart-2"></i> <span class="nav-label">Reports</span>
+            </a>
+            <a href="#settings" class="nav-item">
+                <i data-lucide="settings"></i> <span class="nav-label">Settings</span>
+            </a>
+        </nav>
+        <div style="padding: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px;">
+            <div class="status-badge status-online" id="connectionStatus">
+                <div style="width:8px; height:8px; border-radius:50%; background:currentColor"></div> Online
+            </div>
+            <div class="draft-indicator" id="draftStatus" style="opacity: 0;">
+                <i data-lucide="check-circle-2" style="width: 14px; height: 14px;"></i> Saved to draft
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main>
+        <div class="toolbar">
+            <div class="toolbar-group">
+                <h1 id="viewTitle" style="font-size: 1.5em; font-weight: 600;">Projects</h1>
+            </div>
+            <div class="toolbar-group">
+                <button onclick="app.triggerCommandPalette()" aria-label="Search" title="Search (Ctrl+K)">
+                    <i data-lucide="search"></i>
+                </button>
+                <button onclick="app.exportData()" aria-label="Export Data" title="Export CSV">
+                    <i data-lucide="download"></i> Export
+                </button>
+                <button onclick="app.openFile()" aria-label="Import File" title="Import via File System API">
+                    <i data-lucide="upload"></i> Import
+                </button>
+                <button class="primary" onclick="app.addItem()" aria-label="Add Item" title="Add New (Ctrl+N)">
+                    <i data-lucide="plus"></i> New Project
+                </button>
+            </div>
+        </div>
+
+        <div class="table-container" id="tableContainer">
+            <!-- Virtual scroll spacer sets the total height -->
+            <div class="virtual-scroll-spacer" id="virtualSpacer"></div>
+            <!-- Content wrapper positioned via transform -->
+            <div class="virtual-scroll-content" id="virtualContent">
+                <table id="dataTable">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px; text-align: center;">
+                                <input type="checkbox" id="selectAll" aria-label="Select All">
+                            </th>
+                            <th style="width: 300px;">Project Name <div class="resizer" data-col="1"></div></th>
+                            <th style="width: 150px;">Status <div class="resizer" data-col="2"></div></th>
+                            <th style="width: 200px;">Last Modified <div class="resizer" data-col="3"></div></th>
+                            <th>Owner</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody">
+                        <!-- Rows rendered by JS -->
+                    </tbody>
+                </table>
+                <div id="emptyState" class="empty-state" style="display: none;">
+                    <i data-lucide="folder-open"></i>
+                    <h2>No projects found</h2>
+                    <p>Get started by creating a new project or importing data.</p>
+                    <button class="primary" onclick="app.addItem()"><i data-lucide="plus"></i> Create Project</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bulk Action Toolbar -->
+        <div class="bulk-toolbar" id="bulkToolbar">
+            <span id="bulkCount">2 items selected</span>
+            <button onclick="app.bulkDelete()" style="color: var(--danger); border-color: var(--danger);">
+                <i data-lucide="trash-2"></i> Delete Selected
+            </button>
+            <button onclick="app.clearSelection()">Cancel</button>
+        </div>
+    </main>
+
+    <!-- Context Menu -->
+    <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" onclick="app.ctxAction('edit')">
+            <i data-lucide="edit-2"></i> Edit Inline <span class="context-menu-shortcut">Double Click</span>
+        </div>
+        <div class="context-menu-item" onclick="app.ctxAction('copy')">
+            <i data-lucide="copy"></i> Copy Value <span class="context-menu-shortcut">Ctrl+C</span>
+        </div>
+        <div style="height: 1px; background: var(--border); margin: 4px 0;"></div>
+        <div class="context-menu-item" onclick="app.ctxAction('delete')" style="color: var(--danger);">
+            <i data-lucide="trash-2"></i> Delete <span class="context-menu-shortcut">Del</span>
+        </div>
+    </div>
+
+    <!-- Command Palette Modal -->
+    <div class="modal-overlay" id="commandPaletteOverlay" role="dialog" aria-modal="true">
+        <div class="command-palette">
+            <input type="text" class="command-input" id="commandInput" placeholder="Search actions, projects... (e.g. 'new', 'dark')" autocomplete="off">
+            <div class="command-list" id="commandList">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // Initialize Icons
+        lucide.createIcons();
+
+        /**
+         * State Management & Core Application Logic
+         * No localStorage used per requirements. In-memory only.
+         */
+        const app = {
+            state: {
+                theme: 'dark',
+                view: 'projects', // from URL hash
+                data: [], // 1000 items for virtual scrolling
+                selectedIds: new Set(),
+                lastSelectedId: null,
+                contextMenuTargetId: null,
+                history: [], // Undo stack
+                redoStack: [],
+                draftTimeout: null,
+                isOffline: !navigator.onLine
+            },
+
+            // Constants
+            ROW_HEIGHT: 49,
+            VISIBLE_ROWS: 30,
+
+            init() {
+                this.generateMockData(1000);
+                this.bindEvents();
+                this.handleRoute();
+                this.renderTable();
+                this.setupServiceWorker();
+                this.setupConnectionListeners();
+                
+                // Initialize theme
+                const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+                this.setTheme(prefersLight ? 'light' : 'dark');
+            },
+
+            generateMockData(count) {
+                const statuses = ['Active', 'In Progress', 'Completed', 'On Hold'];
+                for (let i = 1; i <= count; i++) {
+                    this.state.data.push({
+                        id: `PROJ-${i.toString().padStart(4, '0')}`,
+                        name: `Project Alpha ${i}`,
+                        status: statuses[Math.floor(Math.random() * statuses.length)],
+                        modified: new Date(Date.now() - Math.random() * 10000000000).toISOString().split('T')[0],
+                        owner: `User ${Math.floor(Math.random() * 100)}`
+                    });
+                }
+            },
+
+            // --- Window & Event Bindings ---
+            bindEvents() {
+                // Keyboard Shortcuts
+                document.addEventListener('keydown', this.handleKeydown.bind(this));
+                
+                // Routing
+                window.addEventListener('hashchange', this.handleRoute.bind(this));
+                
+                // Context Menu
+                document.addEventListener('click', () => {
+                    document.getElementById('contextMenu').classList.remove('active');
+                });
+                
+                // Command Palette close on click outside
+                document.getElementById('commandPaletteOverlay').addEventListener('click', (e) => {
+                    if (e.target.id === 'commandPaletteOverlay') this.closeCommandPalette();
+                });
+
+                // Virtual Scrolling
+                const container = document.getElementById('tableContainer');
+                container.addEventListener('scroll', () => {
+                    requestAnimationFrame(() => this.renderTable());
+                });
+
+                // Column Resizing
+                this.setupResizers();
+
+                // Select All
+                document.getElementById('selectAll').addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        this.state.data.forEach(item => this.state.selectedIds.add(item.id));
+                    } else {
+                        this.state.selectedIds.clear();
+                    }
+                    this.updateBulkToolbar();
+                    this.renderTable();
+                });
+
+                // Theme Toggle
+                document.getElementById('themeToggle').addEventListener('click', () => {
+                    this.setTheme(this.state.theme === 'dark' ? 'light' : 'dark');
+                });
+
+                // File Drag and Drop on window
+                window.addEventListener('dragover', (e) => e.preventDefault());
+                window.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files.length > 0) {
+                        this.showToast(`Imported file: ${e.dataTransfer.files[0].name}`, 'success');
+                    }
+                });
+            },
+
+            handleKeydown(e) {
+                // Ignore shortcuts if typing in an input (except Command Palette input)
+                const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+                
+                // Command Palette: Ctrl/Cmd + K
+                if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                    e.preventDefault();
+                    this.triggerCommandPalette();
+                    return;
+                }
+
+                if (isInput && e.target.id !== 'commandInput' && !e.target.isContentEditable) return;
+
+                // Undo: Ctrl/Cmd + Z
+                if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                    e.preventDefault();
+                    this.undo();
+                }
+                // Redo: Ctrl/Cmd + Y or Ctrl/Cmd + Shift + Z
+                else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) {
+                    e.preventDefault();
+                    this.redo();
+                }
+                // Save/Draft: Ctrl/Cmd + S
+                else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                    e.preventDefault();
+                    this.triggerAutoSave(true);
+                    this.showToast('Work saved manually.', 'success');
+                }
+                // Copy: Ctrl/Cmd + C (if no text selected, copy selected rows)
+                else if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !window.getSelection().toString()) {
+                    if (this.state.selectedIds.size > 0) {
+                        e.preventDefault();
+                        navigator.clipboard.writeText(Array.from(this.state.selectedIds).join('\n'));
+                        this.showToast(`Copied ${this.state.selectedIds.size} items to clipboard`);
+                    }
+                }
+                // Help: ?
+                else if (e.key === '?' && !isInput) {
+                    this.triggerCommandPalette("help");
+                }
+                // Escape handling
+                else if (e.key === 'Escape') {
+                    this.closeCommandPalette();
+                    document.getElementById('contextMenu').classList.remove('active');
+                    this.clearSelection();
+                }
+            },
+
+            // --- Routing & State ---
+            handleRoute() {
+                const hash = window.location.hash.slice(1) || 'projects';
+                this.state.view = hash;
+                
+                // Update nav UI
+                document.querySelectorAll('.nav-item').forEach(el => {
+                    el.classList.toggle('active', el.getAttribute('href') === `#${hash}`);
+                });
+
+                document.getElementById('viewTitle').textContent = hash.charAt(0).toUpperCase() + hash.slice(1);
+                
+                // If not projects, show empty state for demo
+                if (hash !== 'projects') {
+                    document.getElementById('virtualContent').style.display = 'none';
+                    document.getElementById('emptyState').style.display = 'flex';
+                } else {
+                    document.getElementById('virtualContent').style.display = 'block';
+                    document.getElementById('emptyState').style.display = 'none';
+                    this.renderTable();
+                }
+            },
+
+            setTheme(mode) {
+                this.state.theme = mode;
+                document.documentElement.setAttribute('data-theme', mode);
+                const icon = mode === 'dark' ? 'moon' : 'sun';
+                document.getElementById('themeIcon').setAttribute('data-lucide', icon);
+                lucide.createIcons();
+            },
+
+            // --- Virtual Scrolling & Table Rendering ---
+            renderTable() {
+                if (this.state.view !== 'projects') return;
+
+                const container = document.getElementById('tableContainer');
+                const tbody = document.getElementById('tableBody');
+                const spacer = document.getElementById('virtualSpacer');
+                const content = document.getElementById('virtualContent');
+
+                const totalRows = this.state.data.length;
+                spacer.style.height = `${totalRows * this.ROW_HEIGHT}px`;
+
+                const scrollTop = container.scrollTop;
+                const startIndex = Math.max(0, Math.floor(scrollTop / this.ROW_HEIGHT) - 5); // buffer
+                const endIndex = Math.min(totalRows, startIndex + this.VISIBLE_ROWS + 10);
+
+                // Offset content
+                content.style.transform = `translateY(${startIndex * this.ROW_HEIGHT}px)`;
+
+                let html = '';
+                if (totalRows === 0) {
+                    document.getElementById('emptyState').style.display = 'flex';
+                    document.getElementById('dataTable').style.display = 'none';
+                    return;
+                }
+                
+                document.getElementById('emptyState').style.display = 'none';
+                document.getElementById('dataTable').style.display = 'table';
+
+                for (let i = startIndex; i < endIndex; i++) {
+                    const item = this.state.data[i];
+                    const isSelected = this.state.selectedIds.has(item.id);
+                    html += `
+                        <tr data-id="${item.id}" class="${isSelected ? 'selected' : ''}" draggable="true" 
+                            ondragstart="app.handleDragStart(event, '${item.id}')"
+                            ondragover="app.handleDragOver(event)"
+                            ondrop="app.handleDrop(event, '${item.id}')"
+                            oncontextmenu="app.handleContextMenu(event, '${item.id}')"
+                            onclick="app.handleRowClick(event, '${item.id}', ${i})">
+                            <td style="text-align: center;" onclick="event.stopPropagation()">
+                                <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="app.toggleSelection('${item.id}', event)">
+                            </td>
+                            <td contenteditable="true" onblur="app.handleInlineEdit('${item.id}', 'name', this.innerText)" oninput="app.triggerAutoSave()">${item.name}</td>
+                            <td><span class="status-badge ${item.status === 'Active' ? 'status-online' : ''}">${item.status}</span></td>
+                            <td>${item.modified}</td>
+                            <td>${item.owner}</td>
+                        </tr>
+                    `;
+                }
+                tbody.innerHTML = html;
+            },
+
+            // --- Interaction: Multi-Select ---
+            handleRowClick(e, id, index) {
+                // Ignore if clicked on contenteditable text
+                if (e.target.isContentEditable) return;
+
+                if (e.shiftKey && this.state.lastSelectedId !== null) {
+                    // Range selection
+                    const lastIdx = this.state.data.findIndex(item => item.id === this.state.lastSelectedId);
+                    const start = Math.min(index, lastIdx);
+                    const end = Math.max(index, lastIdx);
+                    
+                    if (!e.ctrlKey && !e.metaKey) this.state.selectedIds.clear();
+                    
+                    for (let i = start; i <= end; i++) {
+                        this.state.selectedIds.add(this.state.data[i].id);
+                    }
+                } else if (e.ctrlKey || e.metaKey) {
+                    // Toggle
+                    if (this.state.selectedIds.has(id)) {
+                        this.state.selectedIds.delete(id);
+                    } else {
+                        this.state.selectedIds.add(id);
+                    }
+                } else {
+                    // Single select
+                    this.state.selectedIds.clear();
+                    this.state.selectedIds.add(id);
+                }
+
+                this.state.lastSelectedId = id;
+                this.updateBulkToolbar();
+                this.renderTable();
+            },
+
+            toggleSelection(id, event) {
+                if (event.target.checked) {
+                    this.state.selectedIds.add(id);
+                    this.state.lastSelectedId = id;
+                } else {
+                    this.state.selectedIds.delete(id);
+                }
+                this.updateBulkToolbar();
+                this.renderTable();
+            },
+
+            clearSelection() {
+                this.state.selectedIds.clear();
+                document.getElementById('selectAll').checked = false;
+                this.updateBulkToolbar();
+                this.renderTable();
+            },
+
+            updateBulkToolbar() {
+                const toolbar = document.getElementById('bulkToolbar');
+                const count = this.state.selectedIds.size;
+                if (count > 0) {
+                    document.getElementById('bulkCount').textContent = `${count} item${count > 1 ? 's' : ''} selected`;
+                    toolbar.classList.add('visible');
+                } else {
+                    toolbar.classList.remove('visible');
+                }
+            },
+
+            // --- Interaction: Drag and Drop ---
+            handleDragStart(e, id) {
+                e.dataTransfer.setData('text/plain', id);
+                e.dataTransfer.effectAllowed = 'move';
+                // Add dragging class dynamically if needed
+            },
+
+            handleDragOver(e) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                const row = e.target.closest('tr');
+                if (row) row.classList.add('drag-over');
+            },
+
+            handleDrop(e, targetId) {
+                e.preventDefault();
+                document.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+                
+                const sourceId = e.dataTransfer.getData('text/plain');
+                if (sourceId === targetId) return;
+
+                // Optimistic Reordering
+                const sourceIdx = this.state.data.findIndex(i => i.id === sourceId);
+                const targetIdx = this.state.data.findIndex(i => i.id === targetId);
+                
+                const item = this.state.data.splice(sourceIdx, 1)[0];
+                this.state.data.splice(targetIdx, 0, item);
+                
+                this.recordAction({
+                    type: 'REORDER',
+                    sourceId,
+                    targetId,
+                    sourceIdx,
+                    targetIdx
+                });
+
+                this.renderTable();
+                this.showToast('Row reordered optimistically.');
+            },
+
+            // --- Context Menu ---
+            handleContextMenu(e, id) {
+                e.preventDefault();
+                this.state.contextMenuTargetId = id;
+                
+                // Select row if not selected
+                if (!this.state.selectedIds.has(id)) {
+                    this.state.selectedIds.clear();
+                    this.state.selectedIds.add(id);
+                    this.updateBulkToolbar();
+                    this.renderTable();
+                }
+
+                const menu = document.getElementById('contextMenu');
+                menu.style.left = `${e.clientX}px`;
+                menu.style.top = `${e.clientY}px`;
+                menu.classList.add('active');
+            },
+
+            ctxAction(action) {
+                const id = this.state.contextMenuTargetId;
+                document.getElementById('contextMenu').classList.remove('active');
+
+                if (action === 'delete') {
+                    this.deleteItems([id]);
+                } else if (action === 'copy') {
+                    const item = this.state.data.find(i => i.id === id);
+                    navigator.clipboard.writeText(JSON.stringify(item));
+                    this.showToast('Copied to clipboard');
+                } else if (action === 'edit') {
+                    // Focus the contenteditable cell of the target row
+                    const row = document.querySelector(`tr[data-id="${id}"]`);
+                    if(row) row.querySelector('td[contenteditable]').focus();
+                }
+            },
+
+            // --- Inline Editing & Auto Save ---
+            handleInlineEdit(id, field, newValue) {
+                const item = this.state.data.find(i => i.id === id);
+                if (item[field] !== newValue) {
+                    const oldValue = item[field];
+                    item[field] = newValue;
+                    
+                    this.recordAction({
+                        type: 'EDIT',
+                        id,
+                        field,
+                        oldValue,
+                        newValue
+                    });
+                    
+                    this.triggerAutoSave();
+                }
+            },
+
+            triggerAutoSave(immediate = false) {
+                const indicator = document.getElementById('draftStatus');
+                indicator.innerHTML = '<i data-lucide="refresh-cw" class="lucide-spin"></i> Saving draft...';
+                indicator.style.opacity = 1;
+                lucide.createIcons();
+
+                clearTimeout(this.state.draftTimeout);
+                
+                const save = () => {
+                    // Mock saving to memory
+                    indicator.innerHTML = '<i data-lucide="check-circle-2"></i> Draft saved';
+                    lucide.createIcons();
+                    setTimeout(() => { indicator.style.opacity = 0; }, 2000);
+                };
+
+                if (immediate) save();
+                else this.state.draftTimeout = setTimeout(save, 500);
+            },
+
+            // --- Actions & Undo/Redo Stack ---
+            recordAction(action) {
+                this.state.history.push(action);
+                this.state.redoStack = []; // Clear redo stack on new action
+            },
+
+            undo() {
+                const action = this.state.history.pop();
+                if (!action) return this.showToast('Nothing to undo');
+
+                if (action.type === 'DELETE') {
+                    // Re-insert items at their original indices
+                    action.items.sort((a,b) => a.index - b.index).forEach(obj => {
+                        this.state.data.splice(obj.index, 0, obj.item);
+                    });
+                } else if (action.type === 'EDIT') {
+                    const item = this.state.data.find(i => i.id === action.id);
+                    item[action.field] = action.oldValue;
+                } else if (action.type === 'REORDER') {
+                    const item = this.state.data.splice(action.targetIdx, 1)[0];
+                    this.state.data.splice(action.sourceIdx, 0, item);
+                } else if (action.type === 'ADD') {
+                    this.state.data = this.state.data.filter(i => i.id !== action.item.id);
+                }
+
+                this.state.redoStack.push(action);
+                this.renderTable();
+                this.showToast('Action undone');
+            },
+
+            redo() {
+                const action = this.state.redoStack.pop();
+                if (!action) return this.showToast('Nothing to redo');
+
+                if (action.type === 'DELETE') {
+                    const ids = action.items.map(i => i.item.id);
+                    this.state.data = this.state.data.filter(i => !ids.includes(i.id));
+                } else if (action.type === 'EDIT') {
+                    const item = this.state.data.find(i => i.id === action.id);
+                    item[action.field] = action.newValue;
+                } else if (action.type === 'REORDER') {
+                    const item = this.state.data.splice(action.sourceIdx, 1)[0];
+                    this.state.data.splice(action.targetIdx, 0, item);
+                } else if (action.type === 'ADD') {
+                    this.state.data.unshift(action.item);
+                }
+
+                this.state.history.push(action);
+                this.renderTable();
+                this.showToast('Action redone');
+            },
+
+            deleteItems(ids) {
+                const deletedObjects = [];
+                ids.forEach(id => {
+                    const index = this.state.data.findIndex(i => i.id === id);
+                    if (index !== -1) {
+                        deletedObjects.push({ index, item: this.state.data[index] });
+                    }
+                });
+
+                // Optimistic removal
+                this.state.data = this.state.data.filter(i => !ids.includes(i.id));
+                this.clearSelection();
+                
+                this.recordAction({
+                    type: 'DELETE',
+                    items: deletedObjects
+                });
+
+                this.showUndoToast(`Deleted ${ids.length} item(s)`);
+            },
+
+            bulkDelete() {
+                this.deleteItems(Array.from(this.state.selectedIds));
+            },
+
+            addItem() {
+                const newItem = {
+                    id: `PROJ-NEW-${Date.now().toString().slice(-4)}`,
+                    name: `New Project`,
+                    status: 'Active',
+                    modified: new Date().toISOString().split('T')[0],
+                    owner: 'Current User'
+                };
+                
+                this.state.data.unshift(newItem);
+                this.recordAction({ type: 'ADD', item: newItem });
+                this.renderTable();
+                
+                // Focus the new item for inline editing
+                setTimeout(() => {
+                    const newRow = document.querySelector(`tr[data-id="${newItem.id}"] td[contenteditable]`);
+                    if(newRow) {
+                        newRow.focus();
+                        document.execCommand('selectAll', false, null);
+                    }
+                }, 50);
+            },
+
+            // --- Notifications & System ---
+            notifySystem(title, body) {
+                if (!("Notification" in window)) return;
+                
+                if (Notification.permission === "granted") {
+                    new Notification(title, { body });
+                } else if (Notification.permission !== "denied") {
+                    Notification.requestPermission().then(permission => {
+                        if (permission === "granted") new Notification(title, { body });
+                    });
+                }
+            },
+
+            // --- Command Palette ---
+            triggerCommandPalette(initialQuery = "") {
+                const overlay = document.getElementById('commandPaletteOverlay');
+                const input = document.getElementById('commandInput');
+                overlay.classList.add('active');
+                input.value = initialQuery;
+                input.focus();
+                this.updateCommandList(initialQuery);
+
+                input.oninput = (e) => this.updateCommandList(e.target.value);
+                
+                // Trap focus & keyboard navigation
+                input.onkeydown = (e) => {
+                    const items = document.querySelectorAll('.command-item');
+                    let activeIdx = Array.from(items).findIndex(el => el.classList.contains('selected'));
+                    
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        if (activeIdx < items.length - 1) {
+                            if (activeIdx >= 0) items[activeIdx].classList.remove('selected');
+                            items[activeIdx + 1].classList.add('selected');
+                            items[activeIdx + 1].scrollIntoView({block: 'nearest'});
+                        }
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        if (activeIdx > 0) {
+                            items[activeIdx].classList.remove('selected');
+                            items[activeIdx - 1].classList.add('selected');
+                            items[activeIdx - 1].scrollIntoView({block: 'nearest'});
+                        }
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (activeIdx >= 0) items[activeIdx].click();
+                    } else if (e.key === 'Escape') {
+                        this.closeCommandPalette();
+                    }
+                };
+            },
+
+            updateCommandList(query) {
+                const commands = [
+                    { name: 'Toggle Dark/Light Theme', action: () => this.setTheme(this.state.theme === 'dark' ? 'light' : 'dark'), icon: 'moon' },
+                    { name: 'Create New Project (Ctrl+N)', action: () => this.addItem(), icon: 'plus' },
+                    { name: 'Export to CSV', action: () => this.exportData(), icon: 'download' },
+                    { name: 'Go to Projects', action: () => window.location.hash = 'projects', icon: 'folder' },
+                    { name: 'Go to Settings', action: () => window.location.hash = 'settings', icon: 'settings' },
+                    { name: 'Show System Notification', action: () => this.notifySystem('LadaOS', 'This is a native system notification test!'), icon: 'bell' }
+                ];
+
+                const q = query.toLowerCase();
+                const filtered = commands.filter(c => c.name.toLowerCase().includes(q));
+                
+                const list = document.getElementById('commandList');
+                list.innerHTML = filtered.map((c, i) => `
+                    <div class="command-item ${i === 0 ? 'selected' : ''}" data-index="${i}">
+                        <i data-lucide="${c.icon}"></i> ${c.name}
+                    </div>
+                `).join('');
+                
+                lucide.createIcons();
+
+                // Attach click events
+                document.querySelectorAll('.command-item').forEach(el => {
+                    el.onclick = () => {
+                        const idx = el.getAttribute('data-index');
+                        filtered[idx].action();
+                        this.closeCommandPalette();
+                    };
+                    el.onmouseover = () => {
+                        document.querySelectorAll('.command-item').forEach(i => i.classList.remove('selected'));
+                        el.classList.add('selected');
+                    };
+                });
+            },
+
+            closeCommandPalette() {
+                document.getElementById('commandPaletteOverlay').classList.remove('active');
+            },
+
+            // --- Toasts ---
+            showToast(message, type = 'default') {
+                const container = document.getElementById('toastContainer');
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                
+                let icon = 'info';
+                if (type === 'success') icon = 'check-circle';
+                if (type === 'error') icon = 'alert-circle';
+
+                toast.innerHTML = `
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <i data-lucide="${icon}"></i> ${message}
+                    </div>
+                `;
+                container.appendChild(toast);
+                lucide.createIcons();
+
+                setTimeout(() => {
+                    toast.classList.add('closing');
+                    setTimeout(() => toast.remove(), 300);
+                }, 3000);
+            },
+
+            showUndoToast(message) {
+                const container = document.getElementById('toastContainer');
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                
+                toast.innerHTML = `
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <i data-lucide="check-circle"></i> ${message}
+                    </div>
+                    <button style="min-height:30px; padding:4px 8px; border-color:var(--border);" onclick="app.undo(); this.parentElement.remove()">Undo</button>
+                `;
+                container.appendChild(toast);
+                lucide.createIcons();
+
+                setTimeout(() => {
+                    if (toast.parentElement) {
+                        toast.classList.add('closing');
+                        setTimeout(() => toast.remove(), 300);
+                    }
+                }, 5000);
+            },
+
+            // --- File System & Exports ---
+            async exportData() {
+                // Generate CSV
+                const header = "ID,Name,Status,Modified,Owner\n";
+                const rows = this.state.data.map(i => `${i.id},"${i.name}",${i.status},${i.modified},"${i.owner}"`).join('\n');
+                const blob = new Blob([header + rows], { type: 'text/csv' });
+                
+                // Use File System Access API if available
+                if (window.showSaveFilePicker) {
+                    try {
+                        const handle = await window.showSaveFilePicker({
+                            suggestedName: 'export.csv',
+                            types: [{ description: 'CSV File', accept: {'text/csv': ['.csv']} }]
+                        });
+                        const writable = await handle.createWritable();
+                        await writable.write(blob);
+                        await writable.close();
+                        this.showToast('File saved successfully', 'success');
+                    } catch (err) {
+                        if (err.name !== 'AbortError') this.showToast('Save failed: ' + err.message, 'error');
+                    }
+                } else {
+                    // Fallback
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'export.csv';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    this.showToast('Export downloaded');
+                }
+            },
+
+            async openFile() {
+                if (window.showOpenFilePicker) {
+                    try {
+                        const [handle] = await window.showOpenFilePicker();
+                        const file = await handle.getFile();
+                        this.showToast(`Opened file: ${file.name}`, 'success');
+                    } catch (err) {
+                        if (err.name !== 'AbortError') this.showToast('Open failed', 'error');
+                    }
+                } else {
+                    // Fallback to <input>
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.onchange = e => {
+                        if (e.target.files.length) this.showToast(`Opened: ${e.target.files[0].name}`, 'success');
+                    };
+                    input.click();
+                }
+            },
+
+            // --- Column Resizer ---
+            setupResizers() {
+                const resizers = document.querySelectorAll('.resizer');
+                let startX, startWidth, th;
+
+                resizers.forEach(resizer => {
+                    resizer.addEventListener('mousedown', (e) => {
+                        th = e.target.parentElement;
+                        startX = e.pageX;
+                        startWidth = th.offsetWidth;
+                        
+                        document.addEventListener('mousemove', mouseMove);
+                        document.addEventListener('mouseup', mouseUp);
+                        
+                        th.style.width = startWidth + 'px'; // lock width
+                    });
+                });
+
+                function mouseMove(e) {
+                    const newWidth = startWidth + (e.pageX - startX);
+                    th.style.width = `${newWidth}px`;
+                }
+
+                function mouseUp() {
+                    document.removeEventListener('mousemove', mouseMove);
+                    document.removeEventListener('mouseup', mouseUp);
+                }
+            },
+
+            // --- Offline Support (Service Worker Mock) ---
+            setupServiceWorker() {
+                // In a single HTML file, we simulate SW caching by just tracking online/offline events
+                this.updateConnectionStatus();
+                window.addEventListener('online', this.updateConnectionStatus.bind(this));
+                window.addEventListener('offline', this.updateConnectionStatus.bind(this));
+                this.setupConnectionListeners = () => {}; // Used above
+            },
+            
+            updateConnectionStatus() {
+                this.state.isOffline = !navigator.onLine;
+                const banner = document.getElementById('offlineBanner');
+                const badge = document.getElementById('connectionStatus');
+                
+                if (this.state.isOffline) {
+                    banner.style.display = 'block';
+                    badge.className = 'status-badge status-offline';
+                    badge.innerHTML = '<div style="width:8px; height:8px; border-radius:50%; background:currentColor"></div> Offline';
+                } else {
+                    banner.style.display = 'none';
+                    badge.className = 'status-badge status-online';
+                    badge.innerHTML = '<div style="width:8px; height:8px; border-radius:50%; background:currentColor"></div> Online';
+                }
+            }
+        };
+
+        // Boot
+        window.addEventListener('DOMContentLoaded', () => app.init());
+
+    </script>
+</body>
+</html>

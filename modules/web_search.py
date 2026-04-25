@@ -56,6 +56,15 @@ class WebSearchEngine:
         'about', 'tell me', 'information', 'details',
     ]
     
+    # Triggers that indicate query needs high-quality research (Tavily)
+    RESEARCH_TRIGGERS = [
+        'news', 'latest', 'recent', 'happening', 'trending', 'update',
+        'compare', 'vs', 'versus', 'review', 'rating', 'best', 'top',
+        'research', 'explain', 'impact', 'why', 'how did', 'analysis',
+        'future', 'prediction', 'innovation', 'technology', 'market',
+        'company', 'brand', 'product', 'service',
+    ]
+    
     def __init__(self):
         """Initialize web search engine"""
         self.session = requests.Session()
@@ -92,141 +101,127 @@ class WebSearchEngine:
         
         return False
     
-    def search_duckduckgo(self, query: str) -> Dict[str, Any]:
-        """
-        Search using DuckDuckGo Instant Answer API
-        Free, no API key required
-        """
+    def search(self, query: str) -> Dict[str, Any]:
+        """Main search method - routes to configured provider with smart routing option"""
+        import os
+        provider = os.getenv('SEARCH_PROVIDER', 'duckduckgo').lower()
+        smart_routing = os.getenv('SMART_SEARCH_ROUTING', 'true').lower() == 'true'
+        
+        # If smart routing is enabled, decide provider based on query complexity
+        if smart_routing:
+            if self._is_research_query(query):
+                logger.info(f"[WebSearch] Smart routing: Complex query detected, using Tavily")
+                provider = 'tavily'
+            else:
+                logger.info(f"[WebSearch] Smart routing: Simple query detected, using DuckDuckGo")
+                provider = 'duckduckgo'
+
+        if provider == 'tavily':
+            result = self._search_tavily(query)
+            if result.get('success'):
+                return result
+            logger.warning(f"[WebSearch] Tavily failed, falling back to DuckDuckGo: {result.get('error')}")
+            
+        return self._search_duckduckgo(query)
+
+    def _is_research_query(self, query: str) -> bool:
+        """Detect if a query is complex enough to warrant using Tavily credits"""
+        query_lower = query.lower()
+        
+        # 1. Check for research-intent keywords
+        for trigger in self.RESEARCH_TRIGGERS:
+            if trigger in query_lower:
+                return True
+                
+        # 2. Longer queries (usually more complex)
+        if len(query.split()) >= 8:
+            return True
+            
+        # 3. Questions starting with "How" or "Why" or "Explain"
+        research_starters = ['how', 'why', 'explain', 'compare', 'analyze']
+        first_word = query_lower.split()[0] if query_lower.split() else ''
+        if first_word in research_starters:
+            return True
+            
+        return False
+
+    def _search_tavily(self, query: str) -> Dict[str, Any]:
+        """Search using Tavily API (better for AI, no ads, high quality)"""
+        import os
+        api_key = os.getenv('TAVILY_API_KEY')
+        
+        if not api_key:
+            return {'success': False, 'error': 'TAVILY_API_KEY not found in environment'}
+            
         try:
-            url = f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1"
+            logger.info(f"[WebSearch] Using Tavily for: {query[:50]}")
             
-            response = self.session.get(url, timeout=10)
+            response = self.session.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": query,
+                    "search_depth": "basic",
+                    "include_answer": True,
+                    "max_results": 5
+                },
+                timeout=10
+            )
             response.raise_for_status()
-            
-            # Check if response is valid JSON
-            try:
-                data = response.json()
-            except ValueError:
-                logger.warning(f"[WebSearch] DuckDuckGo returned invalid JSON")
-                return {'success': False, 'error': 'Invalid JSON response', 'query': query}
-            
-            result = {
-                'success': True,
-                'query': query,
-                'source': 'DuckDuckGo',
-                'answer': None,
-                'abstract': None,
-                'url': None,
-                'related': []
-            }
-            
-            # Direct answer (like calculator, conversions)
-            if data.get('Answer'):
-                result['answer'] = data['Answer']
-                result['answer_type'] = data.get('AnswerType', 'instant')
-            
-            # Abstract (Wikipedia-style summary)
-            if data.get('Abstract'):
-                result['abstract'] = data['Abstract']
-                result['url'] = data.get('AbstractURL', '')
-                result['source'] = data.get('AbstractSource', 'DuckDuckGo')
-            
-            # Infobox data
-            if data.get('Infobox') and data['Infobox'].get('content'):
-                infobox = []
-                for item in data['Infobox']['content'][:5]:
-                    if item.get('label') and item.get('value'):
-                        infobox.append(f"{item['label']}: {item['value']}")
-                if infobox:
-                    result['infobox'] = infobox
-            
-            # Related topics (these often have useful info)
-            for topic in data.get('RelatedTopics', [])[:5]:
-                if isinstance(topic, dict) and topic.get('Text'):
-                    result['related'].append({
-                        'text': topic['Text'],
-                        'url': topic.get('FirstURL', '')
-                    })
-            
-            # Definition
-            if data.get('Definition'):
-                result['definition'] = data['Definition']
-                result['definition_source'] = data.get('DefinitionSource', '')
-            
-            return result
-            
-        except requests.RequestException as e:
-            logger.error(f"[WebSearch] DuckDuckGo error: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'query': query
-            }
-    
-    def search_with_scraping(self, query: str) -> Dict[str, Any]:
-        """
-        Fallback: Search using DuckDuckGo HTML and parse results
-        """
-        try:
-            url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            response = self.session.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
+            data = response.json()
             
             results = []
-            
-            # Simple regex parsing for results
-            snippets = re.findall(r'class="result__snippet"[^>]*>([^<]+)', response.text)
-            titles = re.findall(r'class="result__a"[^>]*>([^<]+)', response.text)
-            
-            for i, (title, snippet) in enumerate(zip(titles[:5], snippets[:5])):
+            for r in data.get('results', []):
                 results.append({
-                    'title': title.strip(),
-                    'snippet': snippet.strip()
+                    'title': r.get('title', ''),
+                    'snippet': r.get('content', ''),
+                    'url': r.get('url', '')
                 })
-            
-            if results:
-                return {
-                    'success': True,
-                    'query': query,
-                    'source': 'DuckDuckGo Search',
-                    'results': results,
-                    'summary': results[0]['snippet'] if results else None
-                }
-            
-            return {'success': False, 'query': query, 'error': 'No results found'}
+                
+            return {
+                'success': True,
+                'query': query,
+                'source': 'Tavily Search',
+                'results': results,
+                'summary': data.get('answer') or (results[0]['snippet'] if results else None)
+            }
             
         except Exception as e:
-            logger.error(f"[WebSearch] Scraping error: {e}")
+            logger.error(f"[WebSearch] Tavily error: {e}")
             return {'success': False, 'error': str(e), 'query': query}
-    
-    def search(self, query: str) -> Dict[str, Any]:
-        """Main search method - tries multiple sources with robust fallback"""
-        # Try instant answer first (fast)
-        result = self.search_duckduckgo(query)
-        
-        # If API gave good results, return them
-        if result.get('success') and (result.get('answer') or result.get('abstract')):
-            logger.info(f"[WebSearch] Got instant answer for: {query[:50]}")
-            return result
-        
-        # If API has related topics, that's still useful
-        if result.get('success') and result.get('related') and len(result['related']) > 0:
-            logger.info(f"[WebSearch] Got {len(result['related'])} related topics for: {query[:50]}")
-            return result
-        
-        # Always try scraping as fallback (more reliable for general queries)
-        logger.info(f"[WebSearch] Trying scrape fallback for: {query[:50]}")
-        scrape_result = self.search_with_scraping(query)
-        if scrape_result.get('success') and scrape_result.get('results'):
-            logger.info(f"[WebSearch] Scrape found {len(scrape_result['results'])} results")
-            return scrape_result
-        
-        # Return whatever we have
-        return result if result.get('success') else scrape_result
+
+    def _search_duckduckgo(self, query: str) -> Dict[str, Any]:
+        """Search using duckduckgo_search library for reliable live results"""
+        try:
+            from duckduckgo_search import DDGS
+            
+            logger.info(f"[WebSearch] Using DDGS for: {query[:50]}")
+            
+            with DDGS() as ddgs:
+                ddgs_results = list(ddgs.text(query, max_results=5))
+            
+            if not ddgs_results:
+                return {'success': False, 'query': query, 'error': 'No results found'}
+                
+            results = []
+            for r in ddgs_results:
+                results.append({
+                    'title': r.get('title', ''),
+                    'snippet': r.get('body', ''),
+                    'url': r.get('href', '')
+                })
+                
+            return {
+                'success': True,
+                'query': query,
+                'source': 'DuckDuckGo Live Search',
+                'results': results,
+                'summary': results[0]['snippet'] if results else None
+            }
+            
+        except Exception as e:
+            logger.error(f"[WebSearch] Search error: {e}")
+            return {'success': False, 'error': str(e), 'query': query}
     
     def format_for_ai(self, search_result: Dict[str, Any]) -> str:
         """Format search results as context for AI"""

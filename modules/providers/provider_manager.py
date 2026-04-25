@@ -364,9 +364,10 @@ class ProviderManager:
         Otherwise, auto-selects based on query complexity.
         """
         sys_prompt = system_prompt or self.system_prompt
+        images = kwargs.get('images', None)
 
         # Build messages
-        messages = self._build_messages(prompt, sys_prompt, web_context)
+        messages = self._build_messages(prompt, sys_prompt, web_context, images=images)
 
         # Determine target model and provider
         if model_id:
@@ -483,7 +484,8 @@ class ProviderManager:
         Yields StreamChunk objects.
         """
         sys_prompt = system_prompt or self.system_prompt
-        messages = self._build_messages(prompt, sys_prompt, web_context)
+        images = kwargs.get('images', None)
+        messages = self._build_messages(prompt, sys_prompt, web_context, images=images)
 
         # Determine target
         if model_id:
@@ -611,7 +613,7 @@ class ProviderManager:
         self.system_prompt = prompt
 
     def _build_messages(self, prompt: str, system_prompt: str,
-                        web_context: str = "") -> List[Dict[str, str]]:
+                        web_context: str = "", images: List[str] = None) -> List[Dict[str, Any]]:
         """Build unified message list"""
         messages = []
 
@@ -631,7 +633,20 @@ class ProviderManager:
         for msg in self.conversation_history[-6:]:
             messages.append(msg)
 
-        messages.append({"role": "user", "content": prompt})
+        if images:
+            content = [{"type": "text", "text": prompt}]
+            for img in images:
+                # Ensure img has data URI prefix if missing
+                if not img.startswith("data:image"):
+                    img = f"data:image/jpeg;base64,{img}"
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": img}
+                })
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": prompt})
+            
         return messages
 
     def _add_to_history(self, role: str, content: str):

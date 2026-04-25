@@ -513,3 +513,205 @@ class VisualGrounder:
             return element.center
         return None
 
+    # =========================================================
+    # PHASE 4 ENHANCEMENTS — Fallback Backends + Helpers
+    # =========================================================
+
+    # High-contrast marker palette for SoM annotations
+    _SOM_COLORS = [
+        (255, 69, 58), (50, 215, 75), (0, 122, 255), (255, 159, 10),
+        (175, 82, 222), (255, 214, 10), (90, 200, 250), (255, 55, 95),
+    ]
+
+    def detect_elements_ocr(self, screenshot_path: str) -> List[UIElement]:
+        """
+        Detect text-bearing UI elements via Tesseract OCR bounding boxes.
+
+        Does not require Gemini Vision — works fully offline.
+        """
+        try:
+            import pytesseract
+            from PIL import Image
+        except ImportError:
+            logger.debug("[VisualGrounding] pytesseract/PIL not available for OCR detection")
+            return []
+
+        try:
+            img = Image.open(screenshot_path)
+            data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+            elements = []
+            n = len(data["text"])
+
+            for i in range(n):
+                text = (data["text"][i] or "").strip()
+                if not text or len(text) < 2:
+                    continue
+
+                x = data["left"][i]
+                y = data["top"][i]
+                w = data["width"][i]
+                h = data["height"][i]
+
+                if w * h < 200:  # minimum area threshold
+                    continue
+
+                conf = float(data["conf"][i]) if str(data["conf"][i]) != "-1" else 0.0
+
+                # Heuristic element type from text content
+                elem_type = "text"
+                text_lower = text.lower()
+                if any(kw in text_lower for kw in ["submit", "ok", "cancel", "search", "sign", "login", "buy", "add", "next", "back"]):
+                    elem_type = "button"
+                elif any(kw in text_lower for kw in ["http", "www", ".com", ".org", ".net"]):
+                    elem_type = "link"
+
+                elements.append(UIElement(
+                    label=text[:40],
+                    element_type=elem_type,
+                    x=x, y=y, width=w, height=h,
+                    confidence=conf / 100.0,
+                    text=text,
+                ))
+
+            return elements
+        except Exception as e:
+            logger.debug(f"[VisualGrounding] OCR element detection failed: {e}")
+            return []
+
+    def detect_elements_contours(self, screenshot_path: str) -> List[UIElement]:
+        """
+        Detect UI elements via OpenCV edge detection and contours.
+
+        Works without any ML model or API — purely geometric.
+        """
+        try:
+            import cv2, numpy as np
+            from PIL import Image
+        except ImportError:
+            logger.debug("[VisualGrounding] OpenCV/numpy not available for contour detection")
+            return []
+
+        try:
+            img = Image.open(screenshot_path)
+            arr = np.array(img)
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            kernel = np.ones((3, 3), np.uint8)
+            dilated = cv2.dilate(edges, kernel, iterations=2)
+
+            contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            elements = []
+            for contour in contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                if w * h < 200 or w < 10 or h < 10:
+                    continue
+
+                aspect = w / max(h, 1)
+                if 1.5 < aspect < 8 and h < 60:
+                    elem_type = "button"
+                elif aspect > 3 and h < 40:
+                    elem_type = "input"
+                else:
+                    elem_type = "unknown"
+
+                elements.append(UIElement(
+                    label=f"region_{x}_{y}",
+                    element_type=elem_type,
+                    x=x, y=y, width=w, height=h,
+                    confidence=0.3,
+                ))
+
+            elements.sort(key=lambda e: (e.y // 50, e.x))
+            return elements
+        except Exception as e:
+            logger.debug(f"[VisualGrounding] Contour element detection failed: {e}")
+            return []
+
+    def annotate_image_colored(
+        self,
+        screenshot_path: str,
+        elements: List[UIElement],
+        output_path: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Draw color-coded numbered SoM markers on a screenshot.
+
+        Returns path to annotated image.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            return None
+
+        try:
+            img = Image.open(screenshot_path).copy()
+            draw = ImageDraw.Draw(img)
+
+            try:
+                font = ImageFont.truetype("arial.ttf", 14)
+                small_font = ImageFont.truetype("arial.ttf", 11)
+            except Exception:
+                font = ImageFont.load_default()
+                small_font = font
+
+            for idx, elem in enumerate(elements):
+                color = self._SOM_COLORS[idx % len(self._SOM_COLORS)]
+
+                # Bounding box
+                draw.rectangle(
+                    [elem.x, elem.y, elem.x + elem.width, elem.y + elem.height],
+                    outline=color, width=2,
+                )
+
+                # Numbered circle marker at center
+                cx, cy = elem.center
+                r = 12
+                draw.ellipse(
+                    [cx - r, cy - r, cx + r, cy + r],
+                    fill=color, outline=(255, 255, 255),
+                )
+                text = str(idx + 1)
+                text_bbox = draw.textbbox((0, 0), text, font=small_font)
+                tw = text_bbox[2] - text_bbox[0]
+                th = text_bbox[3] - text_bbox[1]
+                draw.text(
+                    (cx - tw // 2, cy - th // 2),
+                    text, fill=(255, 255, 255), font=small_font,
+                )
+
+                # Label
+                label = f"{idx + 1}: {elem.label[:30]}"
+                draw.text(
+                    (elem.x, elem.y + elem.height + 2),
+                    label, fill=color, font=small_font,
+                )
+
+            if output_path is None:
+                p = Path(screenshot_path)
+                output_path = str(p.parent / f"{p.stem}_som_v2{p.suffix}")
+
+            img.save(output_path)
+            return output_path
+        except Exception as e:
+            logger.error(f"[VisualGrounding] Colored annotation failed: {e}")
+            return None
+
+    @staticmethod
+    def get_element_list_prompt(elements: List[UIElement]) -> str:
+        """
+        Build a text prompt listing all detected elements.
+
+        Suitable for injection into a VLM prompt alongside the annotated image.
+        """
+        if not elements:
+            return "No interactive elements detected."
+
+        lines = ["Detected UI elements:"]
+        for idx, elem in enumerate(elements, 1):
+            lines.append(
+                f"  [{idx}] {elem.element_type}: \"{elem.label}\" "
+                f"at ({elem.x},{elem.y}) size {elem.width}×{elem.height}"
+            )
+        return "\n".join(lines)
+

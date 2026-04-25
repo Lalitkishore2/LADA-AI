@@ -52,6 +52,13 @@ except Exception:
     _sys_ctrl = None
     SYS_CTRL_OK = False
 
+try:
+    from modules.file_operations import FileSystemController
+    _file_ctrl = FileSystemController()
+    FILE_CTRL_OK = True
+except Exception:
+    _file_ctrl = None
+    FILE_CTRL_OK = False
 
 # ============================================================
 # Helper: convert SystemController dict returns to ToolResult
@@ -82,6 +89,36 @@ def _handle_mute() -> ToolResult:
     if not _sys_ctrl:
         return ToolResult(success=False, output="", error="System control not available")
     return _wrap(_sys_ctrl.mute())
+
+
+# ============================================================
+# File System Operations Handlers
+# ============================================================
+
+def _handle_file_create(path: str, content: str = "", overwrite: bool = False) -> ToolResult:
+    if not _file_ctrl:
+        return ToolResult(success=False, output="", error="File system control not available")
+    return _wrap(_file_ctrl.create_file(path, content, overwrite))
+
+def _handle_file_delete(path: str, permanent: bool = False) -> ToolResult:
+    if not _file_ctrl:
+        return ToolResult(success=False, output="", error="File system control not available")
+    return _wrap(_file_ctrl.delete_file(path, permanent))
+
+def _handle_file_copy(source: str, destination: str) -> ToolResult:
+    if not _file_ctrl:
+        return ToolResult(success=False, output="", error="File system control not available")
+    return _wrap(_file_ctrl.copy_file(source, destination))
+
+def _handle_file_move(source: str, destination: str) -> ToolResult:
+    if not _file_ctrl:
+        return ToolResult(success=False, output="", error="File system control not available")
+    return _wrap(_file_ctrl.move_file(source, destination))
+
+def _handle_file_properties(path: str) -> ToolResult:
+    if not _file_ctrl:
+        return ToolResult(success=False, output="", error="File system control not available")
+    return _wrap(_file_ctrl.get_file_properties(path))
 
 
 def _handle_set_brightness(level: int = 50) -> ToolResult:
@@ -1498,6 +1535,13 @@ def wire_tool_handlers(registry: ToolRegistry) -> int:
         'next_song': _handle_next_song,
         'lights_control': _handle_lights_control,
         'comet_task': _handle_comet_task,
+        
+        # New File Tools
+        'file_create': _handle_file_create,
+        'file_delete': _handle_file_delete,
+        'file_copy': _handle_file_copy,
+        'file_move': _handle_file_move,
+        'file_properties': _handle_file_properties,
         'task': _handle_task,
         'todo_write': _handle_todo_write,
         # New tools (AI Command Agent)

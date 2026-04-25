@@ -563,4 +563,22 @@ def get_mcp_client(config_path: Optional[str] = None) -> MCPClient:
     global _mcp_client
     if _mcp_client is None:
         _mcp_client = MCPClient(config_path=config_path)
+        
+        # Phase 8: Wire MCP Interceptor
+        try:
+            from modules.mcp_interceptor import get_mcp_interceptor
+            interceptor = get_mcp_interceptor(mcp_client=_mcp_client)
+            
+            # Monkey-patch call_tool to route through middleware
+            _mcp_client._original_call_tool = _mcp_client.call_tool
+            
+            def patched_call_tool(tool_name: str, arguments: Dict[str, Any] = None, timeout: float = 30.0) -> Dict[str, Any]:
+                return interceptor.call_tool(tool_name, arguments, timeout)
+                
+            _mcp_client.call_tool = patched_call_tool
+            _mcp_client.interceptor = interceptor
+            logger.info("[MCP] MCPInterceptor wired into client")
+        except Exception as e:
+            logger.warning(f"[MCP] Failed to wire MCP Interceptor: {e}")
+            
     return _mcp_client

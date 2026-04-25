@@ -54,6 +54,11 @@ except ImportError:
 
 try:
     from lada_ai_router import HybridAIRouter
+    try:
+        from modules.cross_tab_synthesizer import get_cross_tab_synthesizer
+        CROSS_TAB_OK = True
+    except ImportError:
+        CROSS_TAB_OK = False
     AI_ROUTER_OK = True
 except ImportError:
     AI_ROUTER_OK = False
@@ -71,6 +76,9 @@ class ActionType(Enum):
     KEYBOARD = "keyboard"
     OPEN_APP = "open_app"
     CLOSE_APP = "close_app"
+    SWITCH_TAB = "switch_tab"
+    NEW_TAB = "new_tab"
+    CLOSE_TAB = "close_tab"
     THINK = "think"
     COMPLETE = "complete"
     ERROR = "error"
@@ -198,7 +206,7 @@ class CometAgent:
             except Exception:
                 pass
                 
-    def _capture_screen_state(self) -> ScreenState:
+    async def _capture_screen_state(self) -> ScreenState:
         """SEE: Capture and analyze current screen state"""
         state = ScreenState()
 
@@ -217,13 +225,23 @@ class CometAgent:
                     continue
 
             if screenshot_taken and screenshot_path:
-                # Try visual grounding with SoM first (more accurate)
+                # Phase 4: Try enhanced visual grounding with SoM (OCR + Colored Annotations)
                 if self.visual_grounder:
                     try:
-                        elements = self.visual_grounder.identify_elements_som(
-                            screenshot_path, task_description=self.current_task or ""
-                        )
+                        # 1. Detect elements locally
+                        elements = self.visual_grounder.detect_elements_ocr(screenshot_path)
+                        if not elements:
+                            elements = self.visual_grounder.detect_elements_contours(screenshot_path)
+                        
                         if elements:
+                            # 2. Annotate screenshot with high-contrast SoM markers
+                            annotated_path = self.visual_grounder.annotate_image_colored(screenshot_path, elements)
+                            if annotated_path:
+                                state.screenshot_path = annotated_path
+                                self._current_screenshot_path = annotated_path
+                            
+                            # 3. Add to state
+                            state.visible_text = self.visual_grounder.get_element_list_prompt(elements)
                             state.detected_elements = [
                                 {
                                     'label': e.label,
@@ -235,14 +253,17 @@ class CometAgent:
                                 }
                                 for e in elements
                             ]
+                    except Exception as e:
+                        logger.warning(f"[Comet] Enhanced SoM failed: {e}")
+
+                # Fallback: Analyze screenshot for elements with older OCR logic
+                if not state.detected_elements and self.screenshot_analyzer:
+                    try:
+                        analysis = self.screenshot_analyzer.analyze_screenshot(screenshot_path)
+                        if analysis:
+                            state.detected_elements = analysis.get('elements', [])
                     except Exception:
                         pass
-
-                # Fallback: Analyze screenshot for elements with OCR
-                if not state.detected_elements:
-                    analysis = self.screenshot_analyzer.analyze_screenshot(screenshot_path)
-                    if analysis:
-                        state.detected_elements = analysis.get('elements', [])
 
         # Fallback: use pyautogui for screenshot
         if not screenshot_taken and PYAUTOGUI_OK:
@@ -283,7 +304,17 @@ class CometAgent:
         # Get browser state if active
         if self.browser:
             try:
-                state.current_url = self.browser.get_current_url()
+                state.current_url = await self.browser.get_current_url()
+                ax_tree = await self.browser.get_accessibility_tree()
+                if ax_tree and 'nodes' in ax_tree:
+                    cdp_text = "CDP Accessible Elements:\n"
+                    for node in ax_tree['nodes']:
+                        name = node.get('name', {}).get('value')
+                        role = node.get('role', {}).get('value')
+                        if name and role and role not in ['generic', 'RootWebArea']:
+                            cdp_text += f"- [{role}] {name}\n"
+                    if cdp_text != "CDP Accessible Elements:\n":
+                        state.visible_text = (state.visible_text or "") + "\n\n" + cdp_text
             except Exception:
                 pass
 
@@ -306,6 +337,22 @@ class CometAgent:
             except Exception:
                 pass
 
+        
+        # Cross Tab Sync
+        if self.browser and CROSS_TAB_OK:
+            try:
+                cross_tab = get_cross_tab_synthesizer()
+                tab_id = getattr(self.browser, "history", [{"tab_id": "-1"}])[-1].get("tab_id", "-1") if self.browser.history else "-1"
+                cross_tab.snapshot_tab(
+                    tab_id=tab_id,
+                    url=state.current_url or "",
+                    title=await self.browser.get_current_title() or "",
+                    text=state.visible_text or ""
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Cross Tab Snapshot failed: " + str(e))
+
         state.timestamp = time.time()
         self.state_history.append(state)
         return state
@@ -318,12 +365,24 @@ class CometAgent:
             # Fallback: Basic pattern matching for common tasks
             return self._basic_planning(task, current_state)
             
+        
         # Build context for AI
         context = self._build_ai_context(task, current_state, history)
+        
+        cross_tab_prompt = ""
+        if CROSS_TAB_OK and self.browser:
+            try:
+                ct = get_cross_tab_synthesizer()
+                cross_tab_prompt = ct.build_synthesis_prompt()
+            except Exception:
+                pass
+
         
         # Ask AI for action plan
         prompt = f"""You are an autonomous AI agent controlling a computer. 
 Your task: {task}
+
+{cross_tab_prompt}
 
 Current screen state:
 - Active window: {current_state.active_window}
@@ -338,7 +397,7 @@ Based on this state, what is the NEXT action to take?
 
 Respond in JSON format:
 {{
-    "action": "click|type|scroll|navigate|wait|extract|keyboard|open_app|complete|error",
+    "action": "click|type|scroll|navigate|wait|extract|keyboard|open_app|new_tab|switch_tab|close_tab|complete|error",
     "target": "element description, coordinates (x,y), or selector",
     "value": "text to type, URL to navigate, or key to press",
     "reasoning": "why this action is needed"
@@ -355,8 +414,18 @@ If the task cannot be completed, use action="error" with reasoning.
             old_cache = getattr(self.ai_router, 'cache_enabled', True)
             self.ai_router.web_search_enabled = False
             self.ai_router.cache_enabled = False
+            
+            images = []
+            if current_state.screenshot_path and os.path.exists(current_state.screenshot_path):
+                try:
+                    import base64
+                    with open(current_state.screenshot_path, "rb") as img_file:
+                        images.append(base64.b64encode(img_file.read()).decode('utf-8'))
+                except Exception:
+                    pass
+                    
             try:
-                response = self.ai_router.query(prompt)
+                response = self.ai_router.query(prompt, images=images if images else None)
             finally:
                 self.ai_router.web_search_enabled = old_web
                 self.ai_router.cache_enabled = old_cache
@@ -452,13 +521,13 @@ If the task cannot be completed, use action="error" with reasoning.
             reasoning=f"Could not understand task: {task}"
         )]
         
-    def _execute_action(self, action: Action) -> Tuple[bool, str]:
+    async def _execute_action(self, action: Action) -> Tuple[bool, str]:
         """ACT: Execute a single action"""
         
         try:
             if action.type == ActionType.NAVIGATE:
                 if self.browser:
-                    self.browser.navigate(action.value)
+                    await self.browser.navigate(action.value)
                     return True, f"Navigated to {action.value}"
                 else:
                     import webbrowser
@@ -527,7 +596,7 @@ If the task cannot be completed, use action="error" with reasoning.
                             except Exception:
                                 pass
                 elif self.browser:
-                    self.browser.click(action.target)
+                    await self.browser.click_element(action.target)
                     return True, f"Clicked {action.target}"
 
                 return False, f"Could not click '{action.target}'"
@@ -545,7 +614,7 @@ If the task cannot be completed, use action="error" with reasoning.
                     pyautogui.write(text_to_type, interval=0.03)
                     return True, f"Typed '{text_to_type[:20]}...'"
                 elif self.browser:
-                    self.browser.type(action.target or "input", text_to_type)
+                    await self.browser.fill_form(action.target or "input", text_to_type)
                     return True, f"Typed in {action.target or 'input'}"
 
                 return False, "No typing capability available"
@@ -560,7 +629,7 @@ If the task cannot be completed, use action="error" with reasoning.
                     pyautogui.scroll(clicks)
                     return True, f"Scrolled {direction}"
                 elif self.browser:
-                    self.browser.execute_js("window.scrollBy(0, 500)")
+                    await self.browser.execute_js("window.scrollBy(0, 500)")
                     return True, "Scrolled down"
                     
             elif action.type == ActionType.WAIT:
@@ -576,6 +645,30 @@ If the task cannot be completed, use action="error" with reasoning.
                     pyautogui.press(action.value)
                     return True, f"Pressed {action.value}"
                     
+            
+            elif action.type == ActionType.NEW_TAB:
+                if self.browser:
+                    tid = await self.browser.new_tab(action.value or "")
+                    return True, f"Opened new tab (ID: {tid})"
+                return False, "Browser not available"
+            elif action.type == ActionType.SWITCH_TAB:
+                if self.browser:
+                    try:
+                        await self.browser.switch_tab(int(action.target or "0"))
+                        return True, f"Switched to tab {action.target}"
+                    except ValueError:
+                        return False, "Invalid tab index"
+                return False, "Browser not available"
+            elif action.type == ActionType.CLOSE_TAB:
+                if self.browser:
+                    try:
+                        idx = int(action.target) if action.target else None
+                        await self.browser.close_tab(idx)
+                        return True, "Closed tab"
+                    except ValueError:
+                        return False, "Invalid tab index"
+                return False, "Browser not available"
+
             elif action.type == ActionType.OPEN_APP:
                 if self.gui:
                     self.gui.open_application(action.target)
@@ -587,7 +680,7 @@ If the task cannot be completed, use action="error" with reasoning.
                     
             elif action.type == ActionType.EXTRACT:
                 if self.browser:
-                    text = self.browser.extract_text(action.target or "body")
+                    text = await self.browser.extract_text(action.target or None)
                     return True, f"Extracted: {text[:100]}..."
                 elif self.screen_vision:
                     text = self.screen_vision.read_screen_text()
@@ -629,11 +722,11 @@ If the task cannot be completed, use action="error" with reasoning.
         except Exception as e:
             return False, f"Action failed: {str(e)}"
             
-    def _verify_action(self, action: Action,
+    async def _verify_action(self, action: Action,
                        before_state: ScreenState) -> Tuple[bool, ScreenState]:
         """VERIFY: Check if action succeeded using state comparison"""
         # Capture new state
-        after_state = self._capture_screen_state()
+        after_state = await self._capture_screen_state()
 
         # Simple verification: check if something changed
         changed = (
@@ -799,7 +892,7 @@ If the task cannot be completed, use action="error" with reasoning.
 
                 # 1. SEE - Capture current state
                 self._report_progress(steps, max_steps, 'see', 'Analyzing screen...')
-                current_state = self._capture_screen_state()
+                current_state = await self._capture_screen_state()
                 self._current_screenshot_path = current_state.screenshot_path  # Store for SoM
                 self._report_progress(steps, max_steps, 'see',
                                       f'Window: {current_state.active_window or "Desktop"}',
@@ -848,7 +941,7 @@ If the task cannot be completed, use action="error" with reasoning.
                     current_action = action
 
                     while retry_count <= self.MAX_RETRIES_PER_STEP:
-                        success, message = self._execute_action(current_action)
+                        success, message = await self._execute_action(current_action)
                         current_action.reasoning = message
                         self.action_history.append(current_action)
 
@@ -872,7 +965,7 @@ If the task cannot be completed, use action="error" with reasoning.
 
                     # 4. VERIFY - Check if action succeeded
                     self._report_progress(steps, max_steps, 'verify', 'Verifying action result...')
-                    verified, new_state = self._verify_action(current_action, current_state)
+                    verified, new_state = await self._verify_action(current_action, current_state)
 
                     if current_action.type == ActionType.EXTRACT and message:
                         extracted_data['text'] = message
@@ -884,7 +977,7 @@ If the task cannot be completed, use action="error" with reasoning.
                 success=False,
                 message=f"Max steps ({max_steps}) reached without completion",
                 steps_taken=steps,
-                final_state=self._capture_screen_state()
+                final_state=await self._capture_screen_state()
             )
             
         except Exception as e:

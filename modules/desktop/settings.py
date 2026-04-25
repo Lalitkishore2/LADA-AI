@@ -390,6 +390,188 @@ class SettingsDialog(QDialog):
             self.api_fields[env_key] = inp
 
         scroll_lay.addWidget(api_group)
+
+        # ============ DLP Audit Log (Phase 2 UI) ============
+        dlp_group = QGroupBox("🔒 Data Loss Prevention (DLP)")
+        dlp_lay = QVBoxLayout(dlp_group)
+        dlp_lay.setSpacing(8)
+
+        dlp_desc = QLabel("View redacted screen regions. Sensitive data is blocked before reaching AI.")
+        dlp_desc.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        dlp_desc.setWordWrap(True)
+        dlp_lay.addWidget(dlp_desc)
+
+        # DLP sensitivity selector
+        dlp_sens_row = QHBoxLayout()
+        dlp_sens_row.addWidget(QLabel("Sensitivity:"))
+        self.dlp_sensitivity_combo = QComboBox()
+        self.dlp_sensitivity_combo.addItems(["Strict", "Normal", "Relaxed"])
+        self.dlp_sensitivity_combo.setCurrentIndex(1)
+        self.dlp_sensitivity_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {BG_INPUT}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                padding: 6px 10px; font-size: 12px;
+            }}
+        """)
+        dlp_sens_row.addWidget(self.dlp_sensitivity_combo)
+        dlp_sens_row.addStretch()
+        dlp_lay.addLayout(dlp_sens_row)
+
+        # DLP audit list
+        self.dlp_audit_list = QListWidget()
+        self.dlp_audit_list.setMaximumHeight(100)
+        self.dlp_audit_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {BG_INPUT}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                font-size: 11px; font-family: 'Consolas', monospace;
+            }}
+            QListWidget::item {{ padding: 3px; }}
+        """)
+        dlp_lay.addWidget(self.dlp_audit_list)
+
+        dlp_btn_row = QHBoxLayout()
+        self.dlp_refresh_btn = QPushButton("🔄 Refresh Log")
+        self.dlp_refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.dlp_refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {GREEN}; color: white;
+                border: none; border-radius: 6px;
+                padding: 6px 14px; font-size: 11px;
+            }}
+            QPushButton:hover {{ background: {ACCENT_GRADIENT_END}; }}
+        """)
+        self.dlp_refresh_btn.clicked.connect(self._refresh_dlp_log)
+        dlp_btn_row.addWidget(self.dlp_refresh_btn)
+
+        self.dlp_clear_btn = QPushButton("🗑️ Clear")
+        self.dlp_clear_btn.setCursor(Qt.PointingHandCursor)
+        self.dlp_clear_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: #e74c3c; color: white;
+                border: none; border-radius: 6px;
+                padding: 6px 14px; font-size: 11px;
+            }}
+            QPushButton:hover {{ background: #c0392b; }}
+        """)
+        self.dlp_clear_btn.clicked.connect(self._clear_dlp_log)
+        dlp_btn_row.addWidget(self.dlp_clear_btn)
+        dlp_btn_row.addStretch()
+        dlp_lay.addLayout(dlp_btn_row)
+
+        scroll_lay.addWidget(dlp_group)
+
+        # ============ MCP Interceptor Audit (Phase 7 UI) ============
+        mcp_group = QGroupBox("🛡️ MCP Tool Interceptor")
+        mcp_lay = QVBoxLayout(mcp_group)
+        mcp_lay.setSpacing(8)
+
+        mcp_desc = QLabel("Monitor tool calls: rate-limiting, sanitization, and audit trail.")
+        mcp_desc.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        mcp_desc.setWordWrap(True)
+        mcp_lay.addWidget(mcp_desc)
+
+        self.mcp_stats_lbl = QLabel("No MCP data yet — invoke a tool to see stats.")
+        self.mcp_stats_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        mcp_lay.addWidget(self.mcp_stats_lbl)
+
+        self.mcp_audit_list = QListWidget()
+        self.mcp_audit_list.setMaximumHeight(100)
+        self.mcp_audit_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {BG_INPUT}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                font-size: 11px; font-family: 'Consolas', monospace;
+            }}
+            QListWidget::item {{ padding: 3px; }}
+        """)
+        mcp_lay.addWidget(self.mcp_audit_list)
+
+        mcp_btn_row = QHBoxLayout()
+        self.mcp_refresh_btn = QPushButton("🔄 Refresh")
+        self.mcp_refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.mcp_refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {GREEN}; color: white;
+                border: none; border-radius: 6px;
+                padding: 6px 14px; font-size: 11px;
+            }}
+            QPushButton:hover {{ background: {ACCENT_GRADIENT_END}; }}
+        """)
+        self.mcp_refresh_btn.clicked.connect(self._refresh_mcp_log)
+        mcp_btn_row.addWidget(self.mcp_refresh_btn)
+        mcp_btn_row.addStretch()
+        mcp_lay.addLayout(mcp_btn_row)
+
+        scroll_lay.addWidget(mcp_group)
+
+        # ============ YOLO Permission Overrides (Phase 6 UI) ============
+        yolo_group = QGroupBox("⚡ Permission Classifier (YOLO)")
+        yolo_lay = QVBoxLayout(yolo_group)
+        yolo_lay.setSpacing(8)
+
+        yolo_desc = QLabel("Override AI safety classifications. Commands are auto-classified into SAFE / CONFIRM / DENY tiers.")
+        yolo_desc.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        yolo_desc.setWordWrap(True)
+        yolo_lay.addWidget(yolo_desc)
+
+        # Override form
+        yolo_override_row = QHBoxLayout()
+        yolo_override_row.addWidget(QLabel("Command pattern:"))
+        self.yolo_pattern_input = QLineEdit()
+        self.yolo_pattern_input.setPlaceholderText("e.g. shutdown, pip install ...")
+        self.yolo_pattern_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {BG_INPUT}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                padding: 6px 10px; font-size: 12px;
+            }}
+            QLineEdit:focus {{ border-color: {GREEN}; }}
+        """)
+        yolo_override_row.addWidget(self.yolo_pattern_input, 1)
+
+        self.yolo_tier_combo = QComboBox()
+        self.yolo_tier_combo.addItems(["SAFE", "CONFIRM", "DENY"])
+        self.yolo_tier_combo.setCurrentIndex(1)
+        self.yolo_tier_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {BG_INPUT}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                padding: 6px 10px; font-size: 12px;
+            }}
+        """)
+        yolo_override_row.addWidget(self.yolo_tier_combo)
+
+        self.yolo_add_btn = QPushButton("➕ Add Override")
+        self.yolo_add_btn.setCursor(Qt.PointingHandCursor)
+        self.yolo_add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {GREEN}; color: white;
+                border: none; border-radius: 6px;
+                padding: 6px 14px; font-size: 11px;
+            }}
+            QPushButton:hover {{ background: {ACCENT_GRADIENT_END}; }}
+        """)
+        self.yolo_add_btn.clicked.connect(self._add_yolo_override)
+        yolo_override_row.addWidget(self.yolo_add_btn)
+        yolo_lay.addLayout(yolo_override_row)
+
+        # Active overrides list
+        self.yolo_overrides_list = QListWidget()
+        self.yolo_overrides_list.setMaximumHeight(80)
+        self.yolo_overrides_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {BG_INPUT}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                font-size: 11px;
+            }}
+            QListWidget::item {{ padding: 3px; }}
+        """)
+        yolo_lay.addWidget(self.yolo_overrides_list)
+
+        scroll_lay.addWidget(yolo_group)
+
         scroll_lay.addStretch()
         
         scroll.setWidget(scroll_widget)
@@ -650,7 +832,112 @@ class SettingsDialog(QDialog):
             
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Auto-fix failed: {e}")
-    
+
+    # ---------- DLP Audit handlers (Phase 2) ----------
+
+    def _refresh_dlp_log(self):
+        """Load the latest DLP audit entries into the list widget."""
+        self.dlp_audit_list.clear()
+        try:
+            from modules.dlp_filter import get_dlp_filter, DLPSensitivity
+            dlp = get_dlp_filter()
+
+            # Apply sensitivity from combo
+            sens_map = {0: DLPSensitivity.STRICT, 1: DLPSensitivity.NORMAL, 2: DLPSensitivity.RELAXED}
+            new_sens = sens_map.get(self.dlp_sensitivity_combo.currentIndex(), DLPSensitivity.NORMAL)
+            dlp.set_sensitivity(new_sens)
+
+            entries = dlp.get_audit_log(limit=30)
+            if not entries:
+                self.dlp_audit_list.addItem("No redaction events recorded yet.")
+                return
+            for e in reversed(entries):
+                import datetime
+                ts = datetime.datetime.fromtimestamp(e.get("timestamp", 0)).strftime("%H:%M:%S")
+                region = e.get("region") or "text-only"
+                self.dlp_audit_list.addItem(
+                    f"[{ts}] {e.get('pattern', '?')}: {e.get('matched', '***')} | {region}"
+                )
+        except ImportError:
+            self.dlp_audit_list.addItem("DLP module not available.")
+        except Exception as ex:
+            self.dlp_audit_list.addItem(f"Error loading DLP log: {ex}")
+
+    def _clear_dlp_log(self):
+        """Clear the DLP audit log."""
+        try:
+            from modules.dlp_filter import get_dlp_filter
+            get_dlp_filter().clear_audit()
+        except Exception:
+            pass
+        self.dlp_audit_list.clear()
+        self.dlp_audit_list.addItem("Audit log cleared.")
+
+    # ---------- MCP Interceptor handlers (Phase 7) ----------
+
+    def _refresh_mcp_log(self):
+        """Load the latest MCP interceptor audit entries."""
+        self.mcp_audit_list.clear()
+        try:
+            from modules.mcp_interceptor import get_mcp_interceptor
+            interceptor = get_mcp_interceptor()
+
+            # Stats summary
+            stats = interceptor.get_stats()
+            self.mcp_stats_lbl.setText(
+                f"Total calls: {stats.get('total_calls', 0)} | "
+                f"Blocked: {stats.get('blocked', 0)} | "
+                f"Errors: {stats.get('errors', 0)}"
+            )
+
+            entries = interceptor.get_audit_log(limit=30)
+            if not entries:
+                self.mcp_audit_list.addItem("No tool calls recorded yet.")
+                return
+            for e in reversed(entries):
+                import datetime
+                ts = datetime.datetime.fromtimestamp(e.get("timestamp", 0)).strftime("%H:%M:%S")
+                status = "BLOCKED" if e.get("blocked") else ("ERR" if e.get("error") else "OK")
+                dur = e.get("duration_ms", 0)
+                self.mcp_audit_list.addItem(
+                    f"[{ts}] {status} {e.get('tool', '?')} ({dur:.0f}ms)"
+                )
+        except ImportError:
+            self.mcp_audit_list.addItem("MCP Interceptor module not available.")
+        except Exception as ex:
+            self.mcp_audit_list.addItem(f"Error: {ex}")
+
+    # ---------- YOLO Permission Override handlers (Phase 6) ----------
+
+    def _add_yolo_override(self):
+        """Add a user-defined permission override for the YOLO classifier."""
+        pattern = self.yolo_pattern_input.text().strip()
+        if not pattern:
+            return
+        tier_name = self.yolo_tier_combo.currentText()
+
+        try:
+            from modules.yolo_permission_classifier import YOLOPermissionClassifier, PermissionTier
+            from modules.safety_gate import SafetyGate
+
+            tier_map = {"SAFE": PermissionTier.SAFE, "CONFIRM": PermissionTier.CONFIRM, "DENY": PermissionTier.DENY}
+            tier = tier_map.get(tier_name, PermissionTier.CONFIRM)
+
+            # Try to reach the classifier from the safety gate singleton
+            try:
+                gate = SafetyGate.__new__(SafetyGate)
+                if hasattr(gate, '_yolo_classifier'):
+                    gate._yolo_classifier.add_override(pattern, tier)
+            except Exception:
+                pass
+
+            self.yolo_overrides_list.addItem(f"{pattern} → {tier_name}")
+            self.yolo_pattern_input.clear()
+        except ImportError:
+            self.yolo_overrides_list.addItem("YOLO classifier module not available.")
+        except Exception as ex:
+            self.yolo_overrides_list.addItem(f"Error: {ex}")
+
     def get_settings(self):
         """Return current settings"""
         return getattr(self, 'settings_data', {})

@@ -1264,6 +1264,76 @@ def create_lada_core_tools() -> List[ToolDefinition]:
         permission=PermissionLevel.SAFE,
     ))
     
+    # 9. File Create
+    tools.append(ToolDefinition(
+        name="file_create",
+        description="Create a new file with optional content on the local filesystem.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("path", "string", "File path to create", required=True),
+            ToolParameter("content", "string", "Content to write into the file", default=""),
+            ToolParameter("overwrite", "boolean", "Overwrite if exists", default=False),
+        ],
+        keywords=["create file", "write file", "new file", "make file"],
+        examples=["create a file named hello.txt", "write 'test' to config.ini"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    # 10. File Delete
+    tools.append(ToolDefinition(
+        name="file_delete",
+        description="Delete a file or directory from the local filesystem.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("path", "string", "File or directory path to delete", required=True),
+            ToolParameter("permanent", "boolean", "Permanently delete instead of moving to trash", default=False),
+        ],
+        keywords=["delete file", "remove file", "trash file", "delete folder"],
+        examples=["delete old_logs.txt", "remove the temp folder"],
+        permission=PermissionLevel.DANGEROUS,
+    ))
+    
+    # 11. File Copy
+    tools.append(ToolDefinition(
+        name="file_copy",
+        description="Copy a file or directory to a new destination.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("source", "string", "Source file or directory path", required=True),
+            ToolParameter("destination", "string", "Destination path", required=True),
+        ],
+        keywords=["copy file", "duplicate file", "copy folder"],
+        examples=["copy report.pdf to backup/", "duplicate this folder"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    # 12. File Move
+    tools.append(ToolDefinition(
+        name="file_move",
+        description="Move or rename a file or directory.",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("source", "string", "Source file or directory path", required=True),
+            ToolParameter("destination", "string", "Destination path", required=True),
+        ],
+        keywords=["move file", "rename file", "cut file"],
+        examples=["move image.png to Pictures/", "rename old.txt to new.txt"],
+        permission=PermissionLevel.MODERATE,
+    ))
+    
+    # 13. File Properties
+    tools.append(ToolDefinition(
+        name="file_properties",
+        description="Get properties and metadata of a file or directory (size, modified date, etc).",
+        category=ToolCategory.FILE,
+        parameters=[
+            ToolParameter("path", "string", "File or directory path", required=True),
+        ],
+        keywords=["file info", "file properties", "file size", "file details"],
+        examples=["get info for video.mp4", "check properties of documents folder"],
+        permission=PermissionLevel.SAFE,
+    ))
+
     return tools
 
 

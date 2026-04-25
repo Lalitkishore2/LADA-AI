@@ -79,7 +79,7 @@ class SafetyGate:
     
     def classify_risk(self, action_description: str) -> RiskLevel:
         """
-        Classify risk level of an action.
+        Classify risk level of an action using YOLO Permission Classifier.
         
         Args:
             action_description: Human-readable description of the action
@@ -87,19 +87,32 @@ class SafetyGate:
         Returns:
             RiskLevel enum value
         """
-        desc_lower = action_description.lower()
-        
-        # Check for high risk keywords
-        for keyword in self.high_risk_keywords:
-            if keyword in desc_lower:
+        try:
+            from modules.yolo_permission_classifier import get_yolo_classifier, PermissionTier
+            yolo = get_yolo_classifier()
+            result = yolo.classify(action_description)
+            
+            if result.tier == PermissionTier.DENY:
                 return RiskLevel.HIGH
-        
-        # Check for medium risk keywords
-        for keyword in self.medium_risk_keywords:
-            if keyword in desc_lower:
+            elif result.tier == PermissionTier.CONFIRM:
                 return RiskLevel.MEDIUM
-        
-        return RiskLevel.LOW
+            else:
+                return RiskLevel.LOW
+        except Exception as e:
+            logger.warning(f"Failed to use YOLO classifier, falling back to keywords: {e}")
+            desc_lower = action_description.lower()
+            
+            # Check for high risk keywords
+            for keyword in self.high_risk_keywords:
+                if keyword in desc_lower:
+                    return RiskLevel.HIGH
+            
+            # Check for medium risk keywords
+            for keyword in self.medium_risk_keywords:
+                if keyword in desc_lower:
+                    return RiskLevel.MEDIUM
+            
+            return RiskLevel.LOW
     
     def is_safe(self, action_description: str, context: Optional[Dict] = None) -> bool:
         """

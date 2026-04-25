@@ -33,7 +33,13 @@ import threading
 from io import BytesIO
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Dict, Any
+
+try:
+    from modules.dlp_filter import get_dlp_filter
+    DLP_FILTER_OK = True
+except ImportError:
+    DLP_FILTER_OK = False
 
 # Configure logging
 logging.basicConfig(
@@ -132,6 +138,30 @@ class ScreenCapture:
         buffer = BytesIO()
         image.save(buffer, format=format)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+    @staticmethod
+    def extract_text_blocks(image: Image.Image) -> List[Dict[str, Any]]:
+        """Extract text blocks using pytesseract for DLP redaction."""
+        try:
+            import pytesseract
+            data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+            blocks = []
+            n = len(data["text"])
+            for i in range(n):
+                text = (data["text"][i] or "").strip()
+                if not text or len(text) < 2:
+                    continue
+                blocks.append({
+                    "text": text,
+                    "x": data["left"][i],
+                    "y": data["top"][i],
+                    "width": data["width"][i],
+                    "height": data["height"][i],
+                })
+            return blocks
+        except Exception as e:
+            logger.debug(f"OCR text extraction failed: {e}")
+            return []
 
 
 class AIBackend:
@@ -523,6 +553,15 @@ if QT_OK:
             
             # Show window again
             self.show()
+
+            # Phase 8: DLP Redaction before AI processing
+            if screenshot and DLP_FILTER_OK:
+                blocks = ScreenCapture.extract_text_blocks(screenshot)
+                dlp = get_dlp_filter()
+                # Run text check first to log warnings
+                screenshot, redacted_evts = dlp.redact_image(screenshot, blocks)
+                if redacted_evts:
+                    self.response_area.append(f"⚠️ DLP Filter redacted {len(redacted_evts)} sensitive regions.")
             
             if screenshot is None:
                 self.response_area.setText("❌ Failed to capture screen")
@@ -561,6 +600,14 @@ if QT_OK:
                 time.sleep(0.3)
                 screenshot = ScreenCapture.capture_screen()
                 self.show()
+                
+                # Phase 8: DLP Redaction before AI processing
+                if screenshot and DLP_FILTER_OK:
+                    blocks = ScreenCapture.extract_text_blocks(screenshot)
+                    dlp = get_dlp_filter()
+                    screenshot, redacted_evts = dlp.redact_image(screenshot, blocks)
+                    if redacted_evts:
+                        self.response_area.append(f"⚠️ DLP Filter redacted {len(redacted_evts)} sensitive regions.")
                 
                 if screenshot:
                     self.worker = WorkerThread(self.ai.analyze_screenshot, screenshot, command)

@@ -220,21 +220,23 @@ class ContinuousListener:
     def _listen_loop(self):
         """Main listening loop"""
         try:
-            if self.mic_device_index is None:
-                self.microphone = sr.Microphone()
-            else:
-                try:
-                    self.microphone = sr.Microphone(device_index=self.mic_device_index)
-                except Exception as exc:
-                    logger.warning(f"Configured microphone index {self.mic_device_index} unavailable: {exc}")
+            try:
+                if self.mic_device_index is None:
                     self.microphone = sr.Microphone()
-            
-            # Calibrate for ambient noise
-            with self.microphone as source:
-                logger.info("[Listener] Calibrating for ambient noise...")
-                self.recognizer.adjust_for_ambient_noise(source, duration=1)
-                logger.info(f"[Listener] Energy threshold: {self.recognizer.energy_threshold}")
-            
+                else:
+                    self.microphone = sr.Microphone(device_index=self.mic_device_index)
+                
+                # Calibrate for ambient noise
+                with self.microphone as source:
+                    logger.info("[Listener] Calibrating for ambient noise...")
+                    self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                    logger.info(f"[Listener] Energy threshold: {self.recognizer.energy_threshold}")
+            except Exception as mic_exc:
+                logger.error(f"Microphone initialization failed: {mic_exc}")
+                print(f"[Error] Could not access microphone: {mic_exc}")
+                self.running = False
+                return
+
             while self.running:
                 if self.paused:
                     time.sleep(0.1)

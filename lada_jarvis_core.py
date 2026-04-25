@@ -171,8 +171,9 @@ class JarvisCommandProcessor:
     Integrates NLU, Safety, Memory, and all system modules
     """
     
-    def __init__(self, ai_router=None):
+    def __init__(self, ai_router=None, orchestrator=None):
         """Initialize all subsystems. ai_router: optional shared HybridAIRouter instance"""
+        self.orchestrator = orchestrator
         # System control
         self.system = SystemController() if SYSTEM_OK else None
         

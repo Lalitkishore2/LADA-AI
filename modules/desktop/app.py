@@ -56,6 +56,9 @@ class LadaApp(QMainWindow):
         self.standalone_command_bus = None
         self.standalone_orchestrator = None
 
+        # LADA v12.0 Master Orchestrator (Phase 8)
+        self.v12_orchestrator = None
+
         # Apply saved personality mode before first UI greeting.
         self._apply_saved_personality_mode()
 
@@ -232,6 +235,28 @@ class LadaApp(QMainWindow):
 
     def _deferred_optional_init(self):
         """Initialize optional features after core startup is complete."""
+        
+        # Start LADA v12.0 Master Orchestrator in background
+        try:
+            from modules.orchestrator import get_orchestrator
+            self.v12_orchestrator = get_orchestrator(ai_router=self.router)
+            
+            # Link orchestrator to router and jarvis for context injection
+            if self.router:
+                self.router.orchestrator = self.v12_orchestrator
+            if self.jarvis:
+                self.jarvis.orchestrator = self.v12_orchestrator
+            
+            def _start_v12_orch():
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.v12_orchestrator.initialize())
+            threading.Thread(target=_start_v12_orch, daemon=True).start()
+            print("[LADA] v12.0 Orchestrator starting in background")
+        except Exception as e:
+            logger.warning(f"[LADA] v12.0 Orchestrator init failed: {e}")
+
         # Voice engine
         if VOICE_OK and FreeNaturalVoice:
             try:
@@ -2825,6 +2850,25 @@ class LadaApp(QMainWindow):
             disp = f"[{', '.join(f['name'] for f in files)}]\n{text}" if text else f"[{', '.join(f['name'] for f in files)}]"
         self.chat.add("user", disp)
         self.conv.append({"role": "user", "message": disp})
+
+        # Phase 8: System Orchestrator checks (DLP, YOLO Permissions, Mem0)
+        if self.v12_orchestrator:
+            auth_res = self.v12_orchestrator.check_permission(text)
+            
+            # Mem0 background trace
+            self.v12_orchestrator.add_memory(text)
+
+            if not auth_res.get("safe", True):
+                if auth_res.get("tier") == "deny":
+                    warn_msg = f"⚠️ Command blocked by YOLO safety filter: {auth_res.get('reason')}"
+                    self.chat.add("assistant", warn_msg)
+                    self.conv.append({"role": "assistant", "message": warn_msg})
+                    return
+                elif auth_res.get("dlp_warning"):
+                    warn_msg = "⚠️ Sensitive PII/banking data detected. Operation blocked by DLP."
+                    self.chat.add("assistant", warn_msg)
+                    self.conv.append({"role": "assistant", "message": warn_msg})
+                    return
 
         # Check if this is a long-running autonomous/agent task
         # If so, run it in a background thread to avoid UI freeze

@@ -123,7 +123,7 @@ faster-whisper>=1.0.0            # Fast offline STT (large-v3-turbo support)
 # youtube-transcript-api>=0.6.0  # YouTube transcript extraction
 
 # ============ OPTIONAL: BROWSER (PLAYWRIGHT) ============
-# playwright>=1.40.0             # Chromium automation alternative
+playwright>=1.40.0              # Chromium automation (v12.0 primary driver)
 
 # ============ STEALTH BROWSER ============
 undetected-chromedriver>=3.5.0   # Stealth Chrome automation
@@ -138,6 +138,12 @@ pystray>=0.19.0                  # System tray icon
 
 # ============ MOLTBOT ============
 pyserial>=3.5                    # Serial communication
+
+# ============ LADA v12.0: NEW SUBSYSTEMS ============
+edge-tts>=6.1.0                  # Microsoft Edge TTS (Phase 3 voice pipeline)
+# mem0ai>=0.1.0                  # Mem0 semantic memory (Phase 5, optional)
+# openwakeword>=0.6.0            # Wake-word detection (Phase 3, listed above)
+# faster-whisper>=1.0.0          # Fast STT (Phase 3, listed above)
 
 # ============ TESTING ============
 # pytest>=7.4.0

@@ -221,8 +221,6 @@
       color: var(--text-faint);
     }
 
-    .conv-group {}
-
     .conv-date {
       padding: 6px 16px 2px;
       font-size: 11px;
@@ -2329,6 +2327,52 @@
     .gap-2 {
       gap: 8px
     }
+
+    /* ============================================================
+       DESKTOP PARITY: Command Palette, Context Menu, Toasts
+       ============================================================ */
+    .dp-offline-banner { display: none; position: fixed; top: 0; left: 0; right: 0; background: var(--warn); color: #000; text-align: center; padding: 4px; z-index: 10000; font-size: 13px; font-weight: 600; }
+    
+    .dp-context-menu { position: absolute; background-color: var(--surface2); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); min-width: 180px; z-index: 9999; display: none; flex-direction: column; padding: 6px 0; opacity: 0; transform: scale(0.95); transition: opacity 0.1s, transform 0.1s; }
+    .dp-context-menu.active { display: flex; opacity: 1; transform: scale(1); }
+    .dp-context-item { padding: 8px 16px; display: flex; align-items: center; gap: 10px; cursor: pointer; color: var(--text); font-size: 13px; }
+    .dp-context-item:hover { background-color: var(--surface3); }
+    .dp-context-shortcut { margin-left: auto; color: var(--text-faint); font-size: 0.85em; }
+
+    .dp-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; justify-content: center; align-items: flex-start; padding-top: 15vh; z-index: 9000; opacity: 0; transition: opacity 0.2s; }
+    .dp-modal-overlay.active { display: flex; opacity: 1; backdrop-filter: blur(2px); }
+    .dp-command-palette { background: var(--surface2); width: 100%; max-width: 500px; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 1px solid var(--border); display: flex; flex-direction: column; transform: translateY(-20px); transition: transform 0.3s; overflow: hidden; }
+    .dp-modal-overlay.active .dp-command-palette { transform: translateY(0); }
+    .dp-command-input { width: 100%; padding: 16px 20px; background: transparent; border: none; border-bottom: 1px solid var(--border); color: var(--text); font-size: 1.1em; outline: none; }
+    .dp-command-list { max-height: 300px; overflow-y: auto; padding: 4px 0; }
+    .dp-command-item { padding: 12px 20px; display: flex; align-items: center; gap: 12px; cursor: pointer; }
+    .dp-command-item.selected, .dp-command-item:hover { background-color: var(--surface3); color: var(--accent); }
+
+    .dp-toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 12px; z-index: 9500; }
+    .dp-toast { background: var(--surface2); color: var(--text); padding: 14px 18px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); border: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 250px; animation: dpSlideIn 0.3s ease-out; }
+    .dp-toast.closing { animation: dpSlideOut 0.3s ease-in forwards; }
+    @keyframes dpSlideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes dpSlideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+
+    .dp-sidebar-resizer { width: 5px; cursor: col-resize; background: transparent; position: absolute; right: 0; top: 0; bottom: 0; z-index: 50; transition: background 0.2s; }
+    .dp-sidebar-resizer:hover, .dp-sidebar-resizer.active { background: var(--accent); }
+    #sidebar { position: relative; }
+
+    /* Bulk actions */
+    .dp-bulk-toolbar { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px; display: flex; align-items: center; gap: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); transition: transform 0.4s; z-index: 100; }
+    .dp-bulk-toolbar.visible { transform: translateX(-50%) translateY(0); }
+    .dp-checkbox { margin-right: 8px; width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent); display: none; }
+    .dp-multiselect-mode .dp-checkbox { display: inline-block; }
+
+    /* Canvas Renderer */
+    .render-btn { position: absolute; top: 8px; right: 8px; background: var(--accent); color: #fff; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; z-index: 10; opacity: 0.8; transition: opacity 0.2s; display: flex; align-items: center; gap: 6px; }
+    .render-btn:hover { opacity: 1; }
+    .code-block-wrapper { position: relative; }
+    .code-block-wrapper pre { padding-top: 40px !important; }
+    
+    .canvas-modal-container { width: 90vw; height: 90vh; background: #fff; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
+    .canvas-header { padding: 12px 20px; background: var(--surface2); color: var(--text); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+    .canvas-iframe { flex: 1; border: none; width: 100%; background: #fff; }
   </style>
 </head>
 
@@ -2880,6 +2924,45 @@
     </div>
   </div>
 
+  <!-- DESKTOP PARITY: HTML Templates -->
+  <div id="dp-offline-banner" class="dp-offline-banner">You are currently offline. Local changes will be kept in memory.</div>
+  
+  <div id="dp-context-menu" class="dp-context-menu">
+    <div class="dp-context-item" id="ctx-copy">Copy to clipboard <span class="dp-context-shortcut">Ctrl+C</span></div>
+    <div class="dp-context-item" id="ctx-edit">Edit <span class="dp-context-shortcut">DblClick</span></div>
+    <div style="height:1px; background:var(--border); margin:4px 0;"></div>
+    <div class="dp-context-item" id="ctx-delete" style="color:var(--danger)">Delete <span class="dp-context-shortcut">Del</span></div>
+  </div>
+
+  <div id="dp-command-overlay" class="dp-modal-overlay">
+    <div class="dp-command-palette">
+      <input type="text" id="dp-command-input" class="dp-command-input" placeholder="Search actions (e.g., 'voice', 'export', 'theme')..." autocomplete="off">
+      <div id="dp-command-list" class="dp-command-list"></div>
+    </div>
+  </div>
+
+  <div id="dp-toast-container" class="dp-toast-container"></div>
+
+  <div id="dp-bulk-toolbar" class="dp-bulk-toolbar">
+    <span id="dp-bulk-count">0 selected</span>
+    <button onclick="dpBulkDelete()" style="background:var(--danger); color:#fff; border:none; padding:6px 12px; border-radius:4px;">Delete Selected</button>
+    <button onclick="dpCancelBulk()" style="background:var(--surface3); color:var(--text); border:none; padding:6px 12px; border-radius:4px;">Cancel</button>
+  </div>
+  <div id="dp-sidebar-resizer" class="dp-sidebar-resizer"></div>
+
+  <div id="canvas-overlay" class="dp-modal-overlay">
+    <div class="canvas-modal-container">
+      <div class="canvas-header">
+        <span style="font-weight: 600; display: flex; align-items: center; gap: 8px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+          Web Canvas
+        </span>
+        <button onclick="closeCanvas()" style="background:transparent; color:var(--text); border:none; font-size:24px; cursor:pointer; line-height:1;">&times;</button>
+      </div>
+      <iframe id="canvas-iframe" class="canvas-iframe" sandbox="allow-scripts allow-modals allow-forms allow-same-origin allow-popups"></iframe>
+    </div>
+  </div>
+
   <!-- ══════════════════════ SCRIPTS ══════════════════════ -->
   <script>
     'use strict';
@@ -3059,6 +3142,9 @@
     // ============================================================
     // WEBSOCKET
     // ============================================================
+    let reconnectAttempts = 0;
+    let pongTimeoutTimer = null;
+
     function connectWS() {
       if (ws && ws.readyState === WebSocket.OPEN) return;
       if (!authToken) return;  // Don't connect WS without auth
@@ -3070,9 +3156,18 @@
 
       ws.onopen = () => {
         setWsStatus(true);
+        reconnectAttempts = 0; // Reset backoff on success
         clearInterval(wsPingTimer);
         wsPingTimer = setInterval(() => {
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+            // Start timeout waiting for pong
+            clearTimeout(pongTimeoutTimer);
+            pongTimeoutTimer = setTimeout(() => {
+                console.warn('WebSocket ping timeout. Force closing.');
+                ws.close();
+            }, 10000); // 10 seconds to respond to ping
+          }
         }, 30000);
         // Request models
         wsSend({ type: 'system', id: uid(), data: { action: 'models' } });
@@ -3082,6 +3177,7 @@
       ws.onclose = (e) => {
         setWsStatus(false);
         clearInterval(wsPingTimer);
+        clearTimeout(pongTimeoutTimer);
         // Clear any stuck typing indicator on disconnect
         stopTypingIndicator();
         enableSend(true);
@@ -3093,7 +3189,11 @@
           showLoginScreen();
           return;
         }
-        wsReconnectTimer = setTimeout(connectWS, 3000);
+        // Exponential backoff reconnect
+        let delay = Math.min(30000, 1000 * Math.pow(1.5, reconnectAttempts));
+        reconnectAttempts++;
+        console.log(`WebSocket closed. Reconnecting in ${delay}ms (Attempt ${reconnectAttempts})`);
+        wsReconnectTimer = setTimeout(connectWS, delay);
       };
 
       ws.onerror = () => {
@@ -5438,7 +5538,23 @@
       applyTheme(savedTheme);
 
       // Configure marked
+      const renderer = new marked.Renderer();
+      const originalCode = renderer.code.bind(renderer);
+      renderer.code = function(code, language, isEscaped) {
+        let btnHtml = '';
+        if (language === 'html' || language === 'xml' || language === 'vue' || language === 'react' || language === 'javascript') {
+          // We safely encode the code for inline execution
+          const safeCode = btoa(unescape(encodeURIComponent(code)));
+          btnHtml = `<button class="render-btn" onclick="openCanvas(decodeURIComponent(escape(atob('${safeCode}'))))">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Render
+          </button>`;
+        }
+        return `<div class="code-block-wrapper">${btnHtml}${originalCode(code, language, isEscaped)}</div>`;
+      };
+
       marked.setOptions({
+        renderer: renderer,
         breaks: true,
         gfm: true,
         highlight: (code, lang) => {
@@ -5572,6 +5688,183 @@
         showLoginScreen();
       }
     });
+
+    // ============================================================
+    // DESKTOP PARITY LOGIC
+    // ============================================================
+    const dpState = {
+      isOffline: !navigator.onLine,
+      selectedItems: new Set(),
+      lastSelected: null,
+      contextTarget: null,
+      contextType: null,
+      undoStack: [],
+      sidebarWidth: 272
+    };
+
+    // 1. Offline Mode
+    function dpUpdateOnlineStatus() {
+      dpState.isOffline = !navigator.onLine;
+      document.getElementById('dp-offline-banner').style.display = dpState.isOffline ? 'block' : 'none';
+    }
+    window.addEventListener('online', dpUpdateOnlineStatus);
+    window.addEventListener('offline', dpUpdateOnlineStatus);
+    dpUpdateOnlineStatus();
+
+    // 2. Toasts & Undo
+    function dpShowToast(msg, onUndo = null) {
+      const container = document.getElementById('dp-toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'dp-toast';
+      toast.innerHTML = `<span>${msg}</span>`;
+      if (onUndo) {
+        const btn = document.createElement('button');
+        btn.textContent = 'Undo';
+        btn.style.cssText = 'background:transparent; border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:4px; margin-left:12px; cursor:pointer;';
+        btn.onclick = () => { onUndo(); toast.classList.add('closing'); setTimeout(() => toast.remove(), 300); };
+        toast.appendChild(btn);
+      }
+      container.appendChild(toast);
+      setTimeout(() => { if (toast.parentElement) { toast.classList.add('closing'); setTimeout(() => toast.remove(), 300); } }, onUndo ? 6000 : 3000);
+    }
+
+    // 3. Command Palette
+    function dpOpenPalette(query = '') {
+      document.getElementById('dp-command-overlay').classList.add('active');
+      const input = document.getElementById('dp-command-input');
+      input.value = query;
+      input.focus();
+      dpRenderCommands(query);
+    }
+    function dpClosePalette() { document.getElementById('dp-command-overlay').classList.remove('active'); }
+    
+    function dpRenderCommands(query) {
+      const q = query.toLowerCase();
+      const actions = [
+        { name: 'Toggle Voice Mode', action: typeof toggleVoice === 'function' ? toggleVoice : () => dpShowToast('Voice not initialized') },
+        { name: 'Open Settings', action: typeof openSettings === 'function' ? openSettings : () => dpShowToast('Settings not initialized') },
+        { name: 'New Chat', action: typeof startNewChat === 'function' ? startNewChat : () => dpShowToast('Not initialized') },
+        { name: 'Export Chat to Disk', action: dpExportChat },
+        { name: 'Toggle Dark Theme', action: () => { applyTheme('dark'); dpClosePalette(); } },
+        { name: 'Toggle Light Theme', action: () => { applyTheme('light'); dpClosePalette(); } },
+        { name: 'Toggle Multi-Select Mode', action: () => { document.getElementById('sidebar').classList.toggle('dp-multiselect-mode'); dpClosePalette(); } }
+      ];
+      const filtered = actions.filter(a => a.name.toLowerCase().includes(q));
+      const list = document.getElementById('dp-command-list');
+      list.innerHTML = '';
+      filtered.forEach((cmd, i) => {
+        const div = document.createElement('div');
+        div.className = 'dp-command-item' + (i === 0 ? ' selected' : '');
+        div.textContent = cmd.name;
+        div.onclick = () => { cmd.action(); dpClosePalette(); };
+        div.onmouseover = () => { list.querySelectorAll('.dp-command-item').forEach(x => x.classList.remove('selected')); div.classList.add('selected'); };
+        list.appendChild(div);
+      });
+    }
+
+    document.getElementById('dp-command-input').addEventListener('input', e => dpRenderCommands(e.target.value));
+    document.getElementById('dp-command-input').addEventListener('keydown', e => {
+      const items = Array.from(document.querySelectorAll('.dp-command-item'));
+      let idx = items.findIndex(el => el.classList.contains('selected'));
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (idx < items.length - 1) { if(idx>=0) items[idx].classList.remove('selected'); items[idx+1].classList.add('selected'); items[idx+1].scrollIntoView({block:'nearest'}); } }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); if (idx > 0) { items[idx].classList.remove('selected'); items[idx-1].classList.add('selected'); items[idx-1].scrollIntoView({block:'nearest'}); } }
+      else if (e.key === 'Enter') { e.preventDefault(); if (idx >= 0) items[idx].click(); }
+      else if (e.key === 'Escape') dpClosePalette();
+    });
+
+    document.getElementById('dp-command-overlay').addEventListener('click', e => { if (e.target.id === 'dp-command-overlay') dpClosePalette(); });
+
+    // 4. File System Access API (Export)
+    async function dpExportChat() {
+      if (typeof currentConvId === 'undefined' || !currentConvId) return dpShowToast('No active chat to export');
+      const text = conversations && conversations[currentConvId] ? conversations[currentConvId].messages.map(m => `[${m.role.toUpperCase()}]: ${m.text}`).join('\\n\\n') : '';
+      if (!text) return dpShowToast('Chat is empty');
+      try {
+        if (window.showSaveFilePicker) {
+          const handle = await window.showSaveFilePicker({ suggestedName: `chat-${currentConvId.slice(0,6)}.txt`, types: [{ description: 'Text File', accept: {'text/plain': ['.txt']} }] });
+          const writable = await handle.createWritable();
+          await writable.write(text);
+          await writable.close();
+          dpShowToast('Chat saved to disk natively!', null);
+        } else {
+          const blob = new Blob([text], {type: 'text/plain'});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a'); a.href = url; a.download = `chat-${currentConvId.slice(0,6)}.txt`; a.click();
+          URL.revokeObjectURL(url);
+          dpShowToast('Chat exported', null);
+        }
+      } catch (err) { if (err.name !== 'AbortError') dpShowToast('Export failed', null); }
+    }
+
+    // 5. Context Menu
+    const ctxMenu = document.getElementById('dp-context-menu');
+    document.addEventListener('contextmenu', e => {
+      const msgEl = e.target.closest('.msg');
+      const convEl = e.target.closest('.conv-item');
+      if (!msgEl && !convEl) return;
+      
+      e.preventDefault();
+      dpState.contextTarget = msgEl || convEl;
+      dpState.contextType = msgEl ? 'message' : 'conversation';
+      
+      ctxMenu.style.left = e.clientX + 'px';
+      ctxMenu.style.top = e.clientY + 'px';
+      ctxMenu.classList.add('active');
+    });
+
+    document.addEventListener('click', e => { if (!e.target.closest('#dp-context-menu')) ctxMenu.classList.remove('active'); });
+
+    document.getElementById('ctx-copy').onclick = () => {
+      if (!dpState.contextTarget) return;
+      const text = dpState.contextType === 'message' ? dpState.contextTarget.querySelector('.msg-body').innerText : dpState.contextTarget.innerText;
+      navigator.clipboard.writeText(text);
+      dpShowToast('Copied to clipboard', null);
+      ctxMenu.classList.remove('active');
+    };
+
+    document.getElementById('ctx-delete').onclick = () => {
+      if (!dpState.contextTarget) return;
+      if (dpState.contextType === 'conversation') {
+        const id = dpState.contextTarget.getAttribute('data-id');
+        if(typeof conversations !== 'undefined' && conversations[id]) {
+            const backup = JSON.parse(JSON.stringify(conversations[id]));
+            if(typeof deleteConversation === 'function') deleteConversation(id); // Use existing function
+            dpShowToast('Conversation deleted', () => {
+                // Undo logic
+                conversations[id] = backup;
+                if(typeof saveConversations === 'function') saveConversations();
+                if(typeof loadConversations === 'function') loadConversations();
+                dpShowToast('Restored conversation', null);
+            });
+        }
+      } else {
+        dpState.contextTarget.style.display = 'none';
+        dpShowToast('Message hidden optimistically', () => dpState.contextTarget.style.display = 'flex');
+      }
+      ctxMenu.classList.remove('active');
+    };
+
+    // 6. Sidebar Resizer
+    const resizer = document.getElementById('dp-sidebar-resizer');
+    const sidebar = document.getElementById('sidebar');
+    if(sidebar && resizer) {
+        sidebar.appendChild(resizer);
+        let dpResizing = false;
+        resizer.addEventListener('mousedown', e => { dpResizing = true; resizer.classList.add('active'); document.body.style.cursor = 'col-resize'; e.preventDefault(); });
+        document.addEventListener('mousemove', e => {
+          if (!dpResizing) return;
+          const newWidth = Math.max(200, Math.min(e.clientX, 600));
+          document.documentElement.style.setProperty('--sidebar-w', newWidth + 'px');
+        });
+        document.addEventListener('mouseup', () => { dpResizing = false; resizer.classList.remove('active'); document.body.style.cursor = ''; });
+    }
+
+    // Overriding Global Keydown for ? (Help) shortcut
+    document.addEventListener('keydown', e => {
+      // ? for help
+      if (e.key === '?' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') { dpOpenPalette('help'); }
+    }, {capture: true});
+
   </script>
 </body>
 

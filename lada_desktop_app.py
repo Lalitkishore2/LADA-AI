@@ -286,6 +286,16 @@ except Exception as e:
     REMOTE_BRIDGE_OK = False
     print(f"[LADA] Remote bridge not loaded: {e}")
 
+# LADA v12.0 - Voice Pipeline Router (Phase 3)
+try:
+    from modules.voice_pipeline import VoicePipelineRouter, get_voice_pipeline
+    VOICE_PIPELINE_OK = True
+except Exception as e:
+    VoicePipelineRouter = None
+    get_voice_pipeline = None
+    VOICE_PIPELINE_OK = False
+    print(f"[LADA] VoicePipelineRouter not loaded: {e}")
+
 
 # ============ Settings Dialog ============
 
@@ -338,6 +348,14 @@ def main():
     sys.excepthook = _log_uncaught_exception
     if hasattr(threading, 'excepthook'):
         threading.excepthook = _log_thread_exception
+
+    # Fix Windows console encoding for unicode/emoji output
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
     app.setStyle('Fusion')

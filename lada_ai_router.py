@@ -115,6 +115,15 @@ except ImportError:
     get_tool_registry = None
     logger.warning("Tool registry not available")
 
+# Mem0 semantic memory (Phase 5)
+try:
+    from modules.mem0_adapter import Mem0Adapter, get_mem0_adapter
+    MEM0_OK = True
+except ImportError:
+    MEM0_OK = False
+    get_mem0_adapter = None
+    logger.warning("Mem0 adapter not available")
+
 
 class HybridAIRouter:
     """
@@ -129,8 +138,9 @@ class HybridAIRouter:
     - Response caching for first-message queries
     """
 
-    def __init__(self):
+    def __init__(self, orchestrator: Optional[Any] = None):
         """Initialize the AI Router"""
+        self.orchestrator = orchestrator
 
         # Current backend tracking (for self-awareness in responses)
         self.current_backend_name = "Auto"
@@ -143,12 +153,22 @@ class HybridAIRouter:
             "- When asked 'which model' or 'what AI': Say you're LADA using [current backend].\n"
             "- You CAN control the system: volume, brightness, apps, screenshots, browser.\n"
             "- You CAN search the web for real-time data when needed.\n"
+            "- Do not answer from memory. Use the web search tool first for any query related to current events, weather, or real-time data.\n"
             "- You know today's date and can use it in responses.\n\n"
             "EXECUTION MINDSET (MOST IMPORTANT):\n"
             "- When the user gives you a COMMAND or TASK to perform, execute it directly. "
             "NEVER give step-by-step instructions for the user to follow themselves.\n"
             "- If the user says 'open chrome', 'create a folder', 'play music', 'find my location' - "
             "respond with what you DID, not how they should do it. Say 'Done. Chrome is open.' not 'To open Chrome, click...'.\n"
+            "You have access to a suite of system tools to control the host OS.\n"
+            "If the user asks you to perform an action (e.g., 'turn up volume', 'take a screenshot', 'search the web'),\n"
+            "you MUST output exactly one JSON object representing the tool call, and nothing else.\n"
+            "For example: {\"tool\": \"set_volume\", \"parameters\": {\"level\": 30}}\n"
+            "\n"
+            "CRITICAL SEARCH INSTRUCTION:\n"
+            "Do not answer queries regarding current events or factual data from memory. You MUST use the `web_search` tool first.\n"
+            "\n"
+            "If you are not executing a system command or search, respond naturally using the user's preferred format."
             "- Only give instructions when the user explicitly asks HOW to do something themselves.\n"
             "- For tasks you cannot directly execute (e.g., physical actions): clearly state that and offer an alternative.\n\n"
             "PERSONALITY (LADA voice):\n"
@@ -260,6 +280,15 @@ class HybridAIRouter:
             except Exception as e:
                 logger.warning(f"[Router] Could not wire tool handlers: {e}")
 
+        # Mem0 semantic memory (Phase 5)
+        self.mem0 = None
+        if MEM0_OK and callable(get_mem0_adapter):
+            try:
+                self.mem0 = get_mem0_adapter(user_id="default", agent_id="lada")
+                logger.info(f"[Router] Mem0 adapter active ({self.mem0.get_stats().get('backend', '?')} backend)")
+            except Exception as e:
+                logger.warning(f"[Router] Mem0 init failed: {e}")
+
         logger.info("[Router] HybridAIRouter initialized")
 
     # ============================================================
@@ -351,7 +380,8 @@ class HybridAIRouter:
         self._current_web_context = web_context
 
         # Route through ProviderManager
-        response = self._query_via_provider_manager(prompt, web_context, forced_model=model)
+        images = kwargs.get('images', None)
+        response = self._query_via_provider_manager(prompt, web_context, forced_model=model, images=images)
 
         if response:
             logger.info(f"[Router] Response via {self.current_backend_name}")
@@ -484,7 +514,7 @@ class HybridAIRouter:
             "Choose another model or use Auto routing."
         )
 
-    def _query_via_provider_manager(self, prompt: str, web_context: str = "", forced_model: Optional[str] = None) -> Optional[str]:
+    def _query_via_provider_manager(self, prompt: str, web_context: str = "", forced_model: Optional[str] = None, images: List[str] = None) -> Optional[str]:
         """
         Route a query through the ProviderManager.
         Returns AI response or None if all providers fail.
@@ -503,6 +533,16 @@ class HybridAIRouter:
                 except Exception:
                     pass
 
+            # Mem0 semantic memory context (Phase 5)
+            mem0_context = ""
+            if self.mem0:
+                try:
+                    mem0_ctx = self.mem0.build_context_prompt(prompt, max_memories=5)
+                    if mem0_ctx:
+                        mem0_context = f"\n\n{mem0_ctx}"
+                except Exception:
+                    pass
+
             rag_context = ""
             if self._vector_ok and self.rag_engine:
                 try:
@@ -513,7 +553,26 @@ class HybridAIRouter:
                 except Exception:
                     pass
 
-            augmented_context = web_context + memory_context + rag_context
+            # Master Orchestrator context (v12.0)
+            orch_context = ""
+            if self.orchestrator:
+                # 1. Browser context (CrossTab)
+                if hasattr(self.orchestrator, 'cross_tab') and self.orchestrator.cross_tab:
+                    try:
+                        tabs = self.orchestrator.cross_tab.get_active_tabs()
+                        if tabs:
+                            orch_context += f"\n\n[Open Browser Tabs]\n{json.dumps(tabs, indent=2)}"
+                    except Exception: pass
+                
+                # 2. Use orchestrator's Mem0 if available
+                if hasattr(self.orchestrator, 'mem0') and self.orchestrator.mem0:
+                    try:
+                        orch_mem0 = self.orchestrator.mem0.build_context_prompt(prompt, max_memories=5)
+                        if orch_mem0:
+                            mem0_context = f"\n\n{orch_mem0}"
+                    except Exception: pass
+
+            augmented_context = web_context + memory_context + mem0_context + rag_context + orch_context
 
             model_id = None
             provider = None
@@ -540,11 +599,13 @@ class HybridAIRouter:
                     provider = self.provider_manager.get_provider_for_model(model_id)
 
             if not provider:
-                # Fallback to high-level query (no tool loop)
+                # Send to ProviderManager
                 response = self.provider_manager.query(
-                    prompt, model_id=model_id,
+                    prompt,
+                    model_id=model_id,
                     system_prompt=self.system_prompt,
                     web_context=augmented_context,
+                    images=images
                 )
                 if response.success and response.content:
                     provider_name = response.provider or "Unknown"
@@ -556,7 +617,7 @@ class HybridAIRouter:
 
             # Build message list
             messages = self.provider_manager._build_messages(
-                prompt, self.system_prompt, augmented_context
+                prompt, self.system_prompt, augmented_context, images=images
             )
 
             # Apply context window management
@@ -581,14 +642,36 @@ class HybridAIRouter:
 
             # Tool execution loop (max 3 rounds)
             rounds = 0
-            while response.tool_calls and rounds < 3 and self.tool_registry:
+            while rounds < 3 and self.tool_registry:
+                tool_calls_to_process = response.tool_calls or []
+                
+                # Fallback: if no native tool calls, check if content is a JSON tool call
+                if not tool_calls_to_process and response.content:
+                    text_content = response.content.strip()
+                    if text_content.startswith('{') and text_content.endswith('}'):
+                        try:
+                            parsed_json = json.loads(text_content)
+                            if 'name' in parsed_json and 'parameters' in parsed_json:
+                                tool_calls_to_process.append({
+                                    "id": f"call_fallback_{rounds}",
+                                    "function": {
+                                        "name": parsed_json['name'],
+                                        "arguments": json.dumps(parsed_json['parameters'])
+                                    }
+                                })
+                        except json.JSONDecodeError:
+                            pass
+
+                if not tool_calls_to_process:
+                    break
+
                 rounds += 1
                 messages.append({
                     "role": "assistant",
                     "content": response.content or "",
-                    "tool_calls": response.tool_calls,
+                    "tool_calls": tool_calls_to_process,
                 })
-                for call in response.tool_calls:
+                for call in tool_calls_to_process:
                     fn_name = call.get("function", {}).get("name", "")
                     fn_args_raw = call.get("function", {}).get("arguments", "{}")
                     call_id = call.get("id", f"call_{fn_name}")
@@ -634,6 +717,16 @@ class HybridAIRouter:
                 except Exception:
                     pass
 
+            # Mem0 semantic memory context (Phase 5)
+            mem0_context = ""
+            if self.mem0:
+                try:
+                    mem0_ctx = self.mem0.build_context_prompt(prompt, max_memories=5)
+                    if mem0_ctx:
+                        mem0_context = f"\n\n{mem0_ctx}"
+                except Exception:
+                    pass
+
             rag_context = ""
             if self._vector_ok and self.rag_engine:
                 try:
@@ -644,7 +737,26 @@ class HybridAIRouter:
                 except Exception:
                     pass
 
-            augmented_context = web_context + memory_context + rag_context
+            # Master Orchestrator context (v12.0)
+            orch_context = ""
+            if self.orchestrator:
+                # 1. Browser context (CrossTab)
+                if hasattr(self.orchestrator, 'cross_tab') and self.orchestrator.cross_tab:
+                    try:
+                        tabs = self.orchestrator.cross_tab.get_active_tabs()
+                        if tabs:
+                            orch_context += f"\n\n[Open Browser Tabs]\n{json.dumps(tabs, indent=2)}"
+                    except Exception: pass
+                
+                # 2. Use orchestrator's Mem0 if available
+                if hasattr(self.orchestrator, 'mem0') and self.orchestrator.mem0:
+                    try:
+                        orch_mem0 = self.orchestrator.mem0.build_context_prompt(prompt, max_memories=5)
+                        if orch_mem0:
+                            mem0_context = f"\n\n{orch_mem0}"
+                    except Exception: pass
+
+            augmented_context = web_context + memory_context + mem0_context + rag_context + orch_context
 
             model_id = None
 
@@ -722,13 +834,23 @@ class HybridAIRouter:
             logger.warning(f"[Router] ProviderManager stream failed: {e}")
 
     def _store_in_vector_memory(self, prompt: str, response: str):
-        """Store conversation exchange in vector memory for future retrieval."""
+        """Store conversation exchange in vector memory and Mem0 for future retrieval."""
         if self._vector_ok and self.vector_memory and response:
             try:
                 self.vector_memory.store(
                     f"User: {prompt}\nAssistant: {response}",
                     memory_type="conversation", importance=0.6,
                     source="conversation", tags=["dialog"],
+                )
+            except Exception:
+                pass
+
+        # Persist in Mem0 semantic memory (Phase 5)
+        if self.mem0 and response:
+            try:
+                self.mem0.add(
+                    f"User asked: {prompt}\nLADA responded: {response[:500]}",
+                    metadata={"type": "conversation"},
                 )
             except Exception:
                 pass

@@ -12,6 +12,20 @@ echo.
 
 cd /d "%~dp0"
 
+REM Ensure UTF-8 encoding for all processes
+set PYTHONIOENCODING=utf-8
+
+REM Check if port 5000 is already in use
+netstat -ano | findstr :5000 > nul
+if %errorlevel% == 0 (
+    echo.
+    echo [ERROR] Port 5000 is already in use!
+    echo Please close any other LADA instances or applications using port 5000.
+    echo.
+    pause
+    exit /b
+)
+
 REM Start Web UI server in background (headless)
 start "LADA WebUI Server" /min cmd /c "python lada_webui.py --no-browser"
 
