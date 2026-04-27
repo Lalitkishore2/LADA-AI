@@ -137,7 +137,7 @@ class LADAAPIServer:
             path = request.url.path
             public_paths = [
                 "/auth/login", "/health", "/docs", "/redoc", "/openapi.json",
-                "/app", "/dashboard",
+                "/app", "/dashboard", "/models", "/providers/status",
             ]
             if any(path == p or path.startswith(p + "/") for p in public_paths):
                 return _with_request_id(await call_next(request))

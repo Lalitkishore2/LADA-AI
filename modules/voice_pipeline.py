@@ -51,6 +51,15 @@ try:
 except ImportError:
     PYTTSX3_OK = False
 
+# sounddevice replaces pyaudio for cross-Python-version audio capture
+try:
+    import sounddevice as sd
+    import soundfile as sf
+    import numpy as np
+    SOUNDDEVICE_OK = True
+except ImportError:
+    SOUNDDEVICE_OK = False
+
 
 class PipelineStage(Enum):
     IDLE = "idle"
@@ -247,15 +256,16 @@ class VoicePipelineRouter:
             return None
 
         try:
-            import io
-            import numpy as np
-
-            # Convert bytes to numpy float32 array
-            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            # Convert bytes to numpy float32 array (works with sounddevice output)
+            if SOUNDDEVICE_OK:
+                audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            else:
+                import numpy as _np
+                audio_np = _np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
 
             segments, _ = self._stt_model.transcribe(
                 audio_np,
-                beam_size=1,  # Speed over accuracy for real-time
+                beam_size=1,        # Speed over accuracy for real-time
                 language="en",
                 vad_filter=True,
                 vad_parameters=dict(
@@ -270,6 +280,32 @@ class VoicePipelineRouter:
         except Exception as e:
             logger.error(f"[Voice] STT error: {e}")
             return None
+
+    def record_from_mic(self, duration: float = None) -> bytes:
+        """
+        Record audio from the microphone using sounddevice.
+        Returns raw int16 PCM bytes for use with _transcribe().
+        Falls back gracefully if sounddevice is not available.
+        """
+        if not SOUNDDEVICE_OK:
+            logger.error("[Voice] sounddevice not available for mic recording")
+            return b""
+
+        listen_secs = duration or self.config.max_listen_seconds
+        sr = self.config.sample_rate
+        try:
+            logger.info(f"[Voice] Recording {listen_secs}s from mic (sounddevice)...")
+            recording = sd.rec(
+                int(listen_secs * sr),
+                samplerate=sr,
+                channels=1,
+                dtype="int16",
+                blocking=True,
+            )
+            return recording.tobytes()
+        except Exception as e:
+            logger.error(f"[Voice] Mic recording error: {e}")
+            return b""
 
     async def _handle_intent(self, transcript: str) -> str:
         """Route transcript to intent handler or return default."""

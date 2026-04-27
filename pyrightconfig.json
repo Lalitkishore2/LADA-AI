@@ -1,0 +1,12 @@
+{
+  "include": ["."],
+  "exclude": ["node_modules", "__pycache__", "src", "ui", "dist", "jarvis_env"],
+  "extraPaths": ["."],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Windows",
+  "venvPath": ".",
+  "venv": "jarvis_env",
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none",
+  "reportMissingImports": "none"
+}

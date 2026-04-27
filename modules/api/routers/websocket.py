@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 WS_MAX_MESSAGE_SIZE = int(os.getenv("LADA_WS_MAX_MESSAGE_SIZE", "65536"))  # 64KB default
 WS_MAX_CONNECTIONS_PER_IP = int(os.getenv("LADA_WS_MAX_CONN_PER_IP", "5"))
 WS_IDLE_TIMEOUT = int(os.getenv("LADA_WS_IDLE_TIMEOUT", "300"))  # 5 minutes
+WS_RECEIVE_TIMEOUT = int(os.getenv("LADA_WS_RECEIVE_TIMEOUT", "90"))
 WS_MESSAGE_RATE_LIMIT = int(os.getenv("LADA_WS_MSG_RATE_LIMIT", "30"))  # messages per minute
+WS_KEEPALIVE_INTERVAL = int(os.getenv("LADA_WS_KEEPALIVE_INTERVAL", "30"))
 
 # Protocol v1.0 feature flags
 WS_PROTOCOL_ENABLED = os.getenv("LADA_WS_PROTOCOL_ENABLED", "1").lower() in ("1", "true", "yes")
@@ -110,6 +112,32 @@ def _extract_ws_auth_token(websocket: WebSocket) -> str:
         if bearer_token:
             return bearer_token
     return (websocket.query_params.get("token", "") or "").strip()
+
+
+def _validate_ws_session_token(state, token: str) -> bool:
+    """Validate websocket session token with a JWT fallback for out-of-sync token stores."""
+    if state.validate_session_token(token):
+        return True
+
+    if not token:
+        return False
+
+    try:
+        payload = state._decode_and_verify_session_jwt(token)
+    except Exception:
+        return False
+
+    if payload.get("sub") != "session":
+        return False
+
+    if payload.get("iss") != getattr(state, "_jwt_issuer", None):
+        return False
+
+    exp_claim = payload.get("exp")
+    if not isinstance(exp_claim, int):
+        return False
+
+    return time.time() <= exp_claim
 
 
 def _get_protocol_validator():
@@ -686,7 +714,7 @@ def create_ws_router(state):
             reserved = True
             
             token = _extract_ws_auth_token(websocket)
-            if not state.validate_session_token(token):
+            if not _validate_ws_session_token(state, token):
                 if reserved:
                     _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
                     reserved = False
@@ -716,12 +744,13 @@ def create_ws_router(state):
             'protocol_session': None,  # Protocol v1.0 session state
             'granted_scopes': [],  # Protocol v1.0 scopes
         }
-        logger.info(f"[WS] Client connected: {session_id} from {client_ip} ({connect_request_id})")
+        logger.info(f"[WS] WebSocket connected: {session_id} from {client_ip} ({connect_request_id})")
 
         # Protocol v1.0 handshake (optional, backward compatible)
         protocol_session = None
         validator = _get_protocol_validator()
         session_cleaned = False
+        keepalive_task = None
 
         def _cleanup_ws_session():
             nonlocal session_cleaned
@@ -753,6 +782,29 @@ def create_ws_router(state):
                     state.ws_approval_subscription_filters.pop(session_id, None)
 
             session_cleaned = True
+
+        async def _keepalive_loop():
+            """Send ping frames often enough to detect dead clients early."""
+            while True:
+                await asyncio.sleep(WS_KEEPALIVE_INTERVAL)
+                live_session = state.ws_sessions.get(session_id)
+                if not live_session:
+                    return
+                try:
+                    await websocket.send_json({
+                        "type": "ping",
+                        "data": {"request_id": live_session.get("request_id", connect_request_id)},
+                    })
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning(f"[WS] Keepalive failed for {session_id}: {type(exc).__name__}")
+                    _cleanup_ws_session()
+                    try:
+                        await websocket.close(code=1006, reason="Keepalive failed")
+                    except Exception:
+                        pass
+                    return
         
         if validator and WS_PROTOCOL_ENABLED:
             try:
@@ -870,6 +922,7 @@ def create_ws_router(state):
             })
 
         try:
+            keepalive_task = asyncio.create_task(_keepalive_loop())
 
             while True:
                 # Get live session object (not stale copy)
@@ -889,7 +942,7 @@ def create_ws_router(state):
                 try:
                     raw = await asyncio.wait_for(
                         websocket.receive_text(),
-                        timeout=60  # Check idle every minute
+                        timeout=WS_RECEIVE_TIMEOUT
                     )
                 except asyncio.TimeoutError:
                     continue  # Loop back to check idle timeout
@@ -1009,6 +1062,9 @@ def create_ws_router(state):
 
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong", "data": {"request_id": msg_request_id}})
+                elif msg_type == "pong":
+                    # Keepalive response received from client
+                    continue
                 elif msg_type == "chat":
                     asyncio.create_task(
                         _handle_chat(
@@ -1090,8 +1146,14 @@ def create_ws_router(state):
         except WebSocketDisconnect:
             logger.info(f"[WS] Client disconnected: {session_id}")
         except Exception as e:
-            logger.error(f"[WS] Error for {session_id}: {e}")
+            logger.exception(f"[WS] Error for {session_id}")
         finally:
+            if keepalive_task is not None:
+                keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except (Exception, asyncio.CancelledError):
+                    pass
             _cleanup_ws_session()
 
     @r.websocket("/agent")
@@ -1108,7 +1170,7 @@ def create_ws_router(state):
             _connections_per_ip[client_ip] += 1
             reserved = True
             token = _extract_ws_auth_token(websocket)
-            if not state.validate_session_token(token):
+            if not _validate_ws_session_token(state, token):
                 _connections_per_ip[client_ip] = max(0, _connections_per_ip[client_ip] - 1)
                 reserved = False
                 await websocket.close(code=4001, reason="Authentication required")

@@ -352,8 +352,9 @@ def main():
     # Fix Windows console encoding for unicode/emoji output
     if sys.platform == "win32":
         try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+            from modules.console_encoding import configure_console_utf8
+
+            configure_console_utf8()
         except Exception:
             pass
 

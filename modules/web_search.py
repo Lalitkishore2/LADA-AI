@@ -191,13 +191,47 @@ class WebSearchEngine:
             return {'success': False, 'error': str(e), 'query': query}
 
     def _search_duckduckgo(self, query: str) -> Dict[str, Any]:
-        """Search using duckduckgo_search library for reliable live results"""
+        """Search using ddgs (DuckDuckGo Search) library for reliable live results."""
+        # Try modern ddgs package first (replaces deprecated duckduckgo_search)
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
             
-            logger.info(f"[WebSearch] Using DDGS for: {query[:50]}")
+            logger.info(f"[WebSearch] Using ddgs for: {query[:50]}")
             
             with DDGS() as ddgs:
+                ddgs_results = list(ddgs.text(query, max_results=5))
+            
+            if not ddgs_results:
+                return {'success': False, 'query': query, 'error': 'No results found'}
+                
+            results = []
+            for r in ddgs_results:
+                results.append({
+                    'title': r.get('title', ''),
+                    'snippet': r.get('body', ''),
+                    'url': r.get('href', '')
+                })
+                
+            return {
+                'success': True,
+                'query': query,
+                'source': 'DuckDuckGo Live Search',
+                'results': results,
+                'summary': results[0]['snippet'] if results else None
+            }
+        except ImportError:
+            pass
+        
+        # Fallback to legacy duckduckgo_search if ddgs not installed
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                from duckduckgo_search import DDGS as LegacyDDGS
+            
+            logger.info(f"[WebSearch] Using duckduckgo_search (legacy) for: {query[:50]}")
+            
+            with LegacyDDGS() as ddgs:
                 ddgs_results = list(ddgs.text(query, max_results=5))
             
             if not ddgs_results:

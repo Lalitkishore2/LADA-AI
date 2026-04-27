@@ -6,6 +6,7 @@ import os
 import shutil
 import zipfile
 import json
+import fnmatch
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 from datetime import datetime, timedelta
@@ -275,7 +276,9 @@ class FileSystemController:
                     max_size: int = None,
                     date_after: datetime = None,
                     date_before: datetime = None,
-                    recursive: bool = True) -> Dict[str, Any]:
+                    recursive: bool = True,
+                    max_depth: int = 3,
+                    max_results: int = 200) -> Dict[str, Any]:
         """
         Advanced file search with filters
         
@@ -286,6 +289,8 @@ class FileSystemController:
             min_size, max_size: File size in bytes
             date_after, date_before: Date range
             recursive: Search subdirectories
+            max_depth: Maximum recursion depth (default: 3)
+            max_results: Maximum number of files to return
         
         Returns:
             {'found': 25, 'files': [...], 'search_time': 0.5}
@@ -297,37 +302,91 @@ class FileSystemController:
             
             results = []
             pattern = f"*{name or ''}*" if name else "*"
-            
-            # Search
-            for file_path in search_dir.rglob(pattern) if recursive else search_dir.glob(pattern):
-                # Skip if not file
-                if not file_path.is_file():
-                    continue
+
+            # Keep search bounded for broad folders on Windows.
+            safe_max_results = max(1, int(max_results))
+            safe_max_depth = max(0, int(max_depth))
+
+            if recursive:
+                base_depth = len(search_dir.parts)
+
+                for root, dirs, files in os.walk(search_dir, topdown=True, onerror=lambda _e: None):
+                    root_path = Path(root)
+                    current_depth = len(root_path.parts) - base_depth
+                    if current_depth >= safe_max_depth:
+                        dirs[:] = []
+
+                    for filename in files:
+                        if not fnmatch.fnmatch(filename, pattern):
+                            continue
+
+                        file_path = root_path / filename
+                        if not file_path.is_file():
+                            continue
+
+                        # Check extension
+                        if extension and file_path.suffix.lower() != extension.lower():
+                            continue
+
+                        # Check size
+                        size = file_path.stat().st_size
+                        if min_size and size < min_size:
+                            continue
+                        if max_size and size > max_size:
+                            continue
+
+                        # Check date
+                        mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                        if date_after and mtime < date_after:
+                            continue
+                        if date_before and mtime > date_before:
+                            continue
+
+                        results.append({
+                            'path': str(file_path),
+                            'size': size,
+                            'modified': mtime.isoformat(),
+                            'extension': file_path.suffix
+                        })
+
+                        if len(results) >= safe_max_results:
+                            break
+
+                    if len(results) >= safe_max_results:
+                        break
+            else:
+                for file_path in search_dir.glob(pattern):
+                    # Skip if not file
+                    if not file_path.is_file():
+                        continue
                 
-                # Check extension
-                if extension and not str(file_path).endswith(extension):
-                    continue
+                    # Check extension
+                    if extension and file_path.suffix.lower() != extension.lower():
+                        continue
                 
-                # Check size
-                size = file_path.stat().st_size
-                if min_size and size < min_size:
-                    continue
-                if max_size and size > max_size:
-                    continue
+                    # Check size
+                    size = file_path.stat().st_size
+                    if min_size and size < min_size:
+                        continue
+                    if max_size and size > max_size:
+                        continue
                 
-                # Check date
-                mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                if date_after and mtime < date_after:
-                    continue
-                if date_before and mtime > date_before:
-                    continue
+                    # Check date
+                    mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                    if date_after and mtime < date_after:
+                        continue
+                    if date_before and mtime > date_before:
+                        continue
                 
-                results.append({
-                    'path': str(file_path),
-                    'size': size,
-                    'modified': mtime.isoformat(),
-                    'extension': file_path.suffix
-                })
+                    results.append({
+                        'path': str(file_path),
+                        'size': size,
+                        'modified': mtime.isoformat(),
+                        'extension': file_path.suffix
+                    })
+
+                    if len(results) >= safe_max_results:
+                        break
             
             self.last_search_results = results
             logger.info(f"Found {len(results)} files")

@@ -1,8 +1,10 @@
 # LADA - Language Agnostic Digital Assistant
-# Python 3.11+ Required
+# Python 3.14+ Compatible (verified 2026-04)
 #
 # Install: pip install -r requirements.txt
 # Post-install: python -m spacy download en_core_web_sm
+# Note: pyaudio and pygame are NOT installable on Python 3.14 without
+#       Microsoft C++ Build Tools. Use sounddevice+soundfile instead.
 
 # ============ CORE ============
 python-dotenv>=1.0.0
@@ -18,11 +20,16 @@ google-genai>=1.0.0              # Google Gemini API (new SDK)
 # ollama>=0.1.18                  # Optional: Ollama Python client
 
 # ============ VOICE ============
-pyttsx3>=2.90                    # Offline text-to-speech
-SpeechRecognition>=3.10.0        # Speech-to-text
-gTTS>=2.4.0                     # Google text-to-speech (online)
-pygame>=2.5.2                   # Audio playback for gTTS
-openwakeword>=0.6.0             # Local offline wake word detection (optional)
+pyttsx3>=2.90                    # Offline text-to-speech (sapi5 on Windows)
+SpeechRecognition>=3.10.0        # Speech-to-text (wraps Google/Whisper)
+gTTS>=2.4.0                      # Google text-to-speech (online, natural)
+# pygame>=2.5.2                  # Audio playback — NOT buildable on Python 3.14+
+#                                  Use sounddevice+soundfile instead (see below)
+sounddevice>=0.4.0               # Cross-version audio I/O (replaces pyaudio + pygame)
+soundfile>=0.12.0                # Audio file read/write (WAV, MP3 via libsndfile)
+openwakeword>=0.6.0              # Local offline wake word detection
+# pyaudio>=0.2.13               # NOT buildable on Python 3.14 without MSVC
+#                                  Use sounddevice instead
 
 # ============ SYSTEM CONTROL ============
 pycaw>=20181226                  # Windows audio control
@@ -89,9 +96,11 @@ pandas>=2.0.3                    # Data analysis, CSV export
 # sentence-transformers>=2.2.2   # Embedding models (requires PyTorch)
 
 # ============ OPTIONAL: ADVANCED VOICE ============
-faster-whisper>=1.0.0            # Fast offline STT (large-v3-turbo support)
-# openai-whisper>=20231117       # OpenAI Whisper STT (fallback)
-# pydub>=0.25.1                  # Audio manipulation
+faster-whisper>=1.0.0            # Fast offline STT (base.en model default)
+edge-tts>=6.1.0                  # Microsoft Edge Neural TTS (en-US-AriaNeural)
+# openai-whisper>=20231117       # OpenAI Whisper STT (alternative to faster-whisper)
+# pydub>=0.25.1                  # Audio manipulation (not needed if using sounddevice)
+# pyaudio>=0.2.13                # SKIP on Python 3.14+ — not buildable without MSVC
 
 # ============ OPTIONAL: XTTS-v2 TTS ============
 # TTS>=0.21.0                    # Coqui XTTS-v2 (voice cloning, 17 languages)
@@ -99,7 +108,8 @@ faster-whisper>=1.0.0            # Fast offline STT (large-v3-turbo support)
 # torchaudio>=2.0.0              # Audio processing
 
 # ============ OPTIONAL: VISION & OCR ============
-# opencv-python>=4.8.0           # Computer vision
+opencv-python>=4.8.0           # Computer vision
+pygetwindow>=0.0.9             # Window management
 # pytesseract>=0.3.10            # OCR text extraction
 
 # ============ OPTIONAL: AI PROVIDERS ============

@@ -14,6 +14,8 @@ queryable registry that supports 22+ providers and 700+ models.
 import os
 import json
 import logging
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
@@ -145,7 +147,11 @@ class ModelRegistry:
         result = {}
         for pid, prov in self.providers.items():
             if prov.local:
-                result[pid] = True  # local providers always "available" (checked at runtime)
+                if pid == 'ollama-local':
+                    local_url = os.getenv('LOCAL_OLLAMA_URL', 'http://localhost:11434').strip() or 'http://localhost:11434'
+                    result[pid] = self._probe_ollama_local(local_url)
+                else:
+                    result[pid] = True
             else:
                 # Check if all required config keys are set
                 result[pid] = all(
@@ -154,6 +160,27 @@ class ModelRegistry:
                 )
         self._available_providers = result
         return result
+
+    def _probe_ollama_local(self, base_url: str) -> bool:
+        """Check whether a local Ollama endpoint is reachable."""
+        if not base_url:
+            return False
+
+        candidates = []
+        normalized = base_url.rstrip('/')
+        candidates.append(f"{normalized}/api/tags")
+        candidates.append(normalized)
+
+        for url in candidates:
+            try:
+                request = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(request, timeout=1.5) as response:
+                    return 200 <= getattr(response, 'status', 200) < 500
+            except (urllib.error.URLError, TimeoutError, OSError):
+                continue
+            except Exception:
+                continue
+        return False
 
     def get_model(self, model_id: str) -> Optional[ModelEntry]:
         """Get a model by its ID"""

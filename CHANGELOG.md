@@ -76,6 +76,13 @@ Docs: https://docs.lada.ai
 - Agents/model fallback: classify minimal HTTP 404 API errors (for example `404 status code (no body)`) as `model_not_found` so assistant failures throw into the fallback chain instead of stopping at the first fallback candidate. (#62119) Thanks @neeravmakwana.
 - Providers/Mistral: send `reasoning_effort` for `mistral/mistral-small-latest` (Mistral Small 4) with thinking-level mapping, and mark the catalog entry as reasoning-capable so adjustable reasoning matches Mistral’s Chat Completions API. (#62162) Thanks @neeravmakwana.
 - OpenAI TTS/Groq: send `wav` to Groq-compatible speech endpoints, honor explicit `responseFormat` overrides on OpenAI-compatible paths, and only mark voice-note output as voice-compatible when the actual format is `opus`. (#62233) Thanks @neeravmakwana.
+- Web app/markdown: restore assistant markdown rendering with sanitized HTML and code highlighting in the legacy `/app` shell.
+- Web app/theme: fix theme switching so manual theme changes consistently update the document theme state and persisted settings.
+- Providers UI: stop infinite loading in the Providers tab by adding backend timeout protection plus frontend retry/fallback behavior.
+- WebSocket/reliability: harden websocket keepalive, reconnect backoff, and auth validation paths used by `/ws` and `/agent`.
+- Web app/bulk actions: hide the bulk action bar when zero messages are selected and keep selection state synchronized.
+- Web app/multi-select: implement multi-select mode controls for selecting, canceling, and bulk deleting chat items.
+- Web app/export: wire chat export so Export Chat produces a downloadable transcript from current session data.
 
 ## 2026.4.5
 
@@ -5715,4 +5722,3 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
 - Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.
 - CLI: run `lada agent` via the Gateway by default; use `--local` to force embedded mode.
-

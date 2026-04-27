@@ -11,5 +11,13 @@ python_files = ["test_*.py"]
 pythonpath = ["."]
 
 [tool.pyright]
-include = ["modules", "tests", "skills", "."]
+include = ["."]
+exclude = ["node_modules", "__pycache__", "src", "ui", "dist"]
 extraPaths = ["."]
+pythonVersion = "3.11"
+pythonPlatform = "Windows"
+venvPath = "."
+venv = "jarvis_env"
+typeCheckingMode = "basic"
+reportMissingModuleSource = "none"
+analysis.useLibraryCodeForTypes = true

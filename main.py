@@ -1,5 +1,5 @@
 """
-LADA v7.0 - Main Entry Point
+LADA v7.0.1 - Main Entry Point
 Language Agnostic Digital Assistant with Tamil + English Support
 
 Usage:
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 class LADA:
     """
-    LADA v7.0 - Language Agnostic Digital Assistant
+    LADA v7.0.1 - Language Agnostic Digital Assistant
     
     Features:
     - Tamil + English voice support (Thanglish)
@@ -64,7 +64,7 @@ class LADA:
     - Responds in the same language as user
     """
     
-    VERSION = "6.0"
+    VERSION = "7.0.1"
     
     def __init__(self, init_voice: bool = True, init_ai: bool = True, init_memory: bool = True):
         """Initialize LADA components. Status mode can skip heavy subsystems."""
@@ -99,7 +99,7 @@ class LADA:
         # Running state
         self.running = False
         
-        print("\n✅ LADA v7.0 Ready!")
+        print("\n✅ LADA v7.0.1 Ready!")
         voice_state = "Tamil + English" if self.voice else "Skipped"
         ai_state = "Multi-backend (Ollama/Gemini)" if self.ai_router else "Skipped"
         memory_state = "Enabled" if self.memory else "Skipped"
@@ -126,7 +126,7 @@ class LADA:
         """
         
         print("\n" + "=" * 70)
-        print("🎤 LADA v7.0 - Voice Mode (Tamil + English)")
+        print("🎤 LADA v7.0.1 - Voice Mode (Tamil + English)")
         print("=" * 70)
         print("🗣️  Speak in Tamil or English - I'll respond in the same language!")
         print("💬  Say 'exit', 'quit', 'bye', or 'வெளியேறு' to stop")
@@ -192,7 +192,7 @@ class LADA:
         self._ensure_voice_initialized()
 
         print("\n" + "=" * 70)
-        print("📝 LADA v7.0 - Text Mode")
+        print("📝 LADA v7.0.1 - Text Mode")
         print("=" * 70)
         print("💬  Type in Tamil or English")
         print("📤  Type 'exit' or 'quit' to stop")
@@ -494,7 +494,7 @@ def run_security_scan_command(args):
 def print_help():
     """Print usage help"""
     print("""
-LADA v7.0 - Language Agnostic Digital Assistant
+LADA v7.0.1 - Language Agnostic Digital Assistant
 ================================================
 
 Usage:

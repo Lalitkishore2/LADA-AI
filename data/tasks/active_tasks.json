@@ -1,0 +1,37 @@
+{
+  "x0ejxn7jw": {
+    "id": "x0ejxn7jw",
+    "name": "find the location of the area51",
+    "description": "",
+    "agent_id": "default",
+    "session_id": null,
+    "created_by": null,
+    "priority": "normal",
+    "timeout_seconds": 3600.0,
+    "max_retries": 3,
+    "action": "command",
+    "params": {
+      "command": "find the location of the area51"
+    },
+    "steps": [],
+    "current_step_index": 0,
+    "dependencies": [],
+    "status": "queued",
+    "progress": 0.0,
+    "retry_count": 0,
+    "result": null,
+    "error": null,
+    "step_results": {},
+    "created_at": "2026-04-26T23:27:38.995660",
+    "queued_at": "2026-04-26T23:27:38.997855",
+    "started_at": null,
+    "completed_at": null,
+    "resume_token": null,
+    "paused_at_step": null,
+    "expires_at": null,
+    "metadata": {
+      "source": "web_ui"
+    },
+    "tags": []
+  }
+}

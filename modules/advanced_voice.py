@@ -22,11 +22,22 @@ SPEECH_RECOGNITION_OK = False
 PVPORCUPINE_OK = False
 WHISPER_OK = False
 
+# sounddevice: preferred mic capture backend (no C-compiler needed on Py 3.14)
+try:
+    import sounddevice as _sd
+    import numpy as _sd_np
+    SOUNDDEVICE_OK = True
+except ImportError:
+    SOUNDDEVICE_OK = False
+
+# pyaudio: retained as optional fallback for Porcupine wake-word path only
 try:
     import pyaudio
     PYAUDIO_OK = True
-except ImportError:
-    logger.warning("[Voice] PyAudio not available")
+except Exception:
+    pyaudio = None  # type: ignore
+    PYAUDIO_OK = False
+    logger.debug("[Voice] PyAudio not available (expected on Python 3.14+); using sounddevice")
 
 try:
     import speech_recognition as sr
@@ -159,33 +170,69 @@ class WakeWordDetector:
                 keywords=["computer"]  # Built-in keyword
             )
             
-            self.pa = pyaudio.PyAudio()
-            self.audio_stream = self.pa.open(
-                rate=self.porcupine.sample_rate,
-                channels=1,
-                format=pyaudio.paInt16,
-                input=True,
-                frames_per_buffer=self.porcupine.frame_length
-            )
-            
-            while not self._stop_event.is_set():
-                try:
-                    pcm = self.audio_stream.read(
-                        self.porcupine.frame_length,
-                        exception_on_overflow=False
-                    )
-                except Exception as read_err:
-                    if self._stop_event.is_set():
-                        break
-                    logger.warning(f"[WakeWord] Audio read error: {read_err}")
-                    continue
-                pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
-                
-                keyword_index = self.porcupine.process(pcm)
-                if keyword_index >= 0:
-                    logger.info(f"[WakeWord] Detected: {self.wake_words[keyword_index]}")
-                    if self.callback:
-                        self.callback()
+            # --- Audio stream: prefer sounddevice, fall back to pyaudio ---
+            if SOUNDDEVICE_OK:
+                import queue as _q
+                _audio_q: _q.Queue = _q.Queue()
+                frame_len = self.porcupine.frame_length
+                sr_rate = self.porcupine.sample_rate
+
+                def _sd_callback(indata, frames, time_info, status):
+                    _audio_q.put(bytes(indata))
+
+                with _sd.RawInputStream(
+                    samplerate=sr_rate,
+                    channels=1,
+                    dtype="int16",
+                    blocksize=frame_len,
+                    callback=_sd_callback,
+                ):
+                    while not self._stop_event.is_set():
+                        try:
+                            pcm_bytes = _audio_q.get(timeout=0.5)
+                        except _q.Empty:
+                            continue
+                        pcm = _sd_np.frombuffer(pcm_bytes, dtype=_sd_np.int16).tolist()
+                        keyword_index = self.porcupine.process(pcm)
+                        if keyword_index >= 0:
+                            logger.info(f"[WakeWord] Detected: {self.wake_words[keyword_index]}")
+                            if self.callback:
+                                self.callback()
+            elif PYAUDIO_OK and pyaudio is not None:
+                self.pa = pyaudio.PyAudio()
+                self.audio_stream = self.pa.open(
+                    rate=self.porcupine.sample_rate,
+                    channels=1,
+                    format=pyaudio.paInt16,
+                    input=True,
+                    frames_per_buffer=self.porcupine.frame_length
+                )
+
+                while not self._stop_event.is_set():
+                    try:
+                        pcm = self.audio_stream.read(
+                            self.porcupine.frame_length,
+                            exception_on_overflow=False
+                        )
+                    except Exception as read_err:
+                        if self._stop_event.is_set():
+                            break
+                        logger.warning(f"[WakeWord] Audio read error: {read_err}")
+                        continue
+                    pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
+                    keyword_index = self.porcupine.process(pcm)
+                    if keyword_index >= 0:
+                        logger.info(f"[WakeWord] Detected: {self.wake_words[keyword_index]}")
+                        if self.callback:
+                            self.callback()
+                if hasattr(self, 'audio_stream') and self.audio_stream:
+                    self.audio_stream.stop_stream()
+                    self.audio_stream.close()
+                if hasattr(self, 'pa') and self.pa:
+                    self.pa.terminate()
+            else:
+                logger.error("[WakeWord] No audio input backend available (sounddevice or pyaudio required)")
+
                         
         except Exception as e:
             logger.error(f"[WakeWord] Porcupine error: {e}")

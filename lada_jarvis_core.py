@@ -23,6 +23,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
+from urllib.parse import quote_plus
 import logging
 
 logger = logging.getLogger(__name__)
@@ -749,8 +750,19 @@ class JarvisCommandProcessor:
             )
             if results.get('files'):
                 files = results['files'][:10]
-                file_list = '\n'.join([f"  • {f.get('name', 'Unknown')} ({f.get('path', '')})" for f in files])
-                return True, f"Found {len(files)} files:\n{file_list}"
+                # Format for chat with download links
+                file_list = []
+                for i, f in enumerate(files, 1):
+                    file_path = f.get('path', '')
+                    file_name = Path(file_path).name if file_path else 'Unknown'
+                    size = f.get('size', 0)
+                    size_str = f" ({self._format_file_size(size)})" if size else ""
+                    # Create download link format for chat
+                    download_link = f"[Download {file_name}](http://localhost:5000/files/download?path={quote_plus(file_path)})"
+                    file_list.append(f"{i}. **{file_name}**{size_str} - {download_link}")
+                
+                response = f"Found {len(files)} files matching '{query}':\n\n" + "\n".join(file_list)
+                return True, response
             return True, f"No files found matching '{query}'."
         except Exception as e:
             return True, f"Search error: {e}"
@@ -791,9 +803,21 @@ class JarvisCommandProcessor:
         except Exception as e:
             return True, f"Error: {e}"
     
-    # ============ NLU Processing ============
-    
-    def _confirm_dangerous_action(self, title: str, message: str) -> bool:
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human-readable format"""
+        if size_bytes == 0:
+            return "0 B"
+        
+        size_names = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        size = float(size_bytes)
+        
+        while size >= 1024 and i < len(size_names) - 1:
+            size /= 1024
+            i += 1
+        
+        return f"{size:.1f} {size_names[i]}"
+
         """
         Callback for permission system to request user confirmation.
         Returns True if user confirms, False otherwise.
@@ -834,12 +858,37 @@ class JarvisCommandProcessor:
             logger.error(f"[LADA Core] CometAgent error: {e}")
             return True, f"Autonomous task failed: {str(e)}"
 
+    def _run_computer_agent(self, task: str) -> str:
+        """Execute task via the new Computer Use Agent with See-Think-Act loop."""
+        if not self.computer_use:
+            return "Computer Use Agent is not available."
+        
+        logger.info(f"[LADA Core] Computer Use Agent executing: {task}")
+        try:
+            result = self.computer_use.run_computer_task(task)
+            if result.get("status") == "completed":
+                return f"Computer task completed in {result.get('steps')} steps."
+            else:
+                return f"Computer task finished with status: {result.get('status')} after {result.get('steps')} steps."
+        except Exception as e:
+            logger.error(f"[LADA Core] Computer Use Agent error: {e}")
+            return f"Computer task failed: {str(e)}"
+
     def _is_autonomous_task(self, cmd: str) -> bool:
         """Detect if a command requires multi-step autonomous execution.
 
         Returns True for commands that need the See-Think-Act agent
         rather than simple one-shot system commands.
         """
+        # === SIMPLE CHAT BYPASS ===
+        chat_indicators = [
+            "what is", "how do", "how to", "why is", "who is", "tell me", "explain",
+            "can you", "could you", "would you", "is it", "are there",
+            "write a", "help me", "i need", "give me", "show me"
+        ]
+        if any(cmd.strip().lower().startswith(ind) for ind in chat_indicators):
+            return False
+
         # Multi-step indicators (contains sequencing words)
         has_sequence = any(x in cmd for x in [
             ' and then ', ' then ', ' after that ', ' next ',
@@ -1009,6 +1058,11 @@ class JarvisCommandProcessor:
         if any(x in cmd for x in ['privacy status', 'am i in privacy']):
             status = "enabled" if self.privacy_mode else "disabled"
             return True, f"Privacy mode is currently {status}."
+
+        # === COMPUTER USE AGENT ROUTING ===
+        computer_keywords = ['click', 'type text', 'open browser', 'go to website', 'scroll down', 'scroll up', 'find on screen', 'look at the screen']
+        if any(x in cmd for x in computer_keywords) and self.computer_use:
+            return True, self._run_computer_agent(raw_command)
 
         # === EXECUTOR DISPATCH (handles all domain commands) ===
         for executor in self.executors:

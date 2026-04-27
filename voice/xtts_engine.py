@@ -47,9 +47,17 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 try:
+    import sounddevice as sd
+    import soundfile as sf
+    import numpy as np
+    SOUNDDEVICE_PLAY_AVAILABLE = True
+except ImportError:
+    SOUNDDEVICE_PLAY_AVAILABLE = False
+
+try:
     import pygame
     PYGAME_AVAILABLE = True
-except ImportError:
+except Exception:
     pygame = None  # type: ignore
     PYGAME_AVAILABLE = False
 
@@ -271,8 +279,11 @@ class XTTSEngine:
         except Exception:
             return 0.0
     
-    def _init_pygame(self) -> bool:
-        """Initialize pygame for audio playback."""
+    def _init_audio(self) -> bool:
+        """Initialize audio systems."""
+        if SOUNDDEVICE_PLAY_AVAILABLE:
+            return True
+        
         if self._pygame_initialized:
             return True
         
@@ -297,8 +308,18 @@ class XTTSEngine:
         Returns:
             True if playback started successfully
         """
-        if not self._init_pygame():
-            logger.warning("[XTTS] Pygame not available for playback")
+        if SOUNDDEVICE_PLAY_AVAILABLE:
+            try:
+                data, fs = sf.read(audio_path, dtype='float32')
+                sd.play(data, fs)
+                if blocking:
+                    sd.wait()
+                return True
+            except Exception as sd_err:
+                logger.debug(f"[XTTS] sounddevice playback failed: {sd_err}")
+
+        if not self._init_audio():
+            logger.warning("[XTTS] No audio playback system available")
             return False
         
         try:
@@ -317,7 +338,12 @@ class XTTSEngine:
     
     def stop(self):
         """Stop current playback."""
-        if self._pygame_initialized:
+        if SOUNDDEVICE_PLAY_AVAILABLE:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+        if self._pygame_initialized and PYGAME_AVAILABLE and pygame is not None:
             try:
                 pygame.mixer.music.stop()
             except Exception:

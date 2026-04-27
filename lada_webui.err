@@ -1,0 +1,27 @@
+[WARNING] [ServerState] No LADA_JWT_SECRET set. Generated ephemeral JWT signing key.
+[WARNING] [APIServer] CORS using default localhost origins. Set LADA_CORS_ORIGINS for production.
+[ERROR] Error getting brightness: (-2147221020, 'Invalid syntax', None, None)
+[WARNING] [Mem0] Failed to init Mem0, falling back: The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable
+[WARNING] Google API not available - pip install google-api-python-client google-auth-oauthlib
+[WARNING] [!] Google API libraries not available - install google-api-python-client, google-auth-oauthlib
+[WARNING] [!] Google API libraries not available
+[WARNING] [EmailAgent] Google API libraries not installed. Run: pip install google-auth-oauthlib google-api-python-client
+[WARNING] [CalendarAgent] Google Calendar API not available
+C:\Users\sharm\AppData\Roaming\Python\Python314\site-packages\speech_recognition\__init__.py:7: DeprecationWarning: aifc was removed in Python 3.13. Please be aware that you are currently NOT using standard 'aifc', but instead a separately installed 'standard-aifc'.
+  import aifc
+[WARNING] [ServiceRegistry] openclaw_gateway (integrations.openclaw_gateway): not available
+[WARNING] [ServiceRegistry] openclaw_skills (integrations.openclaw_skills): not available
+[WARNING] spaCy model not found. Install with: python -m spacy download en_core_web_sm
+[WARNING] [!] Google API not available - Calendar features disabled
+[WARNING] [!] Google API not available - Gmail features disabled
+[WARNING] [!] Google API not available - Calendar features disabled
+[WARNING] [EmailAgent] Gmail API not available
+[WARNING] [CalendarAgent] Google Calendar API not available
+[WARNING] [!] Google API not available - Calendar features disabled
+[WARNING] [EmailAgent] Gmail API not available
+[WARNING] [CalendarAgent] Google Calendar API not available
+C:\Users\sharm\AppData\Roaming\Python\Python314\site-packages\websockets\legacy\server.py:1178: DeprecationWarning: remove second argument of ws_handler
+  warnings.warn("remove second argument of ws_handler", DeprecationWarning)
+[ERROR] ConnectionClosedOK exception in shielded future
+future: <Future finished exception=ConnectionClosedOK(Close(code=<CloseCode.NO_STATUS_RCVD: 1005>, reason=''), Close(code=<CloseCode.NO_STATUS_RCVD: 1005>, reason=''), True)>
+websockets.exceptions.ConnectionClosedOK: received 1005 (no status received [internal]); then sent 1005 (no status received [internal])

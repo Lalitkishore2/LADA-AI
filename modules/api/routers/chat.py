@@ -15,7 +15,7 @@ from typing import Optional, Dict
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Body, Header, Request, Response, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 
 from modules.api.models import (
     ChatRequest, ChatResponse, AgentRequest, AgentResponse, HealthResponse
@@ -568,7 +568,7 @@ def create_chat_router(state):
                         if state.jarvis:
                             state.jarvis.process(command)
                     except Exception as e:
-                        logger.error(f"[APIServer] Background execution error: {e}")
+                        logger.error(f"[APISServer] Background execution error: {e}")
 
                 threading.Thread(target=execute_command, daemon=True).start()
                 return {"success": True, "voice_response": ack_response,
@@ -600,5 +600,118 @@ def create_chat_router(state):
             error_info = safe_error_response(e, operation="voice_direct")
             logger.error(f"[APIServer] Error processing direct command: {type(e).__name__}")
             raise HTTPException(status_code=error_info["status_code"], detail=error_info["error"])
+
+    @r.post("/files/search")
+    async def search_files(
+        request: Request,
+        query: str = Body(..., embed=True),
+        max_results: int = Body(10, embed=True),
+        search_folder: str = Body(None, embed=True)
+    ):
+        """Search for files on the local system"""
+        request_id = ensure_request_id(request, prefix="http")
+        state.load_components()
+        
+        try:
+            # Check if file operations are available
+            try:
+                from modules.file_operations import FileSystemController
+                file_controller = FileSystemController()
+            except ImportError:
+                raise HTTPException(
+                    status_code=501,
+                    detail="File operations module not available"
+                )
+            
+            # Search for files
+            result = file_controller.search_files(
+                name=query,
+                search_folder=search_folder,
+                recursive=True,
+                max_results=max_results
+            )
+            
+            if not result.get('success'):
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get('error', 'File search failed')
+                )
+            
+            files = result.get('files', [])
+            
+            return {
+                'success': True,
+                'query': query,
+                'found': len(files),
+                'files': files,
+                'search_folder': result.get('search_folder'),
+                'request_id': request_id
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            error_info = safe_error_response(e, operation="file_search")
+            logger.error(f"[APIServer] File search error ({request_id}): {type(e).__name__}")
+            raise HTTPException(
+                status_code=error_info["status_code"],
+                detail=error_info["error"],
+                headers={REQUEST_ID_HEADER: request_id},
+            )
+
+    @r.get("/files/download")
+    async def download_file(
+        request: Request,
+        path: str = Query(...)
+    ):
+        """Download a file from the local system"""
+        request_id = ensure_request_id(request, prefix="http")
+        
+        try:
+            # Validate and resolve path
+            from pathlib import Path
+            file_path = Path(path)
+            if not file_path.is_absolute():
+                # Use current directory or home directory as base
+                try:
+                    from modules.file_operations import FileSystemController
+                    file_controller = FileSystemController()
+                    file_path = Path(file_controller.current_directory) / path
+                except:
+                    file_path = Path.home() / path
+            
+            if not file_path.exists():
+                raise HTTPException(status_code=404, detail="File not found")
+            
+            if not file_path.is_file():
+                raise HTTPException(status_code=400, detail="Path is not a file")
+            
+            # Security check - prevent access to system files
+            system_paths = [
+                'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)',
+                'C:\\ProgramData', 'C:\\System Volume Information'
+            ]
+            if any(str(file_path).startswith(sys_path) for sys_path in system_paths):
+                raise HTTPException(status_code=403, detail="Access to system files denied")
+            
+            # Return file
+            response = FileResponse(
+                path=str(file_path),
+                filename=file_path.name,
+                media_type="application/octet-stream"
+            )
+            response.headers[REQUEST_ID_HEADER] = request_id
+            return response
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            error_info = safe_error_response(e, operation="file_download")
+            logger.error(f"[APIServer] File download error ({request_id}): {type(e).__name__}")
+            raise HTTPException(
+                status_code=error_info["status_code"],
+                detail=error_info["error"],
+                headers={REQUEST_ID_HEADER: request_id},
+            )
 
     return r

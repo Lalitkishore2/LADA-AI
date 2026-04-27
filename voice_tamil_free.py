@@ -58,10 +58,18 @@ except ImportError:
     logger.warning("playsound not available - install with: pip install playsound==1.2.2")
 
 try:
+    import sounddevice as sd
+    import soundfile as sf
+    import numpy as np
+    SOUNDDEVICE_PLAY_AVAILABLE = True
+except ImportError:
+    SOUNDDEVICE_PLAY_AVAILABLE = False
+
+try:
     import pygame
     pygame.mixer.init()
     PYGAME_AVAILABLE = True
-except ImportError:
+except Exception:
     PYGAME_AVAILABLE = False
 
 # openwakeword — local, offline wake word detection (no API calls)
@@ -70,13 +78,12 @@ _OWW_MODEL = None
 _OWW_OK = False
 try:
     import numpy as _np
-    import pyaudio as _pyaudio
     from openwakeword.model import Model as _OWWModel
     # Use 'alexa' as a sensitive voice-activity trigger; validation is done via
     # local Whisper STT which checks for the actual wake phrase ("lada", "hey lada").
     _OWW_MODEL = _OWWModel(wakeword_models=["alexa"], inference_framework="onnx")
     _OWW_OK = True
-    logger.info("[VoiceOWW] openwakeword loaded — local wake detection active")
+    logger.info("[VoiceOWW] openwakeword loaded — local wake detection active (sounddevice backend)")
 except Exception as _oww_err:
     _OWW_OK = False
     logger.debug(f"[VoiceOWW] openwakeword not available, using Google STT fallback: {_oww_err}")
@@ -468,6 +475,15 @@ class FreeNaturalVoice:
     def _play_audio(self, filepath: str):
         """Play audio file using available player"""
         try:
+            if SOUNDDEVICE_PLAY_AVAILABLE:
+                try:
+                    data, fs = sf.read(filepath, dtype='float32')
+                    sd.play(data, fs)
+                    sd.wait()
+                    return
+                except Exception as sd_err:
+                    logger.debug(f"sounddevice playback failed: {sd_err}")
+
             if PYGAME_AVAILABLE:
                 pygame.mixer.music.load(filepath)
                 pygame.mixer.music.play()
@@ -477,12 +493,17 @@ class FreeNaturalVoice:
                 playsound(filepath)
             else:
                 # Try system player as last resort
-                subprocess.Popen([
-                    'wmplayer',
-                    '/play',
-                    '/close',
-                    filepath,
-                ])
+                if os.name == 'nt':
+                    subprocess.Popen([
+                        'wmplayer',
+                        '/play',
+                        '/close',
+                        filepath,
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    # Linux/Mac fallback
+                    subprocess.Popen(['afplay' if os.name == 'posix' else 'aplay', filepath], 
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             logger.error(f"Audio playback error: {e}")
         finally:
@@ -490,7 +511,7 @@ class FreeNaturalVoice:
             try:
                 if os.path.exists(filepath):
                     os.remove(filepath)
-            except Exception as e:
+            except Exception:
                 pass
     
     def listen(self, language: str = 'auto') -> Optional[str]:
@@ -646,68 +667,69 @@ class FreeNaturalVoice:
 
         Stage 1 — openwakeword (continuous low-power local inference):
             Streams 80ms PCM chunks through the model until a score > threshold
-            fires, or the timeout expires.  No API calls, works offline.
+            fires, or the timeout expires.  Uses sounddevice (Python 3.14 safe).
 
         Stage 2 — Whisper confirmation:
             When the model fires, records an extra 0.8 s of audio and runs
             local Whisper to check that the transcript contains a LADA wake
             phrase.  This eliminates false positives from the keyword model.
         """
+        if not SOUNDDEVICE_PLAY_AVAILABLE:
+            logger.debug("[OWW] sounddevice not available — falling back to Google STT")
+            return False
+
+        import queue as _q
         RATE = 16000
         CHUNK = 1280          # 80 ms @ 16 kHz — optimal for openwakeword
         THRESHOLD = 0.3       # Low to compensate for "alexa"≠"lada" phonemes
-        FORMAT = _pyaudio.paInt16
 
-        pa = _pyaudio.PyAudio()
-        stream = None
+        audio_q: _q.Queue = _q.Queue()
+
+        def _callback(indata, frames, time_info, status):
+            audio_q.put(bytes(indata))
+
         try:
-            stream = pa.open(
-                format=FORMAT, channels=1, rate=RATE,
-                input=True, frames_per_buffer=CHUNK
-            )
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                raw = stream.read(CHUNK, exception_on_overflow=False)
-                chunk_np = _np.frombuffer(raw, dtype=_np.int16)
-                scores = _OWW_MODEL.predict(chunk_np)
+            with sd.RawInputStream(
+                samplerate=RATE,
+                channels=1,
+                dtype="int16",
+                blocksize=CHUNK,
+                callback=_callback,
+            ):
+                deadline = time.time() + timeout
+                # Also accumulate chunks for confirmation after trigger
+                recent_chunks = []
+                while time.time() < deadline:
+                    try:
+                        raw = audio_q.get(timeout=0.1)
+                    except _q.Empty:
+                        continue
+                    recent_chunks.append(raw)
+                    if len(recent_chunks) > 10:     # keep last ~0.8 s
+                        recent_chunks.pop(0)
 
-                # Check if any model score exceeds threshold
-                if any(s >= THRESHOLD for s in scores.values()):
-                    # Stage 2: quick STT confirmation
-                    confirm = self._oww_confirm_phrase(stream, RATE, CHUNK)
-                    if confirm:
-                        print(f"[OWW] Wake word confirmed: '{confirm}'")
-                        return True
-                    # False positive — keep listening
+                    chunk_np = _np.frombuffer(raw, dtype=_np.int16)
+                    scores = _OWW_MODEL.predict(chunk_np)
+
+                    if any(s >= THRESHOLD for s in scores.values()):
+                        confirm = self._oww_confirm_phrase(recent_chunks, RATE, CHUNK)
+                        if confirm:
+                            print(f"[OWW] Wake word confirmed: '{confirm}'")
+                            return True
+                        # False positive — keep listening
             return False
 
         except Exception as e:
             logger.debug(f"[OWW] Streaming error: {e}")
-            # Let legacy method handle it on next call
             return False
-        finally:
-            if stream:
-                try:
-                    stream.stop_stream()
-                    stream.close()
-                except Exception:
-                    pass
-            try:
-                pa.terminate()
-            except Exception:
-                pass
 
-    def _oww_confirm_phrase(self, stream, rate: int, chunk_size: int) -> Optional[str]:
+    def _oww_confirm_phrase(self, recent_chunks: list, rate: int, chunk_size: int) -> Optional[str]:
         """
-        Capture 0.8 s of follow-on audio and validate with Whisper.
+        Validate recently captured audio chunks with Whisper.
         Returns the matched wake word string, or None if not confirmed.
         """
         try:
-            # Capture ~0.8 s (10 chunks of 80 ms)
-            frames = []
-            for _ in range(10):
-                frames.append(stream.read(chunk_size, exception_on_overflow=False))
-            audio_bytes = b"".join(frames)
+            audio_bytes = b"".join(recent_chunks[-10:])   # last ~0.8 s
 
             # Run through speech_recognition for Whisper / hybrid STT
             audio_sr = sr.AudioData(audio_bytes, rate, 2)  # 16-bit = 2 bytes/sample

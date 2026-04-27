@@ -28,9 +28,44 @@ from modules.error_sanitizer import safe_error_response
 logger = logging.getLogger(__name__)
 
 
+def _update_env_file(env_path: Path, updates: dict) -> None:
+    """Update or add key=value entries in a .env file without disturbing other lines."""
+    lines: list[str] = []
+    if env_path.exists():
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            lines = []
+
+    updated_keys: set[str] = set()
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in updates:
+            new_lines.append(f"{key}={updates[key]}")
+            updated_keys.add(key)
+        else:
+            new_lines.append(line)
+
+    # Append any keys that weren't already in the file
+    for key, val in updates.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}={val}")
+
+    try:
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception as exc:
+        logger.warning("[Env] Could not write .env file: %s", exc)
+
+
 def create_app_router(state):
     """Create dashboard + LADA web app + sessions/cost/providers router."""
     async def _trace_request(request: Request, response: Response):
+
         set_request_id_header(request, response, prefix="http")
 
     r = APIRouter(tags=["app"], dependencies=[Depends(_trace_request)])
@@ -71,6 +106,35 @@ def create_app_router(state):
         mode = os.getenv("LADA_WEB_UI_MODE", "auto").strip().lower()
         valid = {"legacy", "auto", "modern"}
         return mode if mode in valid else "auto"
+
+    def _provider_status_fallback() -> list[dict[str, Any]]:
+        provider_keys = {
+            "OpenAI": "OPENAI_API_KEY",
+            "Anthropic": "ANTHROPIC_API_KEY",
+            "Gemini": "GEMINI_API_KEY",
+            "Groq": "GROQ_API_KEY",
+            "Mistral": "MISTRAL_API_KEY",
+            "xAI (Grok)": "XAI_API_KEY",
+            "DeepSeek": "DEEPSEEK_API_KEY",
+            "NVIDIA NIM": "NVIDIA_API_KEY",
+            "Together AI": "TOGETHER_API_KEY",
+            "Fireworks AI": "FIREWORKS_API_KEY",
+            "Cerebras": "CEREBRAS_API_KEY",
+            "Cohere": "COHERE_API_KEY",
+            "Perplexity": "PERPLEXITY_API_KEY",
+            "Replicate": "REPLICATE_API_TOKEN",
+            "AWS Bedrock": "AWS_ACCESS_KEY_ID",
+            "Azure OpenAI": "AZURE_OPENAI_API_KEY",
+            "Hugging Face": "HF_API_TOKEN",
+            "ElevenLabs": "ELEVENLABS_API_KEY",
+            "Ollama (local)": "LOCAL_OLLAMA_URL",
+            "LM Studio (local)": "LOCAL_LM_STUDIO_URL",
+            "Jan (local)": "LOCAL_JAN_URL",
+        }
+        fallback = []
+        for pname, env_key in provider_keys.items():
+            fallback.append({"name": pname, "healthy": bool(os.getenv(env_key)), "models": 0, "env_key": env_key})
+        return fallback
 
     def _modern_web_base_url() -> str:
         raw = os.getenv("LADA_MODERN_WEB_URL", "http://127.0.0.1:3000").strip()
@@ -507,6 +571,13 @@ def create_app_router(state):
         return "public"
 
     def _enforce_rollout_remote_access(request: Request, feature: str) -> None:
+        """Enforce rollout stage access control for remote features.
+
+        canary/public stages allow all authenticated requests.
+        local stage = loopback only.
+        internal stage = loopback + private LAN.
+        disabled = always blocked.
+        """
         stage = _rollout_stage()
         if stage == "disabled":
             raise HTTPException(
@@ -517,6 +588,10 @@ def create_app_router(state):
                 ),
             )
 
+        # canary and public stages allow all authenticated clients (Render, etc.)
+        if stage in {"canary", "public"}:
+            return
+
         scope = _client_scope(_client_ip(request))
 
         if stage == "local" and scope != "loopback":
@@ -524,7 +599,8 @@ def create_app_router(state):
                 status_code=403,
                 detail=(
                     f"Remote {feature} is restricted to local machine access "
-                    f"while LADA_ROLLOUT_STAGE=local."
+                    f"while LADA_ROLLOUT_STAGE=local. Set LADA_ROLLOUT_STAGE=canary "
+                    f"in Render env to allow remote file access."
                 ),
             )
 
@@ -689,33 +765,52 @@ def create_app_router(state):
 
     @r.get("/providers/status")
     async def providers_status():
-        state.load_components()
-        result = []
-        pm = getattr(state.ai_router, 'provider_manager', None) if state.ai_router else None
-        if pm:
+        async def collect_status() -> list[dict[str, Any]]:
+            def build_status() -> list[dict[str, Any]]:
+                logger.info("[APIServer] Checking provider status")
+                try:
+                    state.load_components()
+                except Exception as exc:
+                    logger.warning("[APIServer] provider status load_components failed: %s", type(exc).__name__)
+                    return []
+
+                result: list[dict[str, Any]] = []
+                pm = getattr(state.ai_router, "provider_manager", None) if state.ai_router else None
+                if pm:
+                    try:
+                        for pid, pinfo in pm.providers.items():
+                            logger.info("[APIServer] Checking provider: %s", pid)
+                            # Get friendly name from provider config, fallback to pid
+                            cfg = getattr(pinfo, "config", None)
+                            friendly_name = getattr(cfg, "name", None) or pid
+                            # Health check: local providers check connectivity, cloud check API key
+                            is_local = getattr(cfg, "local", False) if cfg else False
+                            api_key = getattr(cfg, "api_key", "") if cfg else ""
+                            healthy = True  # already configured means key is set
+                            result.append({
+                                "name": friendly_name,
+                                "id": pid,
+                                "type": getattr(pinfo, "provider_type", str(type(pinfo).__name__)),
+                                "healthy": healthy,
+                                "local": is_local,
+                                "models": getattr(pinfo, "model_count", 0),
+                                "env_key": "" if is_local else "",
+                            })
+                    except Exception as exc:
+                        logger.warning("[APIServer] provider manager scan failed: %s", type(exc).__name__)
+
+                return result or _provider_status_fallback()
+
             try:
-                for name, pinfo in pm.providers.items():
-                    result.append({
-                        "name": name,
-                        "type": getattr(pinfo, 'type', str(pinfo)),
-                        "healthy": True,
-                        "models": getattr(pinfo, 'model_count', 0),
-                    })
-            except Exception:
-                pass
-        if not result:
-            provider_keys = {
-                "Groq": "GROQ_API_KEY", "Gemini": "GEMINI_API_KEY",
-                "OpenAI": "OPENAI_API_KEY", "Anthropic": "ANTHROPIC_API_KEY",
-                "Mistral": "MISTRAL_API_KEY", "xAI": "XAI_API_KEY",
-                "DeepSeek": "DEEPSEEK_API_KEY", "Together": "TOGETHER_API_KEY",
-                "Fireworks": "FIREWORKS_API_KEY", "Cerebras": "CEREBRAS_API_KEY",
-                "Ollama": "LOCAL_OLLAMA_URL",
-            }
-            for pname, env_key in provider_keys.items():
-                has_key = bool(os.getenv(env_key))
-                result.append({"name": pname, "healthy": has_key, "models": 0})
-        return {"providers": result}
+                return await asyncio.wait_for(asyncio.to_thread(build_status), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("[APIServer] provider status timed out after 5 seconds")
+                return _provider_status_fallback()
+            except Exception as exc:
+                logger.warning("[APIServer] provider status failed: %s", type(exc).__name__)
+                return _provider_status_fallback()
+
+        return {"providers": await collect_status()}
 
     # ── Rollout ──────────────────────────────────────────────
 
@@ -765,11 +860,17 @@ def create_app_router(state):
             for device_id, device in remote_bridge_devices.items()
             if _is_remote_bridge_device_online(device, now_ts)
         ]
+        client_ip = _client_ip(request)
+        can_toggle = (
+            _rollout_stage() == "local"
+            and _client_scope(client_ip) == "loopback"
+        )
         return {
             "request_id": request_id,
             "enabled": _remote_control_enabled(),
             "downloads_enabled": _remote_download_enabled(),
             "dangerous_enabled": _dangerous_remote_enabled(),
+            "can_toggle": can_toggle,
             "bridge_supported": True,
             "bridge_auto_dispatch": _remote_bridge_auto_dispatch_enabled(),
             "bridge_default_device_id": _remote_bridge_default_device_id(),
@@ -783,6 +884,331 @@ def create_app_router(state):
             "allowed_roots": [str(p) for p in _allowed_remote_roots()],
             "max_download_mb": round(max_bytes / (1024 * 1024), 2),
         }
+
+    @r.post("/remote/toggle")
+    async def remote_toggle(request: Request, body: dict = Body(default={})):
+        """Toggle remote features on/off. Only allowed from loopback in local rollout stage."""
+        request_id = ensure_request_id(request, prefix="http")
+        client_ip = _client_ip(request)
+        if _rollout_stage() != "local" or _client_scope(client_ip) != "loopback":
+            raise HTTPException(
+                status_code=403,
+                detail="Remote feature toggle is only available when accessing locally (loopback, local rollout stage).",
+            )
+
+        enable = bool(body.get("enabled", False))
+        new_val = "true" if enable else "false"
+
+        # Apply in-process immediately
+        os.environ["LADA_REMOTE_CONTROL_ENABLED"] = new_val
+        os.environ["LADA_REMOTE_DOWNLOAD_ENABLED"] = new_val
+
+        # Persist to .env file
+        env_path = base_dir / ".env"
+        _update_env_file(env_path, {
+            "LADA_REMOTE_CONTROL_ENABLED": new_val,
+            "LADA_REMOTE_DOWNLOAD_ENABLED": new_val,
+        })
+
+        logger.info("[Remote] Toggled remote features to %s by %s", new_val, client_ip)
+        return {
+            "request_id": request_id,
+            "success": True,
+            "enabled": enable,
+            "downloads_enabled": enable,
+        }
+
+    # ── Plugin Key Manager ───────────────────────────────────
+
+    # All integrations with their env var names and display metadata
+    _PLUGIN_REGISTRY = [
+        {"id": "openai",       "name": "OpenAI",          "env": "OPENAI_API_KEY",          "category": "ai",      "url": "https://platform.openai.com/api-keys"},
+        {"id": "anthropic",    "name": "Anthropic",       "env": "ANTHROPIC_API_KEY",        "category": "ai",      "url": "https://console.anthropic.com/settings/keys"},
+        {"id": "gemini",       "name": "Google Gemini",   "env": "GEMINI_API_KEY",           "category": "ai",      "url": "https://aistudio.google.com/app/apikey"},
+        {"id": "groq",         "name": "Groq",            "env": "GROQ_API_KEY",             "category": "ai",      "url": "https://console.groq.com/keys"},
+        {"id": "mistral",      "name": "Mistral AI",      "env": "MISTRAL_API_KEY",          "category": "ai",      "url": "https://console.mistral.ai/api-keys"},
+        {"id": "xai",          "name": "xAI (Grok)",      "env": "XAI_API_KEY",             "category": "ai",      "url": "https://console.x.ai"},
+        {"id": "deepseek",     "name": "DeepSeek",        "env": "DEEPSEEK_API_KEY",         "category": "ai",      "url": "https://platform.deepseek.com"},
+        {"id": "nvidia",       "name": "NVIDIA NIM",      "env": "NVIDIA_API_KEY",           "category": "ai",      "url": "https://build.nvidia.com"},
+        {"id": "together",     "name": "Together AI",     "env": "TOGETHER_API_KEY",         "category": "ai",      "url": "https://api.together.xyz/settings/api-keys"},
+        {"id": "fireworks",    "name": "Fireworks AI",    "env": "FIREWORKS_API_KEY",        "category": "ai",      "url": "https://fireworks.ai/account/api-keys"},
+        {"id": "cerebras",     "name": "Cerebras",        "env": "CEREBRAS_API_KEY",         "category": "ai",      "url": "https://cloud.cerebras.ai"},
+        {"id": "cohere",       "name": "Cohere",          "env": "COHERE_API_KEY",           "category": "ai",      "url": "https://dashboard.cohere.com/api-keys"},
+        {"id": "perplexity",   "name": "Perplexity",      "env": "PERPLEXITY_API_KEY",       "category": "ai",      "url": "https://www.perplexity.ai/settings/api"},
+        {"id": "replicate",    "name": "Replicate",       "env": "REPLICATE_API_TOKEN",      "category": "ai",      "url": "https://replicate.com/account/api-tokens"},
+        {"id": "aws_bedrock",  "name": "AWS Bedrock",     "env": "AWS_ACCESS_KEY_ID",        "category": "ai",      "url": "https://aws.amazon.com/bedrock"},
+        {"id": "azure_openai", "name": "Azure OpenAI",   "env": "AZURE_OPENAI_API_KEY",     "category": "ai",      "url": "https://portal.azure.com"},
+        {"id": "hf",           "name": "Hugging Face",    "env": "HF_API_TOKEN",             "category": "ai",      "url": "https://huggingface.co/settings/tokens"},
+        {"id": "elevenlabs",   "name": "ElevenLabs",      "env": "ELEVENLABS_API_KEY",       "category": "voice",   "url": "https://elevenlabs.io/api"},
+        {"id": "stripe",       "name": "Stripe",          "env": "STRIPE_SECRET_KEY",        "category": "payment", "url": "https://dashboard.stripe.com/apikeys"},
+        {"id": "sendgrid",     "name": "SendGrid",        "env": "SENDGRID_API_KEY",         "category": "comms",   "url": "https://app.sendgrid.com/settings/api_keys"},
+        {"id": "twilio",       "name": "Twilio",          "env": "TWILIO_AUTH_TOKEN",        "category": "comms",   "url": "https://console.twilio.com"},
+        {"id": "notion",       "name": "Notion",          "env": "NOTION_API_KEY",           "category": "tools",   "url": "https://www.notion.so/my-integrations"},
+        {"id": "github",       "name": "GitHub",          "env": "GITHUB_TOKEN",             "category": "dev",     "url": "https://github.com/settings/tokens"},
+        {"id": "serper",       "name": "Serper (Search)", "env": "SERPER_API_KEY",           "category": "search",  "url": "https://serper.dev"},
+        {"id": "tavily",       "name": "Tavily (Search)", "env": "TAVILY_API_KEY",           "category": "search",  "url": "https://tavily.com"},
+        {"id": "ollama_url",   "name": "Ollama (Local)",  "env": "LOCAL_OLLAMA_URL",         "category": "local",   "url": "http://localhost:11434"},
+        {"id": "lmstudio_url", "name": "LM Studio (Local)", "env": "LOCAL_LM_STUDIO_URL",   "category": "local",   "url": "http://localhost:1234"},
+    ]
+
+    def _mask_key(val: str) -> str:
+        if not val:
+            return ""
+        if len(val) <= 8:
+            return "****"
+        return val[:4] + "****" + val[-4:]
+
+    @r.get("/plugins/keys")
+    async def get_plugin_keys():
+        """Return all plugin key statuses (masked values)."""
+        result = []
+        for p in _PLUGIN_REGISTRY:
+            raw = os.getenv(p["env"], "")
+            result.append({
+                "id": p["id"],
+                "name": p["name"],
+                "env": p["env"],
+                "category": p["category"],
+                "url": p["url"],
+                "configured": bool(raw),
+                "masked_value": _mask_key(raw),
+            })
+        return {"plugins": result}
+
+    @r.post("/plugins/keys")
+    async def set_plugin_key(body: dict = Body(default={})):
+        """Set a plugin API key — writes to os.environ and .env file."""
+        plugin_id = str(body.get("id", "")).strip()
+        value = str(body.get("value", "")).strip()
+
+        plugin = next((p for p in _PLUGIN_REGISTRY if p["id"] == plugin_id), None)
+        if not plugin:
+            raise HTTPException(status_code=404, detail=f"Plugin '{plugin_id}' not found")
+
+        env_key = plugin["env"]
+        if value:
+            os.environ[env_key] = value
+        else:
+            os.environ.pop(env_key, None)
+
+        env_path = base_dir / ".env"
+        _update_env_file(env_path, {env_key: value})
+
+        return {
+            "success": True,
+            "id": plugin_id,
+            "env": env_key,
+            "configured": bool(value),
+            "masked_value": _mask_key(value),
+        }
+
+    @r.delete("/plugins/keys/{plugin_id}")
+    async def delete_plugin_key(plugin_id: str):
+        """Remove a plugin API key from env and .env file."""
+        plugin = next((p for p in _PLUGIN_REGISTRY if p["id"] == plugin_id), None)
+        if not plugin:
+            raise HTTPException(status_code=404, detail=f"Plugin '{plugin_id}' not found")
+
+        env_key = plugin["env"]
+        os.environ.pop(env_key, None)
+
+        # Remove from .env by setting empty value
+        env_path = base_dir / ".env"
+        _update_env_file(env_path, {env_key: ""})
+
+        return {"success": True, "id": plugin_id, "configured": False}
+
+    # ── Computer Control ─────────────────────────────────────
+
+    @r.get("/computer/screenshot")
+    async def computer_screenshot():
+        """Take a screenshot of the current screen and return as base64 PNG."""
+        try:
+            import mss
+            import mss.tools
+            import base64
+            import io
+            with mss.mss() as sct:
+                monitor = sct.monitors[0]  # All monitors combined
+                shot = sct.grab(monitor)
+                # Convert to PNG bytes
+                from PIL import Image
+                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                buf = io.BytesIO()
+                img.save(buf, format="PNG", optimize=True)
+                b64 = base64.b64encode(buf.getvalue()).decode()
+            return {"success": True, "image_b64": b64, "width": shot.width, "height": shot.height}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Screenshot failed: {e}")
+
+    @r.post("/computer/action")
+    async def computer_action(body: dict = Body(default={})):
+        """Execute a computer control action (click, type, scroll, key, move)."""
+        try:
+            import pyautogui
+            pyautogui.FAILSAFE = True
+            pyautogui.PAUSE = 0.05
+        except ImportError:
+            raise HTTPException(status_code=500, detail="pyautogui not installed. Run: pip install pyautogui")
+
+        action = str(body.get("action", "")).strip().lower()
+        result = {"success": True, "action": action}
+
+        try:
+            if action == "click":
+                x, y = int(body.get("x", 0)), int(body.get("y", 0))
+                button = str(body.get("button", "left"))
+                pyautogui.click(x, y, button=button)
+                result["coords"] = [x, y]
+            elif action == "double_click":
+                x, y = int(body.get("x", 0)), int(body.get("y", 0))
+                pyautogui.doubleClick(x, y)
+                result["coords"] = [x, y]
+            elif action == "right_click":
+                x, y = int(body.get("x", 0)), int(body.get("y", 0))
+                pyautogui.rightClick(x, y)
+                result["coords"] = [x, y]
+            elif action == "move":
+                x, y = int(body.get("x", 0)), int(body.get("y", 0))
+                pyautogui.moveTo(x, y, duration=0.2)
+                result["coords"] = [x, y]
+            elif action == "type":
+                text = str(body.get("text", ""))
+                interval = float(body.get("interval", 0.02))
+                pyautogui.typewrite(text, interval=interval)
+                result["typed"] = len(text)
+            elif action == "key":
+                keys = body.get("keys", [])
+                if isinstance(keys, str):
+                    keys = [keys]
+                pyautogui.hotkey(*keys)
+                result["keys"] = keys
+            elif action == "scroll":
+                x, y = int(body.get("x", 0)), int(body.get("y", 0))
+                amount = int(body.get("amount", 3))
+                pyautogui.scroll(amount, x=x, y=y)
+                result["coords"] = [x, y]
+            elif action == "screenshot":
+                # Return screenshot after action
+                pass
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Action '{action}' failed: {e}")
+
+        # Optionally take a screenshot after the action
+        if body.get("screenshot_after", False):
+            try:
+                import mss, base64, io
+                from PIL import Image
+                with mss.mss() as sct:
+                    monitor = sct.monitors[0]
+                    shot = sct.grab(monitor)
+                    img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG", optimize=True)
+                    result["screenshot_b64"] = base64.b64encode(buf.getvalue()).decode()
+            except Exception:
+                pass
+        return result
+
+    @r.get("/computer/windows")
+    async def computer_windows():
+        """Get a list of all open window titles."""
+        try:
+            from modules.computer_control import ComputerControl
+            ctrl = ComputerControl()
+            windows = ctrl.get_windows()
+            return {"success": True, "windows": windows}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @r.post("/computer/focus")
+    async def computer_focus(body: dict = Body(default={})):
+        """Focus a window by title."""
+        title = body.get("title", "")
+        if not title:
+            raise HTTPException(status_code=400, detail="Window title is required")
+        try:
+            from modules.computer_control import ComputerControl
+            ctrl = ComputerControl()
+            result = ctrl.focus_window(title)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail=result.get("error"))
+            return result
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ── Browser Control ──────────────────────────────────────
+
+    @r.post("/browser/open")
+    async def browser_open(body: dict = Body(default={})):
+        url = body.get("url", "")
+        profile = body.get("profile", "openclaw")
+        if not url:
+            raise HTTPException(status_code=400, detail="URL is required")
+        try:
+            from modules.browser_control import BrowserControl
+            browser = BrowserControl(profile=profile)
+            res = browser.open(url)
+            browser.close()
+            return res
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @r.post("/browser/action")
+    async def browser_action(body: dict = Body(default={})):
+        action = body.get("action", "")
+        profile = body.get("profile", "openclaw")
+        try:
+            from modules.browser_control import BrowserControl
+            browser = BrowserControl(profile=profile)
+            res = {"success": False, "error": "Unknown action"}
+            
+            if action == "click":
+                selector = body.get("selector")
+                if selector:
+                    res = browser.click(selector)
+                else:
+                    x, y = int(body.get("x", 0)), int(body.get("y", 0))
+                    res = browser.click_coords(x, y)
+            elif action == "type":
+                res = browser.type(body.get("selector", ""), body.get("text", ""))
+            elif action == "press":
+                res = browser.press(body.get("key", ""))
+            elif action == "evaluate":
+                res = browser.evaluate(body.get("js_code", ""))
+                
+            browser.close()
+            return res
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @r.get("/browser/screenshot")
+    async def browser_screenshot(profile: str = Query("openclaw")):
+        try:
+            from modules.browser_control import BrowserControl
+            browser = BrowserControl(profile=profile)
+            res = browser.screenshot()
+            browser.close()
+            return res
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @r.get("/browser/text")
+    async def browser_text(profile: str = Query("openclaw")):
+        try:
+            from modules.browser_control import BrowserControl
+            browser = BrowserControl(profile=profile)
+            res = browser.get_page_text()
+            browser.close()
+            return res
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     @r.post("/remote/device/register")
     async def remote_device_register(request: Request, body: dict = Body(default={})):

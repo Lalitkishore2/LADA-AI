@@ -101,15 +101,17 @@ class ServerState:
     def __init__(self):
         self.start_time = datetime.now()
 
-        # Session auth - NO DEFAULT PASSWORD for security
-        self._auth_password = os.getenv("LADA_WEB_PASSWORD")
-        if not self._auth_password:
-            # Generate secure random password on first startup
-            self._auth_password = secrets.token_urlsafe(24)
-            logger.warning(
-                f"[ServerState] No LADA_WEB_PASSWORD set. Generated random password: {self._auth_password}"
-            )
-            logger.warning("[ServerState] Set LADA_WEB_PASSWORD environment variable to use custom password")
+        # Session auth - ensure .env is loaded
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+        except ImportError:
+            pass
+
+        self._auth_password = os.getenv("LADA_WEB_PASSWORD", "lada1434")
+        if not os.getenv("LADA_WEB_PASSWORD"):
+            logger.warning("[ServerState] LADA_WEB_PASSWORD not set in env, using default 'lada1434'")
         
         self._session_tokens: Dict[str, float] = {}  # token -> expiry timestamp
         self._session_ttl = _parse_positive_int_env("LADA_SESSION_TTL", 86400)

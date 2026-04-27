@@ -89,7 +89,7 @@ def start_api_server():
     return server
 
 
-def wait_for_api(timeout=30):
+def wait_for_api(timeout=120):
     """Poll LADA API until it responds."""
     url = f"http://localhost:{LADA_API_PORT}/health"
     deadline = time.time() + timeout
